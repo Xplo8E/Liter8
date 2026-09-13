@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+.vscode/
+.liter8/
+.setup-cache/
+tools/idevicerestore
+tools/.idevicerestore-commit
+tools/*.setup-new

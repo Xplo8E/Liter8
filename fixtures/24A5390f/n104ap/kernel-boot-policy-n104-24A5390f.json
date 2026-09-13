@@ -1,0 +1,18 @@
+{
+  "resolver": "kernel-boot-policy",
+  "target": {
+    "device": "iPhone 11",
+    "board": "n104ap",
+    "build": "24A5390f",
+    "component": "kernelcache.release.iphone12b"
+  },
+  "expectedSize": 68091904,
+  "sha256": "023cd1efa2e9bbb04e73dde6fa19c6f85eb58954848debff2931f92178347163",
+  "expectedOutputSHA256": "409a91394acc2b63f73df4b92371d1f498cd609adec9b8b85e26c602112cae0a",
+  "expectedPatches": [
+    { "id": "kernel.persona.uid-zero", "offset": 57740780, "originalBytes": "e8000034", "replacementBytes": "1f2003d5" },
+    { "id": "kernel.persona.gid-zero", "offset": 57740788, "originalBytes": "a8000034", "replacementBytes": "1f2003d5" },
+    { "id": "kernel.usb.restore-mode-result", "offset": 42621916, "originalBytes": "7f2303d5", "replacementBytes": "200080d2" },
+    { "id": "kernel.usb.restore-mode-return", "offset": 42621920, "originalBytes": "ff4301d1", "replacementBytes": "c0035fd6" }
+  ]
+}

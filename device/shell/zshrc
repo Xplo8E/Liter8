@@ -1,0 +1,38 @@
+export PATH=/var/jb/usr/bin:/var/jb/bin:/var/jb/usr/sbin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+export TERM=${TERM:-xterm-256color}
+export LANG=en_US.UTF-8
+
+HISTFILE=/var/root/.zsh_history
+HISTSIZE=5000
+SAVEHIST=5000
+setopt APPEND_HISTORY INC_APPEND_HISTORY HIST_IGNORE_DUPS HIST_IGNORE_SPACE
+setopt AUTO_CD INTERACTIVE_COMMENTS NO_BEEP
+
+autoload -Uz compinit && compinit -u 2>/dev/null
+zstyle ':completion:*' menu select
+
+# SSHRD and a normal boot are indistinguishable at the prompt and trivially easy
+# to confuse. Writing to the wrong one is how you overwrite the ramdisk instead
+# of the System volume, which is why sshrd_provision.sh refuses to run on the
+# wrong mode. Put it in the prompt so it is never a question.
+#
+# Deliberately no grep: the System volume ships only a handful of commands, so a
+# pattern match in the shell itself is the portable choice. /sbin/mount is present
+# in both modes.
+if [[ "$(/sbin/mount 2>/dev/null)" == *"md0 on /"* ]]; then
+    _boot_mode='%F{red}[SSHRD]%f '
+else
+    _boot_mode=''
+fi
+
+# %m is the hostname, which on iOS is the device name. Read at runtime rather
+# than hardcoded, so this file carries no device-specific string and works
+# unchanged on any device.
+autoload -Uz colors && colors
+setopt PROMPT_SUBST
+PROMPT="${_boot_mode}%F{cyan}%m%f:%F{yellow}%~%f %# "
+
+alias ll='ls -la'
+alias la='ls -A'
+alias jblog='cat /var/mobile/jbboot.log'
+alias crashes='ls -lat /var/mobile/Library/Logs/CrashReporter/*.ips | head'

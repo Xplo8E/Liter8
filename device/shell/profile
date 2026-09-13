@@ -1,0 +1,20 @@
+export PATH=/var/jb/usr/bin:/var/jb/bin:/var/jb/usr/sbin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+
+# /etc/passwd gives root /bin/sh, and that lives on the read-only System volume,
+# so changing the login shell properly needs an SSHRD trip. Hopping here instead
+# costs nothing and survives reboots, because /var is the Data volume.
+#
+# Guarded twice: only for interactive logins, so scp-style non-interactive
+# commands are untouched, and only when not already in zsh, so there is no loop.
+# Deliberately NOT `exec`: if zsh ever fails to start, exec would replace this
+# shell and drop the connection, leaving no way in short of a DFU cycle. Running
+# it as a child and exiting afterwards costs one sleeping sh and keeps sh as a
+# working fallback.
+case $- in
+    *i*)
+        if [ -z "$ZSH_VERSION" ] && [ -x /var/jb/bin/zsh ]; then
+            /var/jb/bin/zsh -l && exit
+            echo "[!] zsh failed to start, staying in sh"
+        fi
+        ;;
+esac

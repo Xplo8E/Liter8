@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Bisected as AMFI-safe ad-hoc on 24A5390f. Sileo's full 34-entitlement set
+	  is NOT: an ad-hoc binary claiming all of them is SIGKILLed, so one of the
+	  other 30 is restricted. These six are each individually fine.
+
+	  get-task-allow is deliberately absent: AMFI kills ad-hoc binaries with it.
+	-->
+	<key>platform-application</key><true/>
+	<key>com.apple.private.security.no-sandbox</key><true/>
+	<key>com.apple.private.security.no-container</key><true/>
+	<key>com.apple.private.skip-library-validation</key><true/>
+	<key>com.apple.private.persona-mgmt</key><true/>
+	<key>com.apple.private.spawn-subsystem-root</key><true/>
+</dict>
+</plist>

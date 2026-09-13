@@ -1,0 +1,20 @@
+{
+  "resolver": "ibec-diag-ignore-pinot-id-failure",
+  "target": {
+    "device": "iPhone 11",
+    "board": "n104ap",
+    "build": "24A5390f",
+    "component": "iBEC diagnostic"
+  },
+  "expectedSize": 2563720,
+  "sha256": "6cf70de60debc66dbd13b135935359254965a4e1d4eabb996ce59265f552ebf5",
+  "expectedOutputSHA256": "60e51e35765d0a87dd4becd2b66f220c82ad8166ad866260538a5dae80f3c8a7",
+  "expectedPatches": [
+    {
+      "id": "ibec.pinot.zero-panel-id.return-success",
+      "offset": 648452,
+      "originalBytes": "080c0034",
+      "replacementBytes": "c80b0034"
+    }
+  ]
+}

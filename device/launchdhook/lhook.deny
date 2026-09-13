@@ -1,0 +1,8 @@
+# xpcproxy is deliberately absent: it is the propagation path into app jobs.
+# Recovery, signing, trust and SSH processes remain hard-denied in lhook.c.
+diskarbitrationd
+syslogd
+usbmuxd
+mobile_obliterator
+restored_external
+aslmanager

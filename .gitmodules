@@ -1,0 +1,6 @@
+[submodule "vendor/libimg4-spm"]
+	path = vendor/libimg4-spm
+	url = https://github.com/Lakr233/libimg4-spm.git
+[submodule "vendor/idevicerestore"]
+	path = vendor/idevicerestore
+	url = https://github.com/libimobiledevice/idevicerestore.git

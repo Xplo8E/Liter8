@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+
+import argparse
+from pathlib import Path
+import usb
+
+DFU_DNLOAD    = 1
+DFU_ABORT     = 4
+CUSTOM_DEMOTE = 7
+CUSTOM_BOOT   = 8
+
+def open_device():
+    dev = usb.core.find(idProduct=0x1227)
+
+    if not dev:
+        raise RuntimeError("no device?")
+
+    srnm = dev.serial_number
+
+    if "PWND:[" not in srnm:
+        raise RuntimeError("this is not Pwned DFU device")
+
+    return dev
+
+TRANSFER_SIZE = 0x800
+
+def download(dev, buf):
+    offset = 0
+    left = len(buf)
+
+    while left:
+        curr_len = min(TRANSFER_SIZE, left)
+
+        dev.ctrl_transfer(0x21, DFU_DNLOAD, 0, 0, buf[offset:offset+curr_len], 1000)
+
+        offset += curr_len
+        left -= curr_len
+
+        print("\rsent - 0x%x" % (offset), end="")
+
+    print()
+
+    dev.ctrl_transfer(0x21, DFU_DNLOAD, 0, 0, None, 100)
+
+def do_boot(args):
+    with open(args.iboot, "rb") as f:
+        iboot = f.read()
+
+    dev = open_device()
+
+    download(dev, iboot)
+
+    dev.ctrl_transfer(0x21, CUSTOM_BOOT, 0, 0, None, 100)
+    dev.ctrl_transfer(0x21, DFU_ABORT, 0, 0, None, 100)
+
+def do_demote(args):
+    dev = open_device()
+    dev.ctrl_transfer(0x21, CUSTOM_DEMOTE, 0, 0, None, 100)
+
+def main():
+    parser = argparse.ArgumentParser(description="Love is Control")
+
+    subparsers = parser.add_subparsers()
+
+    boot_parser = subparsers.add_parser("boot", help="boot raw iBoot")
+    boot_parser.set_defaults(func=do_boot)
+    boot_parser.add_argument("iboot", type=Path)
+
+    demote_parser = subparsers.add_parser("demote", help="demote production mode")
+    demote_parser.set_defaults(func=do_demote)
+
+    args = parser.parse_args()
+    if not hasattr(args, "func"):
+        parser.print_help()
+        exit(-1)
+
+    args.func(args)
+
+if __name__ == "__main__":
+    main()

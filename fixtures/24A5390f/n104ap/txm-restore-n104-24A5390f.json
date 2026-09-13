@@ -1,0 +1,20 @@
+{
+  "resolver": "txm-restore",
+  "target": {
+    "device": "iPhone 11",
+    "board": "n104ap",
+    "build": "24A5390f",
+    "component": "TXM"
+  },
+  "expectedSize": 540704,
+  "sha256": "75a6b02c1a2d0f43bfe85942b5c205e2e9afe692231de0d361dbc85d4fc63cf9",
+  "expectedOutputSHA256": "1a7b150b765ad6f6f8537029a73dd97e5f15e23480f0e581c7fae2ee0eaa26c0",
+  "expectedPatches": [
+    { "id": "txm.query-module.0", "offset": 237096, "originalBytes": "65faff97", "replacementBytes": "000080d2" },
+    { "id": "txm.query-module.1", "offset": 237456, "originalBytes": "0bfaff97", "replacementBytes": "000080d2" },
+    { "id": "txm.query-module.2", "offset": 237860, "originalBytes": "a6f9ff97", "replacementBytes": "000080d2" },
+    { "id": "txm.constraints.restricted-entitlements", "offset": 259620, "originalBytes": "20fdff54", "replacementBytes": "1f2003d5" },
+    { "id": "txm.constraints.signature-type-range", "offset": 259728, "originalBytes": "a3000054", "replacementBytes": "1f2003d5" },
+    { "id": "txm.constraints.signature-type-null", "offset": 259736, "originalBytes": "690000b4", "replacementBytes": "1f2003d5" }
+  ]
+}

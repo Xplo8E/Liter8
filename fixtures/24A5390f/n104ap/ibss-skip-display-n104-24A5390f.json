@@ -1,0 +1,20 @@
+{
+  "resolver": "ibss-skip-display-init",
+  "target": {
+    "device": "iPhone 11",
+    "board": "n104ap",
+    "build": "24A5390f",
+    "component": "iBSS only"
+  },
+  "expectedSize": 2563720,
+  "sha256": "6cf70de60debc66dbd13b135935359254965a4e1d4eabb996ce59265f552ebf5",
+  "expectedOutputSHA256": "dd8fae07712ef71c3b0c99708b5938cdcb986ff12f7545af67c001e0db939e44",
+  "expectedPatches": [
+    {
+      "id": "ibss.display.skip-initialization",
+      "offset": 217544,
+      "originalBytes": "75850194",
+      "replacementBytes": "20008052"
+    }
+  ]
+}

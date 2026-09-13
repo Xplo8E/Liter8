@@ -1,0 +1,25 @@
+{
+  "resolver": "ibss-validate-asn1",
+  "target": {
+    "device": "iPhone 11",
+    "board": "n104ap",
+    "build": "24A5390f",
+    "component": "iBSS"
+  },
+  "expectedSize": 2563720,
+  "sha256": "6cf70de60debc66dbd13b135935359254965a4e1d4eabb996ce59265f552ebf5",
+  "expectedPatches": [
+    {
+      "id": "ibss.validate-asn1.branch",
+      "offset": 145192,
+      "originalBytes": "01070054",
+      "replacementBytes": "1f2003d5"
+    },
+    {
+      "id": "ibss.validate-asn1.result",
+      "offset": 145196,
+      "originalBytes": "e00314aa",
+      "replacementBytes": "000080d2"
+    }
+  ]
+}

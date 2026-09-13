@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+TOOL_DIR=$(cd "$(dirname "$0")" && pwd)
+DEVICE_PATH=/var/jb/usr/bin:/var/jb/bin:/var/jb/usr/sbin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+
+if [ "${SSHDEV_ASKPASS:-0}" = 1 ]; then
+    printf '%s\n' alpine
+    exit 0
+fi
+
+if [ "$#" -gt 1 ]; then
+    echo "usage: $0 ['remote command']" >&2
+    exit 2
+fi
+
+if [ "$#" -eq 1 ]; then
+    set -- "export PATH=$DEVICE_PATH; $1"
+fi
+
+if [ "${SSHDEV_USE_ASKPASS:-0}" = 1 ]; then
+    SSHDEV_ASKPASS=1 DISPLAY=sshdev SSH_ASKPASS_REQUIRE=force SSH_ASKPASS="$0" \
+        exec ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -p 2222 root@localhost "$@"
+fi
+
+exec "$TOOL_DIR/sshpass" -p alpine ssh \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -p 2222 root@localhost "$@"

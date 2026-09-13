@@ -1,0 +1,4 @@
+# Python is orchestration-only. Binary parsing, IMG4 handling, and offset
+# resolution stay in Swift. Add pinned packages here only when a generic
+# workflow genuinely needs one.
+pyusb==1.3.1
