@@ -20,6 +20,8 @@ The project replaces build-specific patch scripts and hardcoded offsets with pro
 
 An unsupported IPSW fails before extraction. A recognized firmware profile never supplies patch offsets; offsets remain outputs of the resolvers.
 
+The temporary SSHRD workflow was additionally verified against an untouched stock installation: the device booted the ramdisk, served SSH with no volume mounted, and returned to the original iOS after a reboot. No restore was performed.
+
 > [!NOTE]
 > IPSWs, extracted Apple binaries, tickets, and generated work directories are not included in this repository.
 
@@ -48,19 +50,66 @@ The executable is `.build/release/liter8`. Device boot also requires the reviewe
 
 Keep every generated file under one work directory. `--work-dir` overrides `WORK_DIR`; without either, Liter8 uses the current directory.
 
-> [!WARNING]
-> `fw restore-cfw` performs an erase restore. It destroys the data currently on the target device. Check the selected IPSW, device, build, board, and work directory before running it.
-
-### 1. Prepare the IPSW and build the CFW
+Every workflow starts by preparing the IPSW:
 
 ```sh
 export WORK_DIR="$PWD/.liter8"
 
 .build/release/liter8 fw prepare --file /path/to/firmware.ipsw
-.build/release/liter8 fw make-cfw
 ```
 
 `fw prepare` identifies the build from `BuildManifest.plist`; the IPSW filename is ignored. Set `IPSW_FILE` if you do not want to pass `--file`.
+
+### Two workflows
+
+Everything after `fw prepare` belongs to one of two workflows. They share the prepared IPSW and nothing else. Choose deliberately.
+
+|                      | [Temporary SSHRD](#temporary-sshrd-non-destructive) | [Custom firmware](#custom-firmware-destructive) |
+| -------------------- | --------------------------------------------------- | ----------------------------------------------- |
+| What it does         | Boots an SSH ramdisk in RAM over the installed OS    | Erases the device and installs a patched OS     |
+| Data on the device   | Untouched                                            | Destroyed                                       |
+| After a reboot       | The original OS boots as before                      | The custom firmware boots                       |
+| Commands             | `fw get-rd`, `fw boot-rd`                            | `fw make-cfw`, `fw restore-cfw`, then provisioning |
+| Needs Apple's TSS    | No                                                   | Yes                                             |
+
+
+## Temporary SSHRD (non-destructive)
+
+Boots Apple's restore ramdisk with an SSH server injected into it, over whatever is already installed. The ramdisk runs entirely in RAM, no volume is mounted, and the installed OS boots normally afterwards.
+
+This needs an APTicket. `fw get-rd` reads `$WORK_DIR/apticket.im4m` by default, or takes an explicit path.
+
+```sh
+# device in pwn DFU
+.build/release/liter8 fw get-rd --ticket /path/to/apticket.im4m
+.build/release/liter8 fw boot-rd --irecovery /path/to/custom/irecovery
+```
+
+Once the chain has booted, forward the SSH port and connect:
+
+```sh
+iproxy 2222 22 &
+ssh -p 2222 root@localhost
+```
+
+Reboot the device to return to the installed OS.
+
+> [!NOTE]
+> This chain boots through a patched iBSS and iBEC whose Image4 validation is deliberately bypassed, so `fw get-rd` accepts any APTicket that parses as an IM4M. Ticket freshness is not required for this path. Liter8 has no command yet for obtaining a first APTicket for a device you hold none for.
+
+## Custom firmware (destructive)
+
+> [!WARNING]
+> Step 2 erases the device. Check the selected IPSW, device, build, board, and work directory before running it.
+
+> [!CAUTION]
+> `fw restore-cfw` performs an erase restore and destroys everything on the target device. If you only want a shell on the OS that is already installed, do not run it. Use the temporary SSHRD workflow.
+
+### 1. Build the CFW
+
+```sh
+.build/release/liter8 fw make-cfw
+```
 
 ### 2. Restore the CFW
 
@@ -80,6 +129,8 @@ Return the device to pwn DFU:
 .build/release/liter8 fw get-rd
 .build/release/liter8 fw boot-rd --irecovery /path/to/custom/irecovery
 ```
+
+The ticket captured by step 2 is now at `$WORK_DIR/apticket.im4m`, so `--ticket` is not needed here.
 
 ### 4. Provision the restored system
 
@@ -113,7 +164,9 @@ After normal-boot SSH becomes available:
 .build/release/liter8 fw finalize --check
 ```
 
-### Resolver-only commands
+## Resolver-only commands
+
+These belong to neither workflow and never touch a device.
 
 List available profiles and plans:
 

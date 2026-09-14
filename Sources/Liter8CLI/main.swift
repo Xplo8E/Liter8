@@ -483,8 +483,15 @@ do {
                     URL(fileURLWithPath: $0).standardizedFileURL
                 } ?? workDirectoryURL.appendingPathComponent("apticket.im4m")
                 guard FileManager.default.fileExists(atPath: candidate.path) else {
+                    // Never name fw restore-cfw here. An erase restore is one way
+                    // to obtain a ticket, not a prerequisite for either action,
+                    // and get-rd in particular runs over an already installed OS.
+                    let detail = ticketArgument == nil
+                        ? "pass --ticket <apticket.im4m>, or place one at \(candidate.path)"
+                        : "no APTicket at \(candidate.path)"
                     throw PatchfinderError.invalidFixture(
-                        "fw \(action) needs \(candidate.path); run fw restore-cfw or fw capture-ticket first"
+                        "fw \(action) needs an APTicket: \(detail). An erase restore is "
+                            + "not a prerequisite; see the README \"Two workflows\" section"
                     )
                 }
                 selectedTicket = candidate
