@@ -1,0 +1,206 @@
+{
+  "expectedOutputSHA256" : "7d7d8f077709a237ba3c798cebe27b6f796afab3dea7a5241cab4acdc55be3a6",
+  "expectedPatches" : [
+    {
+      "id" : "kernel.aks.start.sep-call",
+      "offset" : 34497180,
+      "originalBytes" : "10093fd7",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.0",
+      "offset" : 34542500,
+      "originalBytes" : "ff8306d1",
+      "replacementBytes" : "3f1c0071"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.1",
+      "offset" : 34542504,
+      "originalBytes" : "fc6f14a9",
+      "replacementBytes" : "c1010054"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.2",
+      "offset" : 34542508,
+      "originalBytes" : "fa6715a9",
+      "replacementBytes" : "e20100b4"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.3",
+      "offset" : 34542512,
+      "originalBytes" : "f85f16a9",
+      "replacementBytes" : "481040f9"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.4",
+      "offset" : 34542516,
+      "originalBytes" : "f65717a9",
+      "replacementBytes" : "a80100b4"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.5",
+      "offset" : 34542520,
+      "originalBytes" : "f44f18a9",
+      "replacementBytes" : "482840b9"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.6",
+      "offset" : 34542524,
+      "originalBytes" : "fd7b19a9",
+      "replacementBytes" : "1f050071"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.7",
+      "offset" : 34542528,
+      "originalBytes" : "fd430691",
+      "replacementBytes" : "41010054"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.8",
+      "offset" : 34542532,
+      "originalBytes" : "f50302aa",
+      "replacementBytes" : "492440f9"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.9",
+      "offset" : 34542536,
+      "originalBytes" : "f40301aa",
+      "replacementBytes" : "090100b4"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.10",
+      "offset" : 34542540,
+      "originalBytes" : "f60300aa",
+      "replacementBytes" : "485040b9"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.11",
+      "offset" : 34542544,
+      "originalBytes" : "b70302d1",
+      "replacementBytes" : "1f050071"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.12",
+      "offset" : 34542548,
+      "originalBytes" : "c86efff0",
+      "replacementBytes" : "a1000054"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.13",
+      "offset" : 34542552,
+      "originalBytes" : "087940f9",
+      "replacementBytes" : "c80080d2"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.14",
+      "offset" : 34542556,
+      "originalBytes" : "080140f9",
+      "replacementBytes" : "280100f9"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.15",
+      "offset" : 34542560,
+      "originalBytes" : "a88319f8",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.16",
+      "offset" : 34542564,
+      "originalBytes" : "b8168052",
+      "replacementBytes" : "ff0f5fd6"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.17",
+      "offset" : 34542568,
+      "originalBytes" : "1845b072",
+      "replacementBytes" : "40588052"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.18",
+      "offset" : 34542572,
+      "originalBytes" : "ff3f0239",
+      "replacementBytes" : "0000bc72"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.19",
+      "offset" : 34542576,
+      "originalBytes" : "d96efff0",
+      "replacementBytes" : "ff0f5fd6"
+    },
+    {
+      "id" : "kernel.aks.external-method.log-call",
+      "offset" : 34543064,
+      "originalBytes" : "01990094",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.sep.panic-check.result",
+      "offset" : 34853696,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sep.panic-check.return",
+      "offset" : 34853700,
+      "originalBytes" : "f44fbea9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sep.did-timeout.result",
+      "offset" : 34839204,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sep.did-timeout.return",
+      "offset" : 34839208,
+      "originalBytes" : "ffc300d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sep.power-notification.result",
+      "offset" : 34841660,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sep.power-notification.return",
+      "offset" : 34841664,
+      "originalBytes" : "ff4305d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sep.set-power-a",
+      "offset" : 34857468,
+      "originalBytes" : "801200b4",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.sep.notify-active",
+      "offset" : 34853268,
+      "originalBytes" : "200d00b4",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.sep.set-power-b",
+      "offset" : 34857516,
+      "originalBytes" : "201100b4",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.sep.prng-reseed",
+      "offset" : 34858948,
+      "originalBytes" : "80010054",
+      "replacementBytes" : "1f2003d5"
+    }
+  ],
+  "expectedSize" : 67534848,
+  "resolver" : "kernel-sep",
+  "sha256" : "fdaf5ccc03bd6e2415c00d0fd91ee1e81a72ac89e974c692ea53dce01761be3e",
+  "target" : {
+    "board" : "n104ap",
+    "build" : "24A435",
+    "component" : "kernelcache.release.iphone12b",
+    "device" : "iPhone 11"
+  }
+}

@@ -108,7 +108,10 @@ public struct IBSSBootArgsResolver: Sendable {
                 offset: slot.writeOffset,
                 originalBytes: Data(repeating: 0, count: argumentBytes.count),
                 replacementBytes: argumentBytes,
-                summary: "Install the literal normal-boot argument string",
+                // The resolver serves restore, SSHRD and normal plans with
+                // different literals, so naming one of them here mislabels the
+                // other two in every manifest and evidence dump.
+                summary: "Install the literal boot argument string",
                 evidence: evidence
             ),
         ]
@@ -196,37 +199,65 @@ public struct IBSSBootArgsResolver: Sendable {
         return bytes == Data([0, UInt8(ascii: "%"), UInt8(ascii: "s"), 0])
     }
 
-    private func findPageTailSlots(in image: BinaryImage, requiredLength: Int) -> [PageTailSlot] {
-        var slots: [PageTailSlot] = []
-        var runStart: Int?
+    /// Preferred string alignments, widest first. Narrower entries are reached
+    /// only when the zero run cannot hold the literal at a wider one.
+    private static let alignments = [16, 8, 4, 2, 1]
 
-        // A run is accepted only when it reaches a 4 KiB boundary. This models
-        // linker padding at the end of a mapped section and excludes arbitrary
-        // zero-filled structures elsewhere in the image. On beta 4 that turns
-        // five generic 64-byte zero runs into one defensible candidate.
+    /// Every zero run that ends on a 4 KiB boundary, largest first.
+    ///
+    /// A run is accepted only when it reaches the boundary. This models linker
+    /// padding at the end of a mapped section and excludes arbitrary zero-filled
+    /// structures elsewhere in the image.
+    func pageTailRuns(in image: BinaryImage) -> [(start: Int, end: Int)] {
+        var runs: [(start: Int, end: Int)] = []
+        var runStart: Int?
         for offset in 0...image.count {
             let isZero = offset < image.count && image.data[offset] == 0
             if isZero, runStart == nil {
                 runStart = offset
             } else if !isZero, let start = runStart {
-                defer { runStart = nil }
-                guard offset.isMultiple(of: 0x1000) else { continue }
-
-                // Leave eight bytes after the last non-zero section contents,
-                // then round up to 16-byte alignment. For beta 4 the raw run
-                // begins at 0xd0e24, producing the independently known 0xd0e30
-                // slot. We derive it from the run; we never select by address.
-                let writeOffset = (start + 8 + 15) & ~15
-                guard writeOffset + requiredLength <= offset else { continue }
-                slots.append(.init(
-                    writeOffset: UInt64(writeOffset),
-                    runEnd: UInt64(offset),
-                    capacity: offset - writeOffset
-                ))
+                runStart = nil
+                if offset.isMultiple(of: 0x1000) { runs.append((start, offset)) }
             }
         }
-        return slots
+        return runs.sorted { $0.end - $0.start > $1.end - $1.start }
     }
+
+    func findPageTailSlots(in image: BinaryImage, requiredLength: Int) -> [PageTailSlot] {
+        // Identify the run by what it *is* -- the section-tail padding, i.e. the
+        // largest page-boundary zero run in the payload -- not by whether a
+        // particular literal happens to fit it.
+        //
+        // Selecting by fit is what used to make this resolver unstable. The
+        // previous fixed 16-byte alignment excluded the runner-up run only by
+        // arithmetic accident, so widening the alignment to fit RC's shorter run
+        // silently admitted a second candidate and broke the restore plan on
+        // both builds. Both payloads have one clearly dominant run
+        // (beta 4: 476 bytes vs 35; RC 24A435: 79 vs 35), so requiring a unique
+        // maximum is a stronger identity than any length test.
+        let runs = pageTailRuns(in: image)
+        guard let best = runs.first else { return [] }
+        let bestLength = best.end - best.start
+        guard runs.count == 1 || runs[1].end - runs[1].start < bestLength else { return [] }
+
+        // Leave eight bytes after the last non-zero section contents, then align
+        // the string. Alignment is a convention, not a requirement: the slot
+        // holds a NUL-terminated C string read by a byte copy, and ADRP+ADD can
+        // address any byte in the page. Take the widest alignment the run can
+        // actually accommodate. The guard gap is never traded away.
+        let guarded = best.start + 8
+        guard let writeOffset = Self.alignments.lazy
+            .map({ (guarded + $0 - 1) & ~($0 - 1) })
+            .first(where: { $0 + requiredLength <= best.end })
+        else { return [] }
+
+        return [.init(
+            writeOffset: UInt64(writeOffset),
+            runEnd: UInt64(best.end),
+            capacity: best.end - writeOffset
+        )]
+    }
+
 }
 
 private struct BootArgsCallSite {
@@ -235,7 +266,7 @@ private struct BootArgsCallSite {
     let formatOffset: UInt64
 }
 
-private struct PageTailSlot {
+struct PageTailSlot {
     let writeOffset: UInt64
     let runEnd: UInt64
     let capacity: Int

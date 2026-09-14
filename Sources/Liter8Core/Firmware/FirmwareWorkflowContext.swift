@@ -6,7 +6,7 @@ import Foundation
 /// `RestoreKernelCache`; it never guesses board-specific filenames. Binary
 /// signatures and replacement instructions remain exclusively in Swift.
 public struct FirmwareWorkflowContext: Codable, Equatable, Sendable {
-    public static let schemaVersion = 1
+    public static let schemaVersion = 2
 
     public let schema: Int
     public let profileID: String
@@ -17,12 +17,14 @@ public struct FirmwareWorkflowContext: Codable, Equatable, Sendable {
     public let variant: String
     public let sourceRoot: String
     public let components: [String: String]
+    /// Reviewed board-specific additions to the generic boot recipes.
+    public let bootPlan: DeviceBootPlan
 
     /// Select the normal developer erase identity for the profile's hardware.
     /// Research and upgrade identities often point at different iBoot or
     /// ramdisk artifacts, so silently taking the first manifest entry is unsafe.
     public static func load(
-        profile: IPSWWorkflowProfile,
+        profile: DeviceWorkflowProfile,
         sourceRoot: URL
     ) throws -> FirmwareWorkflowContext {
         let manifestURL = sourceRoot.appendingPathComponent("BuildManifest.plist")
@@ -84,7 +86,8 @@ public struct FirmwareWorkflowContext: Codable, Equatable, Sendable {
             deviceClass: profile.deviceClass,
             variant: variant,
             sourceRoot: sourceRoot.standardizedFileURL.path,
-            components: components
+            components: components,
+            bootPlan: profile.bootPlan
         )
     }
 

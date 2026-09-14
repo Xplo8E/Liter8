@@ -49,11 +49,12 @@ final class RestoreComponentResolverTests: XCTestCase {
             let manifest = try FixtureManifest.load(
                 from: packageRoot.appendingPathComponent(manifestPath)
             )
-            XCTAssertEqual(
-                try manifest.verify(binaryAt: fixture(binaryPath)).count,
-                1,
-                manifestPath
-            )
+            // Resolve the optional private fixture before entering XCTest's
+            // assertion autoclosure. If it is absent, XCTSkip must escape the
+            // test normally instead of being converted into a failed assert.
+            let binary = try fixture(binaryPath)
+            let records = try manifest.verify(binaryAt: binary)
+            XCTAssertEqual(records.count, 1, manifestPath)
         }
     }
 }

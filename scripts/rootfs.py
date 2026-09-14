@@ -105,10 +105,11 @@ def write_state(root: Path, context: Context, image: Path, mountpoint: Path,
 
 
 def validate_rootfs(context: Context, mountpoint: Path) -> dict[str, str]:
-    """Bind the mounted image to the selected build and reviewed launchd."""
+    """Bind the mounted image to the selected build and boot-critical inputs."""
     version_path = mountpoint / "System/Library/CoreServices/SystemVersion.plist"
     launchd = mountpoint / "sbin/launchd"
-    if not version_path.is_file() or not launchd.is_file():
+    launchd_cache = mountpoint / "System/Library/xpc/launchd.plist"
+    if not version_path.is_file() or not launchd.is_file() or not launchd_cache.is_file():
         raise WorkflowError(f"mounted image is not an iOS System root: {mountpoint}")
 
     document = plistlib.loads(version_path.read_bytes())
@@ -128,10 +129,37 @@ def validate_rootfs(context: Context, mountpoint: Path) -> dict[str, str]:
         raise WorkflowError(
             f"mounted /sbin/launchd SHA-256 is {actual_launchd}, expected {expected_launchd}"
         )
+
+    expected_cache = os.environ.get("LITER8_LAUNCHD_CACHE_SHA")
+    expected_daemons_text = os.environ.get("LITER8_LAUNCHD_CACHE_DAEMONS")
+    if not expected_cache or not expected_daemons_text:
+        raise WorkflowError("firmware profile has no reviewed launchd cache identity")
+    try:
+        expected_daemons = int(expected_daemons_text)
+    except ValueError as error:
+        raise WorkflowError("firmware profile has an invalid launchd daemon count") from error
+
+    actual_cache = sha256_file(launchd_cache)
+    if actual_cache != expected_cache:
+        raise WorkflowError(
+            f"mounted launchd.plist SHA-256 is {actual_cache}, expected {expected_cache}"
+        )
+    try:
+        cache_document = plistlib.loads(launchd_cache.read_bytes())
+        launch_daemons = cache_document["LaunchDaemons"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise WorkflowError("mounted launchd.plist is not a usable service cache") from error
+    if not isinstance(launch_daemons, dict) or len(launch_daemons) != expected_daemons:
+        actual_daemons = len(launch_daemons) if isinstance(launch_daemons, dict) else "invalid"
+        raise WorkflowError(
+            f"mounted launchd.plist has {actual_daemons} daemons, expected {expected_daemons}"
+        )
     return {
         "productVersion": str(version),
         "build": str(build),
         "launchdSHA256": actual_launchd,
+        "launchdCacheSHA256": actual_cache,
+        "launchdCacheDaemonCount": str(expected_daemons),
     }
 
 

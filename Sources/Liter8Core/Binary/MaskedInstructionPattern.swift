@@ -105,6 +105,15 @@ struct MaskedInstructionPattern: Sendable {
         if allowDataLayoutDrift && word & 0x3B00_0000 == 0x3900_0000 {
             return 0xFFC0_03FF
         }
+        // ADD (immediate, 64-bit, LSL #0): the second half of an ADRP+ADD pair
+        // forming a global's address. The ADRP page is already relaxed above,
+        // but the in-page offset moves with it, so pinning it pins an address
+        // rather than a code shape. iOS 27 RC moved current_thread_ro's global
+        // from page 0xbc3000+0x1f0 to 0xbcb000+0xd0 without changing a single
+        // instruction otherwise. Registers, width and opcode stay significant.
+        if allowDataLayoutDrift && word & 0xFF80_0000 == 0x9100_0000 {
+            return 0xFFC0_03FF
+        }
         return 0xFFFF_FFFF
     }
 }

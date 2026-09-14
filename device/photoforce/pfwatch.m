@@ -20,10 +20,13 @@ extern int proc_listpids(uint32_t type, uint32_t typeinfo, void *buffer,
 extern int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
 
 static const char *kWatchTarget = "/Applications/PosterBoard.app/PosterBoard";
-static const char *kWatchLog =
-    "/private/var/mobile/Library/SpringBoard/pfwatch.log";
-static const char *kWatchLock =
-    "/private/var/mobile/Library/SpringBoard/pfwatch.lock";
+// com.jbboot can run before SpringBoard creates ~/Library/SpringBoard on a
+// freshly restored phone. /var/mobile already exists because launchd opens the
+// job's stdout there, while /var/tmp is an early-boot, world-writable location.
+// Using only existing parents prevents the watcher from exiting cleanly before
+// it ever observes PosterBoard.
+static const char *kWatchLog = "/private/var/mobile/pfwatch.log";
+static const char *kWatchLock = "/private/var/tmp/liter8-pfwatch.lock";
 
 static pid_t posterboard_pid(void) {
     static pid_t highest_seen = 0;

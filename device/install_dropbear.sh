@@ -71,11 +71,19 @@ HOST_KEYS=(
 
 sshdev() { "$SSHPASS" -p alpine ssh "${SSH_OPTS[@]}" root@localhost "$@"; }
 
+# A following workflow phase may need the same local port immediately. Merely
+# sending SIGTERM leaves a small window where the old forward still accepts a
+# connection and then vanishes underneath it, so reap it before returning.
+stop_owned_iproxy() {
+    kill "$IPROXY_PID" 2>/dev/null || true
+    wait "$IPROXY_PID" 2>/dev/null || true
+}
+
 if ! sshdev true 2>/dev/null; then
     command -v iproxy >/dev/null || { print -u2 "[!] iproxy not installed (brew install libimobiledevice)"; exit 1; }
     iproxy 2222 22 >/dev/null 2>&1 &
     IPROXY_PID=$!
-    trap 'kill $IPROXY_PID 2>/dev/null' EXIT
+    trap stop_owned_iproxy EXIT
     sleep 2
 fi
 

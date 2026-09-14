@@ -27,7 +27,7 @@ struct IPSWManifestTests {
         #expect(identity.buildIdentities == [
             .init(deviceClass: "n104ap", chipID: 0x8030, boardID: 0x04),
         ])
-        let profile = IPSWWorkflowRegistry.profile(for: identity)
+        let profile = DeviceWorkflowRegistry.profile(for: identity)
         #expect(profile?.id == "iphone12,1-n104ap-24A5390f")
         #expect(
             profile?.launchdSHA256
@@ -35,7 +35,7 @@ struct IPSWManifestTests {
         )
     }
 
-    @Test func rejectsUnregisteredBuildInsteadOfFallingBack() throws {
+    @Test func releaseSelectsReviewedWorkflow() throws {
         let manifest: [String: Any] = [
             "ProductVersion": "27.0",
             "ProductBuildVersion": "24A435",
@@ -53,6 +53,10 @@ struct IPSWManifestTests {
         )
 
         let identity = try IPSWManifestInspector.parse(data)
-        #expect(IPSWWorkflowRegistry.profile(for: identity) == nil)
+        let profile = DeviceWorkflowRegistry.profile(for: identity)
+        #expect(profile?.id == "iphone12,1-n104ap-24A435")
+        #expect(profile?.validationState == .reviewed)
+        #expect(profile?.launchdCacheDaemonCount == 729)
+        #expect(profile?.setupControllerMethodCount == 66)
     }
 }

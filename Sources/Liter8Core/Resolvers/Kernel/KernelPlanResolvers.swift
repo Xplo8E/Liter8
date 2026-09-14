@@ -1,5 +1,24 @@
 import Foundation
 
+/// Joins independently resolved kernel patch families in their canonical write
+/// order.
+///
+/// Resolution is intentionally kept out of this helper. Production resolvers
+/// still discover every component themselves, while fixture tests can validate
+/// the exact same composition without rescanning a large kernelcache merely to
+/// concatenate records they have already verified.
+enum KernelBootPlanComposer {
+    static func compose(
+        restore: [PatchRecord],
+        bootPolicy: [PatchRecord],
+        sep: [PatchRecord],
+        credentialManager: [PatchRecord],
+        sandbox: [PatchRecord]
+    ) -> [PatchRecord] {
+        restore + bootPolicy + sep + credentialManager + sandbox
+    }
+}
+
 /// Complete normal-boot kernel plan.
 ///
 /// Keeping composition here, rather than teaching individual resolvers about
@@ -11,29 +30,34 @@ public struct KernelBootResolver: Sendable {
     public init() {}
 
     public func resolve(in image: BinaryImage) throws -> [PatchRecord] {
-        try KernelRestoreResolver().resolve(in: image)
-            + KernelBootPolicyResolver().resolve(in: image)
-            + KernelSEPResolver().resolve(in: image)
-            + KernelCredentialManagerResolver().resolve(in: image)
-            + KernelSandboxResolver().resolve(in: image)
+        try KernelBootPlanComposer.compose(
+            restore: KernelRestoreResolver().resolve(in: image),
+            bootPolicy: KernelBootPolicyResolver().resolve(in: image),
+            sep: KernelSEPResolver().resolve(in: image),
+            credentialManager: KernelCredentialManagerResolver().resolve(in: image),
+            sandbox: KernelSandboxResolver().resolve(in: image)
+        )
     }
 }
 
-/// Byte-compatible normal-boot plan for the public iOS 27 beta-4 scripts.
+/// Device-reviewed compatibility plan for the public Liter8 boot workflow.
 ///
 /// This deliberately omits the later 35-record scoped vnode-open shim. It is
-/// the safe baseline while orchestration moves into Swift because it reproduces
-/// the public `kc-boot` table without changing device behaviour.
-public struct KernelBootPublicBeta4Resolver: Sendable {
-    public static let name = "kernel-boot-public-beta4"
+/// the plan shipped by the public Python `kc-boot` table and subsequently
+/// validated on both iOS 27 beta 4 and 24A435. The compatibility contract is
+/// the selected patch set, not either firmware build.
+public struct KernelBootCompatibilityResolver: Sendable {
+    public static let name = "kernel-boot-compatibility"
     public init() {}
 
     public func resolve(in image: BinaryImage) throws -> [PatchRecord] {
-        try KernelRestoreResolver().resolve(in: image)
-            + KernelBootPolicyResolver().resolve(in: image)
-            + KernelSEPResolver().resolve(in: image)
-            + KernelCredentialManagerResolver().resolve(in: image)
-            + KernelSandboxResolver(includeScopedVnodeOpen: false).resolve(in: image)
+        try KernelBootPlanComposer.compose(
+            restore: KernelRestoreResolver().resolve(in: image),
+            bootPolicy: KernelBootPolicyResolver().resolve(in: image),
+            sep: KernelSEPResolver().resolve(in: image),
+            credentialManager: KernelCredentialManagerResolver().resolve(in: image),
+            sandbox: KernelSandboxResolver(includeScopedVnodeOpen: false).resolve(in: image)
+        )
     }
 }
 

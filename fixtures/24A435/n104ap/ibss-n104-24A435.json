@@ -1,0 +1,26 @@
+{
+  "expectedOutputSHA256" : "813064f30f02034d9960e68278afaa26b33a0abcfac320fbbf891a982e26856f",
+  "expectedPatches" : [
+    {
+      "id" : "ibss.validate-asn1.branch",
+      "offset" : 145128,
+      "originalBytes" : "01070054",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "ibss.validate-asn1.result",
+      "offset" : 145132,
+      "originalBytes" : "e00314aa",
+      "replacementBytes" : "000080d2"
+    }
+  ],
+  "expectedSize" : 2563464,
+  "resolver" : "ibss-validate-asn1",
+  "sha256" : "0a595a23eb3f7e2b2145d5ea4e9df419635b6cf527b11c3d24a480c6a8285bf8",
+  "target" : {
+    "board" : "n104ap",
+    "build" : "24A435",
+    "component" : "iBSS",
+    "device" : "iPhone 11"
+  }
+}

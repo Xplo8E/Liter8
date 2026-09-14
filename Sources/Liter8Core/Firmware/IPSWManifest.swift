@@ -106,11 +106,47 @@ public enum IPSWManifestInspector {
     }
 }
 
+/// Extra iBSS operations selected by hardware policy rather than by the boot
+/// mode itself.
+///
+/// Keep these values equal to the public CLI plan spellings. Swift writes them
+/// into the workflow context, and Python only executes the reviewed selection.
+public enum DeviceIBSSAdditionalPlan: String, Codable, Equatable, Sendable {
+    /// Let iBEC own the display handoff on n104. Applying this operation to
+    /// iBEC as well would suppress the LCD initialization the device needs.
+    case skipDisplayInitialization = "ibss-skip-display-init"
+}
+
+/// Hardware-selected additions to the otherwise generic boot recipes.
+///
+/// Normal boot and SSHRD are separate because a future board may need the
+/// display handoff workaround in only one path. An explicit empty array means
+/// that the profile was reviewed and intentionally needs no extra operation.
+public struct DeviceBootPlan: Codable, Equatable, Sendable {
+    public let normalIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan]
+    public let restoreIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan]
+
+    public init(
+        normalIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan],
+        restoreIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan]
+    ) {
+        self.normalIBSSAdditionalPlans = normalIBSSAdditionalPlans
+        self.restoreIBSSAdditionalPlans = restoreIBSSAdditionalPlans
+    }
+}
+
 /// A reviewed host workflow for one exact firmware identity.
 ///
 /// The profile names the output directory, but never supplies patch offsets.
 /// Binary offsets remain the responsibility of semantic resolvers.
-public struct IPSWWorkflowProfile: Equatable, Sendable {
+public struct DeviceWorkflowProfile: Equatable, Sendable {
+    public enum ValidationState: String, Equatable, Sendable {
+        /// Completed the full restore, provisioning and repeat-boot validation.
+        case reviewed
+        /// Exact-build data is present, but the device workflow is still under test.
+        case experimental
+    }
+
     public let id: String
     public let productVersion: String
     public let build: String
@@ -119,10 +155,22 @@ public struct IPSWWorkflowProfile: Equatable, Sendable {
     public let chipID: UInt64
     public let boardID: UInt64
     public let extractedDirectoryName: String
+    public let validationState: ValidationState
     /// SHA-256 of stock `/sbin/launchd` accepted by device provisioning.
     /// This belongs to the exact firmware profile, beside the identity that
     /// selected it, rather than inside a generic Python or shell workflow.
     public let launchdSHA256: String?
+    /// SHA-256 and pristine job count of `/System/Library/xpc/launchd.plist`.
+    /// Both are build-specific even though the two jobs Liter8 adds are generic.
+    public let launchdCacheSHA256: String
+    public let launchdCacheDaemonCount: Int
+    /// Number of class-owned `controllerNeedsToRun` implementations expected in
+    /// Setup.app. This is a guard against silently broadening a behavioural patch.
+    public let setupControllerMethodCount: Int
+    /// Board-specific additions to the generic normal and SSHRD boot recipes.
+    /// Keeping this in the exact workflow profile prevents Python from
+    /// silently applying an n104 workaround to every future device.
+    public let bootPlan: DeviceBootPlan
 
     public func supports(_ identity: IPSWIdentity) -> Bool {
         guard identity.productVersion == productVersion,
@@ -136,9 +184,9 @@ public struct IPSWWorkflowProfile: Equatable, Sendable {
     }
 }
 
-public enum IPSWWorkflowRegistry {
+public enum DeviceWorkflowRegistry {
     public static let profiles = [
-        IPSWWorkflowProfile(
+        DeviceWorkflowProfile(
             id: "iphone12,1-n104ap-24A5390f",
             productVersion: "27.0",
             build: "24A5390f",
@@ -147,11 +195,47 @@ public enum IPSWWorkflowRegistry {
             chipID: 0x8030,
             boardID: 0x04,
             extractedDirectoryName: "iPhone12,1_27.0_24A5390f_Restore",
-            launchdSHA256: "9ff28152483244a34cb43cd3541511f6989636e6814611c573b21b2ee43d70f7"
+            validationState: .reviewed,
+            launchdSHA256: "9ff28152483244a34cb43cd3541511f6989636e6814611c573b21b2ee43d70f7",
+            launchdCacheSHA256: "ff609d743eb0cb4ed013443ea4195e8e9daf4af71f59e5a1ea8a19b2abc3a5ba",
+            launchdCacheDaemonCount: 731,
+            setupControllerMethodCount: 65,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [.skipDisplayInitialization],
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
+            )
+        ),
+        // Device-validated on an iPhone 11 after an erase restore: CFW restore,
+        // SSHRD provisioning, normal boot, repeat boot, Procursus finalization,
+        // Dropbear, persona 99, icon token and PosterBoard repair all passed.
+        DeviceWorkflowProfile(
+            id: "iphone12,1-n104ap-24A435",
+            productVersion: "27.0",
+            build: "24A435",
+            productType: "iPhone12,1",
+            deviceClass: "n104ap",
+            chipID: 0x8030,
+            boardID: 0x04,
+            extractedDirectoryName: "iPhone12,1_27.0_24A435_Restore",
+            validationState: .reviewed,
+            launchdSHA256: "c640246d38aaeb2d2372aff1e5aa0de59dec267f53c0dfc155f7837e717af68b",
+            launchdCacheSHA256: "752739f8224b016b5cee1b37a985995ffcfc1d6f12569fd2191ba5b4a9119c6a",
+            launchdCacheDaemonCount: 729,
+            setupControllerMethodCount: 66,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [.skipDisplayInitialization],
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
+            )
         ),
     ]
 
-    public static func profile(for identity: IPSWIdentity) -> IPSWWorkflowProfile? {
-        profiles.first { $0.supports(identity) }
+    public static func profile(
+        for identity: IPSWIdentity,
+        includeExperimental: Bool = false
+    ) -> DeviceWorkflowProfile? {
+        profiles.first {
+            $0.supports(identity)
+                && ($0.validationState == .reviewed || includeExperimental)
+        }
     }
 }

@@ -109,7 +109,10 @@ struct KernelAMFIResolver: Sendable {
             in: image,
             layout: layout
         )
-        let start = try functionStart(beforeOrAt: reference.adrpOffset, in: image, layout: layout)
+        let entry = try functionStart(beforeOrAt: reference.adrpOffset, in: image, layout: layout)
+        // This function is reached only through a taken address on RC 24A435,
+        // so its landing pad has to survive the stub.
+        let start = ARM64.stubStart(atEntry: entry, in: image)
         return try [
             wordPatch(
                 id: "kernel.amfi.launch-constraints.result",
@@ -299,17 +302,80 @@ struct KernelAMFIResolver: Sendable {
             if uniqueHits.isEmpty { throw PatchfinderError.noCandidate("AMFI postValidation compare") }
             throw PatchfinderError.ambiguousCandidate("AMFI postValidation compare", offsets: uniqueHits)
         }
+        // Which way the B.NE has to fall is a property of the build, not a
+        // constant. Beta 4 24A5390f compares the hash type against SHA256 and
+        // branches away to reject, so forcing the comparison equal keeps the
+        // accept path. RC 24A435 compares against SHA1 and branches away to
+        // *accept*, so the same replacement would land the patch in the
+        // rejection block and refuse every binary. Decide from the fallthrough.
+        let rejectsOnFallthrough = try Self.fallthroughBuildsDiagnostic(after: site + 4, in: image)
+        let replacement = try Self.postValidationReplacement(
+            compare: try image.readUInt32(at: site),
+            rejectsOnFallthrough: rejectsOnFallthrough
+        )
+        let summary = rejectsOnFallthrough
+            ? "Force the post-validation comparison unequal so the accept branch is taken"
+            : "Make the post-validation comparison equal"
         return try wordPatch(
             id: "kernel.amfi.post-validation.compare",
             offset: site,
-            replacement: 0x6B00_001F, // cmp w0, w0: Z is always set
-            summary: "Make the post-validation comparison equal",
+            replacement: replacement,
+            summary: summary,
             evidence: [
                 "callee of the function owning the code-signature validation diagnostic",
                 "CMP W0,#imm follows a BL and is immediately consumed by B.NE",
+                rejectsOnFallthrough
+                    ? "fallthrough formats a diagnostic and branches to the shared reject tail"
+                    : "fallthrough continues into the function body",
             ],
             image: image
         )
+    }
+
+    /// The replacement word for the post-validation compare.
+    ///
+    /// Which way the `B.NE` has to fall is a property of the build, not a
+    /// constant. Beta 4 `24A5390f` compares the hash type against SHA256 and
+    /// branches away to reject, so forcing the comparison equal keeps the accept
+    /// path. RC `24A435` compares against SHA1 and branches away to *accept*, so
+    /// the same replacement would land the patch inside the rejection block and
+    /// refuse every binary.
+    static func postValidationReplacement(
+        compare: UInt32,
+        rejectsOnFallthrough: Bool
+    ) throws -> UInt32 {
+        guard !rejectsOnFallthrough else {
+            guard (compare >> 10) & 0xFFF != 0 else {
+                throw PatchfinderError.noCandidate(
+                    "AMFI postValidation compare with a zero immediate cannot be forced unequal"
+                )
+            }
+            // CMP WZR,#imm: Rn becomes the zero register, so the result is -imm
+            // and Z stays clear, making the following B.NE unconditional.
+            return (compare & ~UInt32(0x3E0)) | (31 << 5)
+        }
+        return 0x6B00_001F // cmp w0, w0: Z is always set
+    }
+
+    /// True when the words immediately after a conditional branch look like a
+    /// rejection block: an ADRP that materializes a diagnostic format string,
+    /// followed by an unconditional branch to the shared logging tail.
+    ///
+    /// The accept path in this function instead continues into an authenticated
+    /// vtable dispatch, which starts with a load and contains neither.
+    static func fallthroughBuildsDiagnostic(
+        after branch: UInt64,
+        in image: BinaryImage
+    ) throws -> Bool {
+        var sawADRP = false
+        for index in 1...6 {
+            let offset = branch + UInt64(index * 4)
+            guard offset + 4 <= UInt64(image.count) else { return false }
+            let word = try image.readUInt32(at: offset)
+            if word & 0x9F00_0000 == 0x9000_0000 { sawADRP = true }       // ADRP
+            if sawADRP, word & 0xFC00_0000 == 0x1400_0000 { return true } // B
+        }
+        return false
     }
 
     private func dyldPolicyCalls(in image: BinaryImage, layout: MachOLayout) throws -> [PatchRecord] {
@@ -429,16 +495,13 @@ struct KernelAMFIResolver: Sendable {
         in image: BinaryImage,
         layout: MachOLayout
     ) throws -> UInt64 {
-        guard let range = layout.executableFileRanges.first(where: { $0.contains(offset) }) else {
+        guard layout.executableFileRanges.contains(where: { $0.contains(offset) }) else {
             throw PatchfinderError.noCandidate("containing executable range")
         }
-        let floor = max(range.lowerBound, offset - min(offset - range.lowerBound, 0x4000))
-        var cursor = offset & ~UInt64(3)
-        while cursor >= floor + 4 {
-            if try image.readUInt32(at: cursor) == 0xD503_237F { return cursor } // PACIBSP
-            cursor -= 4
+        guard let start = ARM64.functionStart(beforeOrAt: offset, in: image, layout: layout) else {
+            throw PatchfinderError.noCandidate("arm64e function start before \(offset.hex)")
         }
-        throw PatchfinderError.noCandidate("arm64e function start before \(offset.hex)")
+        return start
     }
 
     private func nextFunctionStart(
@@ -447,16 +510,7 @@ struct KernelAMFIResolver: Sendable {
         in image: BinaryImage,
         layout: MachOLayout
     ) throws -> UInt64 {
-        guard let range = layout.executableFileRanges.first(where: { $0.contains(start) }) else {
-            return start + maximumDistance
-        }
-        let limit = min(range.upperBound, start + maximumDistance)
-        var cursor = start + 4
-        while cursor < limit {
-            if try image.readUInt32(at: cursor) == 0xD503_237F { return cursor } // PACIBSP
-            cursor += 4
-        }
-        return limit
+        ARM64.nextFunctionStart(after: start, in: image, layout: layout, limit: maximumDistance)
     }
 
     private func directCallTarget(

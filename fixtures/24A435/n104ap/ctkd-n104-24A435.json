@@ -1,0 +1,26 @@
+{
+  "expectedOutputSHA256" : "b63d9a5dfe792689b5f1f2927f769b64cac3bfa768afa8b7624041ec91dc7f6d",
+  "expectedPatches" : [
+    {
+      "id" : "ctkd.sep-key-server.return-nil",
+      "offset" : 6968,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "ctkd.sep-key-server.return",
+      "offset" : 6972,
+      "originalBytes" : "ff0303d1",
+      "replacementBytes" : "c0035fd6"
+    }
+  ],
+  "expectedSize" : 321616,
+  "resolver" : "ctkd",
+  "sha256" : "2f5861e1deaac8c4490cc4f0753c0d782bdc60408d1a6890f0cee4b78440db73",
+  "target" : {
+    "board" : "n104ap",
+    "build" : "24A435",
+    "component" : "ctkd",
+    "device" : "iPhone 11"
+  }
+}

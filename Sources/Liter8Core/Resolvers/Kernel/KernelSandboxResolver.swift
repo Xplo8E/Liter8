@@ -102,12 +102,17 @@ public struct KernelSandboxResolver: Sendable {
             ("vnode-check-rename", "vnode_check_rename", vnodeCheckRename),
         ]
         for stub in stubs {
-            guard try image.readUInt32(at: stub.offset) == 0xD503_237F else { // PACIBSP
+            // An mpc_ops slot stores the address a call lands on. On a BTI
+            // build that is the landing pad, so the stub starts one word later
+            // and the pad survives: every one of these is reached only through
+            // this table, i.e. always by indirect branch.
+            let start = ARM64.stubStart(atEntry: stub.offset, in: image)
+            guard try image.readUInt32(at: start) == ARM64.pacibsp else {
                 throw PatchfinderError.noCandidate("\(stub.name) PACIBSP entry")
             }
             patches.append(try sandboxPatch(
                 id: "kernel.sandbox.\(stub.id).result",
-                offset: stub.offset,
+                offset: start,
                 replacement: ARM64.movX0Zero,
                 summary: "Return success from \(stub.name)",
                 evidence: ["native target read from its mpc_ops slot"],
@@ -115,7 +120,7 @@ public struct KernelSandboxResolver: Sendable {
             ))
             patches.append(try sandboxPatch(
                 id: "kernel.sandbox.\(stub.id).return",
-                offset: stub.offset + 4,
+                offset: start + 4,
                 replacement: ARM64.ret,
                 summary: "Return the forced Seatbelt result",
                 evidence: ["paired entry-point stub"],

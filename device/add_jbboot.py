@@ -50,19 +50,16 @@ JBBOOT_JOB = {
     # interpreter first: the kernel will not exec a shebang script here
     "ProgramArguments": [SHELL, SCRIPT],
     "RunAtLoad": True,
-    # one-shot: it sets up kernel state and exits. KeepAlive would respawn it
-    # forever, which is wrong for a task that is meant to run once per boot.
-    "KeepAlive": False,
+    # The shell performs one-time token/persona setup, then execs pfwatch.
+    # Restart crashes or other abnormal failures, but not a deliberate clean
+    # exit (for example, a second watcher finding the single-instance lock).
+    "KeepAlive": {"SuccessfulExit": False},
     "POSIXSpawnType": "Interactive",
     "EnablePressuredExit": False,
     "EnableTransactions": False,
     "StandardOutPath": "/var/mobile/jbboot.log",
     "StandardErrorPath": "/var/mobile/jbboot.log",
 }
-
-PRISTINE_DAEMONS = 731          # untouched cache
-WITH_DROPBEAR = 732             # after patch_launchd_cache.py
-
 
 def load(path):
     with open(path, "rb") as f:
@@ -75,6 +72,11 @@ def main():
     ap.add_argument("cache", help="path to launchd.plist (the service cache)")
     ap.add_argument("--apply", action="store_true", help="add the job")
     ap.add_argument("--remove", action="store_true", help="remove the job")
+    ap.add_argument(
+        "--expected-pristine-daemons",
+        type=int,
+        help="exact profile-owned count before Liter8 adds dropbear and jbboot",
+    )
     args = ap.parse_args()
 
     path = Path(args.cache)
@@ -88,10 +90,21 @@ def main():
 
     print(f"[.] {path}")
     print(f"    size          {path.stat().st_size}")
-    print(f"    LaunchDaemons {n}" + ("" if n in (PRISTINE_DAEMONS, WITH_DROPBEAR, WITH_DROPBEAR + 1)
-                                      else f"   (expected {PRISTINE_DAEMONS}/{WITH_DROPBEAR})"))
+    print(f"    LaunchDaemons {n}")
     print(f"    com.dropbear  {'present' if '/System/Library/LaunchDaemons/com.dropbear.plist' in ld else 'ABSENT'}")
     print(f"    {LABEL}     {'present' if present else 'absent'}")
+
+    if args.expected_pristine_daemons is not None:
+        dropbear_present = "/System/Library/LaunchDaemons/com.dropbear.plist" in ld
+        expected_input = args.expected_pristine_daemons
+        if dropbear_present:
+            expected_input += 1
+        if present:
+            expected_input += 1
+        if n != expected_input:
+            sys.exit(
+                f"[!] cache has {n} daemons, expected {expected_input} for this profile"
+            )
 
     if not (args.apply or args.remove):
         print("[.] inspect only; pass --apply or --remove")

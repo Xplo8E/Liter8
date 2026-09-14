@@ -21,13 +21,89 @@ extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm
 extern kern_return_t mach_vm_write(vm_map_t, mach_vm_address_t, vm_offset_t,
                                    mach_msg_type_number_t);
 
-static const uintptr_t kPFFunctionPreferred = 0x1c6205facULL;
-static const uintptr_t kPFOncePreferred     = 0x1e5c26ae0ULL;
-static const uintptr_t kPFObjectPreferred   = 0x1e5c26ae8ULL;
 static const char *kPFPath =
     "/System/Library/PrivateFrameworks/PosterFoundation.framework/PosterFoundation";
 
 typedef NSDictionary *(*PFValuesFn)(void);
+
+// Resolve PosterFoundation's two globals from the live function instead of
+// carrying unslid addresses from one dyld shared cache. The function first
+// reads its dispatch_once token and, on the fast path, reads the cached object:
+//
+//     adrp xN, once-page          adrp xN, object-page
+//     ldr  xN, [xN, #once]       ldr  x0, [xN, #object]
+//
+// The globals are adjacent (`object == once + 8`). Requiring that relationship
+// and a unique pair keeps this fail-closed if Apple changes the implementation.
+static BOOL decode_adrp(uint32_t instruction, uintptr_t pc,
+                        unsigned *destination, uintptr_t *page) {
+    if ((instruction & 0x9F000000U) != 0x90000000U) return NO;
+
+    int64_t immediate = (int64_t)(((instruction >> 5) & 0x7FFFFU) << 2 |
+                                  ((instruction >> 29) & 0x3U));
+    if (immediate & (1LL << 20)) immediate |= ~((1LL << 21) - 1);
+    *destination = instruction & 0x1FU;
+    // Multiplication avoids left-shifting a negative signed value, which is
+    // undefined behavior in C for backward ADRP references.
+    int64_t page_delta = immediate * 4096;
+    *page = (uintptr_t)((int64_t)(pc & ~(uintptr_t)0xFFF) + page_delta);
+    return YES;
+}
+
+static BOOL decode_ldr_x_unsigned(uint32_t instruction, unsigned base,
+                                  unsigned *destination, uintptr_t *offset) {
+    if ((instruction & 0xFFC00000U) != 0xF9400000U) return NO;
+    if (((instruction >> 5) & 0x1FU) != base) return NO;
+    *destination = instruction & 0x1FU;
+    *offset = ((instruction >> 10) & 0xFFFU) * sizeof(uint64_t);
+    return YES;
+}
+
+static BOOL resolve_poster_globals(PFValuesFn function, uintptr_t *once,
+                                   uintptr_t *object) {
+    const uint32_t *words = (const uint32_t *)ptrauth_strip(
+        (void *)function, ptrauth_key_function_pointer);
+    uintptr_t once_candidates[8] = {0};
+    uintptr_t object_candidates[8] = {0};
+    size_t once_count = 0;
+    size_t object_count = 0;
+
+    // The beta-4 implementation is 17 words. A 32-word window leaves room for
+    // compiler drift while remaining inside the mapped __TEXT page.
+    for (size_t index = 0; index + 1 < 32; index++) {
+        unsigned page_register = 0;
+        unsigned load_register = 0;
+        uintptr_t page = 0;
+        uintptr_t offset = 0;
+        uintptr_t pc = (uintptr_t)&words[index];
+        if (!decode_adrp(words[index], pc, &page_register, &page) ||
+            !decode_ldr_x_unsigned(words[index + 1], page_register,
+                                   &load_register, &offset)) {
+            continue;
+        }
+
+        uintptr_t target = page + offset;
+        if (load_register == page_register && once_count < 8) {
+            once_candidates[once_count++] = target;
+        }
+        if (load_register == 0 && object_count < 8) {
+            object_candidates[object_count++] = target;
+        }
+    }
+
+    size_t matches = 0;
+    for (size_t left = 0; left < once_count; left++) {
+        for (size_t right = 0; right < object_count; right++) {
+            if (object_candidates[right] != once_candidates[left] + sizeof(uint64_t)) {
+                continue;
+            }
+            *once = once_candidates[left];
+            *object = object_candidates[right];
+            matches++;
+        }
+    }
+    return matches == 1;
+}
 
 static kern_return_t read_remote(task_t task, mach_vm_address_t address,
                                  void *output, size_t size) {
@@ -164,14 +240,16 @@ int main(int argc, char **argv) {
         NSDictionary *local_values = values_fn(); // complete dispatch_once before reading
         uintptr_t live_fn = (uintptr_t)ptrauth_strip((void *)values_fn,
                                                      ptrauth_key_function_pointer);
-        uintptr_t slide = live_fn - kPFFunctionPreferred;
-        uintptr_t once_address = kPFOncePreferred + slide;
-        uintptr_t slot_address = kPFObjectPreferred + slide;
+        uintptr_t once_address = 0;
+        uintptr_t slot_address = 0;
+        if (!resolve_poster_globals(values_fn, &once_address, &slot_address)) {
+            fprintf(stderr, "could not uniquely resolve PosterFoundation globals\n");
+            return 1;
+        }
         NSDictionary *local_slot_value = *(NSDictionary * const *)slot_address;
 
         printf("target pid=%d\n", pid);
-        printf("PF function preferred=0x%llx live=0x%llx slide=0x%llx\n",
-               (uint64_t)kPFFunctionPreferred, (uint64_t)live_fn, (uint64_t)slide);
+        printf("PF function live=0x%llx\n", (uint64_t)live_fn);
         printf("PF once=0x%llx slot=0x%llx\n",
                (uint64_t)once_address, (uint64_t)slot_address);
         printf("local return=%p slot=%p class=%s malloc_size=%zu\n",

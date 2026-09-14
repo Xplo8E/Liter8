@@ -228,6 +228,109 @@ enum ARM64 {
             || instruction == 0xD65F_0BFF // RETAA
             || instruction == 0xD65F_0FFF // RETAB
     }
+
+    // MARK: - Function boundaries
+
+    static let pacibsp: UInt32 = 0xD503_237F
+    static let btiC: UInt32 = 0xD503_245F
+
+    /// The address a `BL` actually targets for the function whose prologue is
+    /// at `prologue`.
+    ///
+    /// iOS 27 RC `24A435` enabled Branch Target Identification for the
+    /// kernelcache: about 88000 of its functions place a `BTI C` landing pad one
+    /// word ahead of `PACIBSP`, where beta 4 `24A5390f` has none at all. A call
+    /// therefore lands on the pad, not on the prologue, and any window measured
+    /// from a call target is one instruction adrift. Reading the pad back from
+    /// the prologue keeps a single rule working on both builds, because on a
+    /// build without pads this returns `prologue` unchanged.
+    static func functionEntry(forPrologue prologue: UInt64, in image: BinaryImage) -> UInt64 {
+        guard prologue >= 4, (try? image.readUInt32(at: prologue - 4)) == btiC else {
+            return prologue
+        }
+        return prologue - 4
+    }
+
+    /// Where a two-instruction entry stub must start.
+    ///
+    /// `functionEntry` is the right answer for boundary arithmetic, but it is
+    /// the wrong place to *write*. On a BTI build the entry is a `BTI C` landing
+    /// pad, and a stub written over it removes the only legal target for every
+    /// indirect branch to that function. Writing from the prologue instead
+    /// leaves `bti c; <stub>`, which stays reachable both ways.
+    ///
+    /// Verified against RC `24A435`: the AMFI launch-constraint function at file
+    /// offset `0x1f00bb4` has zero direct branch xrefs and one address-taken
+    /// reference, so it is reached only indirectly and must keep its pad.
+    ///
+    /// The pad is only recognised when a `PACIBSP` prologue follows it. That
+    /// distinction matters and is not cosmetic. A `BTI C` in front of a prologue
+    /// is a landing pad the compiler emitted for an indirect-branch target. A
+    /// bare `BTI C` that begins a PAC-less leaf is the function's own first
+    /// instruction, and skipping it would silently shift the stub into the body.
+    /// Beta 4 `24A5390f` contains exactly one such leaf,
+    /// `performLoggingLevelQueryGated` (`bti c; cbz x1; …`), which keeps its
+    /// historical two-word stub and so keeps matching the independent Python
+    /// `apply_patches.py` reference byte for byte.
+    static func stubStart(atEntry entry: UInt64, in image: BinaryImage) -> UInt64 {
+        guard (try? image.readUInt32(at: entry)) == btiC,
+              (try? image.readUInt32(at: entry + 4)) == pacibsp
+        else { return entry }
+        return entry + 4
+    }
+
+    /// Nearest function entry at or before `offset`, or nil within `limit`.
+    ///
+    /// `PACIBSP` stays the landmark. A bare `BTI C` is deliberately not treated
+    /// as a boundary: the same encoding marks indirect-branch landing pads
+    /// inside a function, so scanning for it would cut windows short, which is
+    /// the opposite and more dangerous failure.
+    static func functionStart(
+        beforeOrAt offset: UInt64,
+        in image: BinaryImage,
+        layout: MachOLayout,
+        limit: UInt64 = 0x4000
+    ) -> UInt64? {
+        guard let range = layout.executableFileRanges.first(where: { $0.contains(offset) }) else {
+            return nil
+        }
+        let floor = max(range.lowerBound, offset - min(offset - range.lowerBound, limit))
+        var cursor = offset & ~UInt64(3)
+        while cursor >= floor + 4 {
+            if (try? image.readUInt32(at: cursor)) == pacibsp {
+                return functionEntry(forPrologue: cursor, in: image)
+            }
+            cursor -= 4
+        }
+        return nil
+    }
+
+    /// Next function entry strictly after `start`, bounded by `limit` and the
+    /// containing executable segment.
+    ///
+    /// When `start` is a `BTI C` pad, the `PACIBSP` four bytes later belongs to
+    /// the same function and must not be reported as the next one. Skipping it
+    /// is what keeps a scan window from collapsing to nothing.
+    static func nextFunctionStart(
+        after start: UInt64,
+        in image: BinaryImage,
+        layout: MachOLayout,
+        limit: UInt64 = 0x2000
+    ) -> UInt64 {
+        guard let range = layout.executableFileRanges.first(where: { $0.contains(start) }) else {
+            return start + limit
+        }
+        let end = min(range.upperBound, start + limit)
+        var cursor = start + 4
+        while cursor < end {
+            if (try? image.readUInt32(at: cursor)) == pacibsp {
+                let entry = functionEntry(forPrologue: cursor, in: image)
+                if entry > start { return entry }
+            }
+            cursor += 4
+        }
+        return end
+    }
 }
 
 final class ARM64Disassembler {

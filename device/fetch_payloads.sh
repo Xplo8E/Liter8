@@ -47,10 +47,12 @@ IPSW_ROOT=${IPSW_ROOT:-/tmp/ios27-rootfs} # decrypted root filesystem, mounted
 OUT="$BASE/payload"
 WORK="$BASE/payload/.work"
 
-# Exact /sbin/launchd from iPhone12,1 27.0 beta 4 (24A5390f). PID 1 is never
-# patched by pattern alone: a different firmware must stop before producing an
-# apparently valid but unreviewed boot-critical binary.
+# PID 1 and its service cache are never patched by shape alone. Swift exports
+# their exact hashes and counts from the selected firmware profile, so a copied
+# rootfs or stale work directory stops before producing boot-critical output.
 LAUNCHD_SHA=${LITER8_LAUNCHD_SHA:?Liter8 did not provide the reviewed launchd hash}
+LAUNCHD_CACHE_SHA=${LITER8_LAUNCHD_CACHE_SHA:?Liter8 did not provide the reviewed launchd cache hash}
+LAUNCHD_CACHE_DAEMONS=${LITER8_LAUNCHD_CACHE_DAEMONS:?Liter8 did not provide the reviewed launchd daemon count}
 
 SILEO_VER=2.5.1
 SILEO_DEB="org.coolstar.sileo_${SILEO_VER}_iphoneos-arm64.deb"   # arm64 == rootless
@@ -216,15 +218,25 @@ if wants cache; then
         skip "IPSW not mounted at $IPSW_ROOT; cannot build the cache"
     else
         mkdir -p boot/work
+        got=$(shasum -a 256 "$STOCK" | awk '{print $1}')
+        [ "$got" = "$LAUNCHD_CACHE_SHA" ] \
+            || die "stock launchd cache sha256 mismatch: got $got expected $LAUNCHD_CACHE_SHA"
+        pristine_n=$(python3 -c "import plistlib;print(len(plistlib.load(open('$STOCK','rb'))['LaunchDaemons']))")
+        [ "$pristine_n" = "$LAUNCHD_CACHE_DAEMONS" ] \
+            || die "stock launchd cache has $pristine_n daemons, expected $LAUNCHD_CACHE_DAEMONS"
         cp "$STOCK" boot/work/launchd.plist
-        ok "stock cache from the IPSW ($(wc -c < boot/work/launchd.plist | tr -d ' ') bytes)"
-        ./patch_launchd_cache.py boot/work/launchd.plist --apply >/dev/null \
+        ok "stock cache hash and $pristine_n-daemon profile verified"
+        ./patch_launchd_cache.py boot/work/launchd.plist --apply \
+            --expected-pristine-daemons "$LAUNCHD_CACHE_DAEMONS" >/dev/null \
             || die "failed to add com.dropbear"
         ok "com.dropbear added"
-        ./add_jbboot.py boot/work/launchd.plist --apply >/dev/null \
+        ./add_jbboot.py boot/work/launchd.plist --apply \
+            --expected-pristine-daemons "$LAUNCHD_CACHE_DAEMONS" >/dev/null \
             || die "failed to add com.jbboot"
         ok "com.jbboot added"
         n=$(python3 -c "import plistlib;print(len(plistlib.load(open('boot/work/launchd.plist','rb'))['LaunchDaemons']))")
+        [ "$n" = "$((LAUNCHD_CACHE_DAEMONS + 2))" ] \
+            || die "patched cache has $n daemons, expected $((LAUNCHD_CACHE_DAEMONS + 2))"
         ok "boot/work/launchd.plist ready, $n daemons"
         echo "        the detached .sig on the device is left untouched; the loader"
         echo "        accepts a modified cache because of launchd_unsecure_cache=1"

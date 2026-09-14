@@ -6,3 +6,8 @@
 tools/idevicerestore
 tools/.idevicerestore-commit
 tools/*.setup-new
+
+# Local arm64/arm64e device-helper products. Provisioning rebuilds these from
+# the reviewed Objective-C sources before copying them to the phone.
+device/photoforce/pfruntimeprobe
+device/photoforce/pfwatch

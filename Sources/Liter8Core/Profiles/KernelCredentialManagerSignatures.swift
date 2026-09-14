@@ -46,10 +46,12 @@ struct KernelCredentialManagerSignatureVariant: Sendable {
 
 /// Build-family-specific locator data for AppleCredentialManager.
 ///
-/// Beta 2 and beta 4 share this variant because masked matching proved their
-/// function shapes compatible. Release build 24A435 is intentionally absent:
-/// its dedicated profile remains `pending-research` until those bodies are
-/// reversed and reviewed.
+/// Beta 2 and beta 4 share one variant because masked matching proved their
+/// function shapes compatible. Release build 24A435 gets its own, because iOS 27
+/// RC enabled BTI for the kernelcache and every method in this class gained a
+/// landing pad. The families stay separate rather than being merged behind a
+/// looser mask: a shared variant would let one build's shapes silently stand in
+/// for the other's.
 enum KernelCredentialManagerSignatures {
     static let earlyBetaV1 = KernelCredentialManagerSignatureVariant(
         id: "ios27-early-beta-acm-v1",
@@ -198,9 +200,79 @@ enum KernelCredentialManagerSignatures {
         ]
     )
 
+    /// Release build 24A435 (iOS 27 RC).
+    ///
+    /// Recovered from `com.apple.driver.AppleSEPCredentialManager:__text` in the
+    /// RC kernelcache. All 26 methods keep beta 4's relative order, which is the
+    /// cross-check that the set is the same set and not 26 coincidences.
+    ///
+    /// Every RC method carries a `BTI C` landing pad. These words start at the
+    /// `PACIBSP` that follows it, except `performLoggingLevelQueryGated`, whose
+    /// entry is the pad itself on both builds. The stub write is placed with
+    /// `ARM64.stubStart` so no pad is overwritten: ten of these methods have zero
+    /// direct branch references and are reached only through a taken address.
+    static let release24A435V1 = KernelCredentialManagerSignatureVariant(
+        id: "ios27-24A435-acm-v1",
+        functions: [
+            // RC file offset 0x20bfd50; 11/12 words identical to beta 4.
+            .init("sepManagerMatchedThreadCallHandler", words: "d503237f d10103ff a9037bfd 9100c3fd f9404c00 f9400010 aa0003f1 f2f9b431 dac11a30 f84e8e09 aa1003e8 d0000030"),
+            // RC file offset 0x20c0434; 15/16 words identical to beta 4.
+            .init("callPlatformFunction", words: "d503237f d10183ff a9057bfd 910143fd b40001a4 b9400088 b81e03a8 f9400488 f81e43a8 381ec3bf f81f53bf f81ed3bf d10083a4 94000037 a9457bfd 910183ff"),
+            // RC file offset 0x20c04bc; 16/16 words identical to beta 4.
+            .init("cmdContextV2", words: "d503237f d10183ff a9057bfd 910143fd b40001c4 b9400088 b81e03a8 f8404088 f81e43a8 39403088 381ec3a8 f81f53bf f81ed3bf d10083a4 94000014 a9457bfd"),
+            // RC file offset 0x20c0548; 15/16 words identical to beta 4.
+            .init("cmdContextV3", words: "d503237f d10243ff a9055ff8 a90657f6 a9074ff4 a9087bfd 910203fd b4000564 aa0403f7 aa0303f3 aa0203f4 aa0103f5 aa0003f6 97ffb3eb aa0003f8 394032e1"),
+            // RC file offset 0x20c0824; 12/16 words identical to beta 4.
+            .init("performCommandGated", words: "d503237f d10543ff a90f6ffc a91067fa a9115ff8 a91257f6 a9134ff4 a9147bfd 910503fd aa0403f4 aa0303f5 aa0203f6 aa0103f9 aa0003f8 6f00e400 ad3c03a0"),
+            // RC file offset 0x20c1314; 15/16 words identical to beta 4.
+            .init("_performKernelControl", words: "d503237f d10243ff a9036ffc a90467fa a9055ff8 a90657f6 a9074ff4 a9087bfd 910203fd aa0503f5 aa0403f6 aa0303f7 aa0203f8 aa0103f4 aa0003f3 d000f29a"),
+            // RC file offset 0x20c16d4; 16/16 words identical to beta 4.
+            .init("_performCommand", words: "d503237f d102c3ff a9056ffc a90667fa a9075ff8 a90857f6 a9094ff4 a90a7bfd 910283fd aa0603f8 aa0503f9 aa0403f4 aa0303f7 aa0203f3 aa0103f5 aa0003f6"),
+            // RC file offset 0x20c1900; 14/16 words identical to beta 4.
+            .init("processSCRDResponsePayload", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd aa0103f4 aa0003f3 d000f295 3964e2a8 7100291f 540002e8 39423268 360001a8 f9400270 aa1303f1"),
+            // RC file offset 0x20c1b30; 15/16 words identical to beta 4.
+            .init("scheduleDblClickDeferredAck", words: "d503237f d10143ff a9034ff4 a9047bfd 910103fd aa0003f3 52800001 94000fa6 f9408e60 f9400010 aa0003f1 f2f9b431 dac11a30 f84b0e08 f2f362d0 d73f0910"),
+            // RC file offset 0x20c1c54; 25/32 words identical to beta 4.
+            .init("updateAnalytics", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd aa0103f4 aa0003f3 d000f296 3964e2c8 b0ff2f95 9106ceb5 7100291f 540002a8 39423268 360001a8 f9400270 aa1303f1 f2f9b431 dac11a30 d2803d11 8b110210 f9400208 aa1303e0 d2800001 f2e19390 d73f0910 14000003 f0ff2f60 913b9800 a90057e0 f0ff2ee0", needsScoring: true),
+            // RC file offset 0x20c1dbc; 14/16 words identical to beta 4.
+            .init("performSCRDInitialization", words: "d503237f d10203ff a90557f6 a9064ff4 a9077bfd 9101c3fd aa0003f3 d000f294 3964e288 7100291f 540002e8 39423268 360001a8 f9400270 aa1303f1 f2f9b431"),
+            // RC file offset 0x20c2084; 27/32 words identical to beta 4.
+            .init("sendSEPCommand", words: "d503237f d10443ff a90b6ffc a90c67fa a90d5ff8 a90e57f6 a90f4ff4 a9107bfd 910403fd aa0703fc aa0603f7 aa0503f9 aa0403f5 aa0303f8 aa0203f6 aa0103f4 aa0003f3 f81a03a4 b000f29b 3964e368 7100291f 540002e8 39423268 360001a8 f9400270 aa1303f1 f2f9b431 dac11a30 d2803d11 8b110210 f9400208 aa1303e0", needsScoring: true),
+            // RC file offset 0x20c2b00; 13/16 words identical to beta 4.
+            .init("_setPropertiesGated", words: "d503237f d10203ff a90367fa a9045ff8 a90557f6 a9064ff4 a9077bfd 9101c3fd aa0103f3 aa0003f4 90ff7028 f9443908 f9400101 aa1303e0 94003dca b4001640"),
+            // RC file offset 0x20c2f8c; 15/16 words identical to beta 4.
+            .init("performDoubleClickQueryGated", words: "d503237f d10143ff a9034ff4 a9047bfd 910103fd b4000261 aa0103f3 a9007fff 52800041 52800002 d2800003 d2800004 d2800005 d2800006 52800027 97fffc2e"),
+            // RC file offset 0x20c307c; 8/10 words identical to beta 4.
+            .init("performLoggingLevelQueryGated", words: "d503245f b40000c1 52800000 9000f288 3964e108 f9000028 d65f03c0 d503237f d10103ff a9037bfd"),
+            // RC file offset 0x20c34b8; 10/12 words identical to beta 4.
+            .init("lockItem", words: "d503237f d101c3ff a9035ff8 a90457f6 a9054ff4 a9067bfd 910183fd aa0203f3 aa0103f5 aa0003f4 9000f297 3964e2e8"),
+            // RC file offset 0x20c36e8; 25/32 words identical to beta 4.
+            .init("unlockItem", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd aa0103f4 aa0003f3 9000f296 3964e2c8 d0ff2f75 912172b5 7100291f 540002a8 39423268 360001a8 f9400270 aa1303f1 f2f9b431 dac11a30 d2803d11 8b110210 f9400208 aa1303e0 d2800001 f2e19390 d73f0910 14000003 b0ff2f60 913b9800 a90057e0 b0ff2ee0", needsScoring: true),
+            // RC file offset 0x20c3bac; 13/16 words identical to beta 4.
+            .init("handleSEPMessage", words: "d503237f d10203ff a90367fa a9045ff8 a90557f6 a9064ff4 a9077bfd 9101c3fd aa0103f4 aa0003f3 f9400058 d360ff19 9000f297 3964e2e8 53107f15 d0ff2f76"),
+            // RC file offset 0x20c3e98; 13/16 words identical to beta 4.
+            .init("readFromSEPBuffer", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd aa0203f4 aa0103f3 aa0003f5 f940a800 b50000a0 aa1503e0 9400022e f940aaa0 b4000760 f9400010"),
+            // RC file offset 0x20c3ffc; 15/16 words identical to beta 4.
+            .init("writeToSEPBuffer", words: "d503237f d10243ff a9036ffc a90467fa a9055ff8 a90657f6 a9074ff4 a9087bfd 910203fd aa0503f4 aa0403f5 aa0303f6 aa0203f7 aa0103f8 aa0003f3 f000f27c"),
+            // RC file offset 0x20c43a8; 14/16 words identical to beta 4.
+            .init("sendSEPMessage", words: "d503237f d10243ff a90467fa a9055ff8 a90657f6 a9074ff4 a9087bfd 910203fd aa0403f7 aa0303f5 aa0203f6 aa0103f4 aa0003f3 f000f279 3964e328 7100291f"),
+            // RC file offset 0x20c45e4; 16/16 words identical to beta 4.
+            .init("clearSEPBuffer", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd b40008c1 aa0203f3 aa0103f4 f9400030 aa0103f1 f2f9b431 dac11a30 f8478e08 aa0103e0 f2e27af0"),
+            // RC file offset 0x20c4784; 14/16 words identical to beta 4.
+            .init("getSEPEndpoint", words: "d503237f d10243ff a9036ffc a90467fa a9055ff8 a90657f6 a9074ff4 a9087bfd 910203fd aa0003f3 f000f27b 3964e368 7100291f 540002e8 39423268 360001a8"),
+            // RC file offset 0x20c53d0; 14/16 words identical to beta 4.
+            .init("powerOffActionGated", words: "d503237f d10203ff a90367fa a9045ff8 a90557f6 a9064ff4 a9077bfd 9101c3fd aa0003f3 d000f279 3964e328 7100a11f 540002e8 39423268 360001a8 f9400270"),
+            // RC file offset 0x20c5688; 14/16 words identical to beta 4.
+            .init("sepManagerMatchedGated", words: "d503237f d10203ff a90367fa a9045ff8 a90557f6 a9064ff4 a9077bfd 9101c3fd aa0003f3 d000f268 3964e108 7100a11f 540002e8 39423268 360001a8 f9400270"),
+            // RC file offset 0x20d1b2c; 19/32 words identical to beta 4.
+            .init("setPowerStateGated", words: "d503237f d101c3ff a9035ff8 a90457f6 a9054ff4 a9067bfd 910183fd aa0103f4 aa0003f3 d000f217 3964e2e8 90ff2f16 911aded6 7100291f 54000268 39423268 36000188 97ffd058 f2f9b431 dac11a30 d2803d11 8b110210 f9400208 aa1303e0 d2800001 f2e19390 d73f0910 14000002 97ffd047 a9005be0 f0ff2e60 91325400", needsScoring: true),
+        ]
+    )
+
     static func variant(named id: String) -> KernelCredentialManagerSignatureVariant? {
         switch id {
         case earlyBetaV1.id: return earlyBetaV1
+        case release24A435V1.id: return release24A435V1
         default: return nil
         }
     }

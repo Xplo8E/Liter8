@@ -1,0 +1,20 @@
+{
+  "expectedOutputSHA256" : "a094e0e35a988f7e87d96be094ee07d23c81a533e075e3b0a0c7f55b5170ee90",
+  "expectedPatches" : [
+    {
+      "id" : "coreauthd.dto-ratchet.start-controller",
+      "offset" : 38336,
+      "originalBytes" : "18d10094",
+      "replacementBytes" : "1f2003d5"
+    }
+  ],
+  "expectedSize" : 467744,
+  "resolver" : "coreauthd",
+  "sha256" : "b12b67d59787d7235e45a8788e25cb1f45dfaa56aa6cfd413b759178bf8c1a14",
+  "target" : {
+    "board" : "n104ap",
+    "build" : "24A435",
+    "component" : "coreauthd",
+    "device" : "iPhone 11"
+  }
+}

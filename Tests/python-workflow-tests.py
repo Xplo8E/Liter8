@@ -52,6 +52,7 @@ from userland_fixups import (  # noqa: E402
     screen_time,
     signing_identifier,
 )
+from patch_setup import discover_targets  # noqa: E402
 
 
 class ContextTests(unittest.TestCase):
@@ -68,10 +69,14 @@ class ContextTests(unittest.TestCase):
         self.liter8.touch()
         self.context_file = self.work / "context.json"
         self.context_file.write_text(json.dumps({
-            "schema": 1,
+            "schema": 2,
             "profileID": "fixture-profile",
             "sourceRoot": str(self.source),
             "components": {"iBSS": "Firmware/dfu/iBSS.im4p"},
+            "bootPlan": {
+                "normalIBSSAdditionalPlans": ["ibss-skip-display-init"],
+                "restoreIBSSAdditionalPlans": ["ibss-skip-display-init"],
+            },
         }))
         self.environment = {
             "LITER8_CONTEXT": str(self.context_file),
@@ -92,6 +97,40 @@ class ContextTests(unittest.TestCase):
                 context.component("iBSS"),
                 (self.source / "Firmware/dfu/iBSS.im4p").resolve(),
             )
+            self.assertEqual(
+                context.normal_ibss_additional_plans,
+                ("ibss-skip-display-init",),
+            )
+            self.assertEqual(
+                context.restore_ibss_additional_plans,
+                ("ibss-skip-display-init",),
+            )
+        finally:
+            os.chdir(previous)
+
+    def test_rejects_context_without_reviewed_boot_plan(self):
+        document = json.loads(self.context_file.read_text())
+        del document["bootPlan"]
+        self.context_file.write_text(json.dumps(document))
+        previous = Path.cwd()
+        try:
+            os.chdir(self.work)
+            with patch.dict(os.environ, self.environment, clear=True):
+                with self.assertRaisesRegex(WorkflowError, "no reviewed boot plan"):
+                    Context.load()
+        finally:
+            os.chdir(previous)
+
+    def test_rejects_unknown_hardware_boot_plan(self):
+        document = json.loads(self.context_file.read_text())
+        document["bootPlan"]["normalIBSSAdditionalPlans"] = ["unknown-board-patch"]
+        self.context_file.write_text(json.dumps(document))
+        previous = Path.cwd()
+        try:
+            os.chdir(self.work)
+            with patch.dict(os.environ, self.environment, clear=True):
+                with self.assertRaisesRegex(WorkflowError, "unsupported normal iBSS plans"):
+                    Context.load()
         finally:
             os.chdir(previous)
 
@@ -175,32 +214,93 @@ class ContextTests(unittest.TestCase):
 
         def fake_run(arguments, *, capture=False, environment=None):
             nonlocal applied_output
-            if arguments[1] == "resolve":
-                return type("Result", (), {"stdout": "[]"})()
-            applied_output = Path(arguments[-1])
+            applied_output = Path(arguments[5])
             applied_output.write_bytes(target.read_bytes())
             return type("Result", (), {"stdout": ""})()
 
         with patch("liter8_workflow.run", side_effect=fake_run):
-            context.apply("devicetree", "normal", target, record_name="devicetree")
+            context.apply(
+                "devicetree", "normal", target,
+                record_name="devicetree", capture_records=False,
+            )
 
         self.assertIsNotNone(applied_output)
         self.assertTrue(applied_output.name.startswith(".DeviceTree.im4p.liter8-"))
         self.assertFalse(applied_output.name.startswith(".."))
+
+    def test_apply_patches_and_records_in_one_liter8_process(self):
+        target = self.work / "kernelcache"
+        target.write_bytes(b"clean")
+        context = Context(
+            profile_id="fixture-profile",
+            work=self.work,
+            source=self.source,
+            cfw=self.work / "CFW",
+            components={},
+            liter8=self.liter8,
+            resources=self.resources,
+        )
+        commands = []
+
+        def fake_run(arguments, *, capture=False, environment=None):
+            commands.append(arguments)
+            self.assertEqual(arguments[1:4], ["apply", "kernel", "restore"])
+            self.assertEqual(arguments[4], target)
+            self.assertEqual(arguments[6], "--records-out")
+            Path(arguments[5]).write_bytes(b"patched")
+            Path(arguments[7]).write_text("[]\n")
+            return type("Result", (), {"stdout": ""})()
+
+        with patch("liter8_workflow.run", side_effect=fake_run):
+            context.apply("kernel", "restore", target, record_name="kernel-restore")
+
+        self.assertEqual(len(commands), 1, "one workflow patch must launch Liter8 once")
+        self.assertEqual(target.read_bytes(), b"patched")
+        self.assertEqual(
+            (self.work / "patch-records/kernel-restore.json").read_text(),
+            "[]\n",
+        )
+
+    def test_failed_apply_keeps_target_and_does_not_publish_records(self):
+        target = self.work / "kernelcache"
+        target.write_bytes(b"previous output")
+        context = Context(
+            profile_id="fixture-profile",
+            work=self.work,
+            source=self.source,
+            cfw=self.work / "CFW",
+            components={},
+            liter8=self.liter8,
+            resources=self.resources,
+        )
+
+        with patch(
+            "liter8_workflow.run",
+            side_effect=WorkflowError("pre-image mismatch"),
+        ):
+            with self.assertRaisesRegex(WorkflowError, "pre-image mismatch"):
+                context.apply("kernel", "restore", target, record_name="kernel-restore")
+
+        self.assertEqual(target.read_bytes(), b"previous output")
+        self.assertFalse((self.work / "patch-records/kernel-restore.json").exists())
 
     def test_rootfs_validation_binds_build_and_launchd(self):
         """A mounted DMG is trusted only after build and launchd checks agree."""
         mount = self.root / "rootfs-mount"
         version = mount / "System/Library/CoreServices/SystemVersion.plist"
         launchd = mount / "sbin/launchd"
+        launchd_cache = mount / "System/Library/xpc/launchd.plist"
         version.parent.mkdir(parents=True)
         launchd.parent.mkdir(parents=True)
+        launchd_cache.parent.mkdir(parents=True)
         version.write_bytes(plistlib.dumps({
             "ProductVersion": "27.0",
             "ProductBuildVersion": "24A5390f",
         }))
         launchd.write_bytes(b"reviewed launchd")
+        launchd_cache.write_bytes(plistlib.dumps({"LaunchDaemons": {"fixture": {}}}))
         expected = rootfs_workflow.sha256_file(launchd)
+        expected_cache = rootfs_workflow.sha256_file(launchd_cache)
         context = Context(
             profile_id="fixture-profile",
             work=self.work,
@@ -213,23 +313,32 @@ class ContextTests(unittest.TestCase):
             build="24A5390f",
         )
 
-        with patch.dict(os.environ, {"LITER8_LAUNCHD_SHA": expected}):
+        with patch.dict(os.environ, {
+            "LITER8_LAUNCHD_SHA": expected,
+            "LITER8_LAUNCHD_CACHE_SHA": expected_cache,
+            "LITER8_LAUNCHD_CACHE_DAEMONS": "1",
+        }):
             details = rootfs_workflow.validate_rootfs(context, mount)
 
         self.assertEqual(details["build"], "24A5390f")
         self.assertEqual(details["launchdSHA256"], expected)
+        self.assertEqual(details["launchdCacheSHA256"], expected_cache)
+        self.assertEqual(details["launchdCacheDaemonCount"], "1")
 
     def test_rootfs_validation_rejects_another_build(self):
         mount = self.root / "wrong-rootfs"
         version = mount / "System/Library/CoreServices/SystemVersion.plist"
         launchd = mount / "sbin/launchd"
+        launchd_cache = mount / "System/Library/xpc/launchd.plist"
         version.parent.mkdir(parents=True)
         launchd.parent.mkdir(parents=True)
+        launchd_cache.parent.mkdir(parents=True)
         version.write_bytes(plistlib.dumps({
             "ProductVersion": "27.0",
             "ProductBuildVersion": "another-build",
         }))
         launchd.write_bytes(b"launchd")
+        launchd_cache.write_bytes(plistlib.dumps({"LaunchDaemons": {}}))
         context = Context(
             profile_id="fixture-profile",
             work=self.work,
@@ -283,6 +392,8 @@ class ContextTests(unittest.TestCase):
             "productVersion": "27.0",
             "build": "24A5390f",
             "launchdSHA256": "reviewed-launchd",
+            "launchdCacheSHA256": "reviewed-cache",
+            "launchdCacheDaemonCount": "731",
             "image": str(image),
             "mountpoint": str(mountpoint),
         }))
@@ -298,8 +409,28 @@ class ContextTests(unittest.TestCase):
             build="24A5390f",
         )
 
-        rootfs = prepared_rootfs(context, {"LITER8_LAUNCHD_SHA": "reviewed-launchd"})
+        rootfs = prepared_rootfs(context, {
+            "LITER8_LAUNCHD_SHA": "reviewed-launchd",
+            "LITER8_LAUNCHD_CACHE_SHA": "reviewed-cache",
+            "LITER8_LAUNCHD_CACHE_DAEMONS": "731",
+        })
         self.assertEqual(rootfs, mountpoint.resolve())
+
+    def test_setup_parser_keeps_patch_scope_class_owned(self):
+        """The broad methlist sweep must not silently replace the proven class walk."""
+        beta = SCRIPTS.parent.parent / "offsets/userland/Setup.pristine"
+        release = SCRIPTS.parent.parent / "offsets/24A435/Setup"
+        if not beta.is_file() or not release.is_file():
+            self.skipTest("local beta-4 and RC Setup research binaries are absent")
+
+        beta_targets = discover_targets(beta.read_bytes())
+        release_targets = discover_targets(release.read_bytes())
+        self.assertEqual(len(beta_targets), 65)
+        self.assertEqual(len(release_targets), 66)
+        beta_classes = {target["class"] for target in beta_targets}
+        release_classes = {target["class"] for target in release_targets}
+        self.assertEqual(release_classes - beta_classes, {"BuddyServicesTermsFlow"})
+        self.assertEqual(beta_classes - release_classes, set())
 
     def test_restore_owns_tss_proxy_lifecycle(self):
         """The restore command must not leave an external proxy running."""

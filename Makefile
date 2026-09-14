@@ -2,7 +2,7 @@ SWIFT ?= swift
 PREFIX ?= /usr/local
 DESTDIR ?=
 
-.PHONY: all build release setup test test-full integration check install clean
+.PHONY: all build release setup test test-fixtures test-full test-e2e integration check install clean
 
 # Debug is the normal development build and keeps repeated CLI runs fast.
 all: build
@@ -19,14 +19,26 @@ setup:
 	@.build/debug/liter8 setup
 
 test:
-	# Keep the normal edit/test loop responsive. Kernel oracles are intentionally
-	# separated because six full-image scans take several minutes.
-	$(SWIFT) test --skip KernelResolverTests
+	# Keep the normal edit/test loop responsive. Real-kernel fixture scans and
+	# the deliberately duplicated production-wiring check have separate tiers.
+	$(SWIFT) test --skip KernelFixtureTests --skip KernelEndToEndTests --skip ReleaseFixtureTests
+
+test-fixtures:
+	# Resolve each beta-4 and 24A435 component once per process. The tests still
+	# verify exact offsets, preimages, replacements and complete output hashes.
+	$(SWIFT) test -c release --filter KernelFixtureTests
+	$(SWIFT) test -c release --filter ReleaseFixtureTests
+	python3 Tests/apply-records-fixture-tests.py
 
 test-full:
-	# Use optimized resolvers for the expensive exact-kernel oracle suite.
-	# The first release build is costly; subsequent runs reuse SwiftPM's cache.
-	$(SWIFT) test -c release
+	# Run fast tests plus the cached real-kernel fixtures. The uncached composite
+	# production check is intentionally reserved for test-e2e.
+	$(SWIFT) test -c release --skip KernelEndToEndTests
+
+test-e2e:
+	# Re-run the production composite resolver without the fixture cache. This is
+	# expensive by design and belongs in release or resolver-change validation.
+	$(SWIFT) test -c release --filter KernelEndToEndTests
 
 # Exercise the real CLI handoff without requiring a multi-gigabyte IPSW.
 integration: build
@@ -34,7 +46,7 @@ integration: build
 	python3 Tests/ipsw-robustness-integration.py
 	python3 Tests/python-workflow-tests.py
 
-check: test-full integration
+check: test-full test-e2e integration
 
 # The executable and immutable workflow resources use the layout understood by
 # Liter8Resources: <prefix>/bin/liter8 and <prefix>/share/liter8/...

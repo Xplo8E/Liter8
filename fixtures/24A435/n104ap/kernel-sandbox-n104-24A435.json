@@ -1,0 +1,290 @@
+{
+  "expectedOutputSHA256" : "0665f02b7382e0593c3b1337e5cd14c7f1bbda4380e9d66f8e511537680fed41",
+  "expectedPatches" : [
+    {
+      "id" : "kernel.sandbox.vnode-check-open.target",
+      "offset" : 17627288,
+      "originalBytes" : "2423f102",
+      "replacementBytes" : "80d49f03"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.metadata",
+      "offset" : 17627292,
+      "originalBytes" : "86153080",
+      "replacementBytes" : "86153080"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.0",
+      "offset" : 60806272,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "7f2303d5"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.1",
+      "offset" : 60806276,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "fd7bbda9"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.2",
+      "offset" : 60806280,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "fd030091"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.3",
+      "offset" : 60806284,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "e00701a9"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.4",
+      "offset" : 60806288,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "e20f02a9"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.5",
+      "offset" : 60806292,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "1ee1e097"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.6",
+      "offset" : 60806296,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "000c40f9"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.7",
+      "offset" : 60806300,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "400200b4"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.8",
+      "offset" : 60806304,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "34eaf297"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.9",
+      "offset" : 60806308,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "080040f9"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.10",
+      "offset" : 60806312,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "49aa8cd2"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.11",
+      "offset" : 60806316,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "69eeadf2"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.12",
+      "offset" : 60806320,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "89cdcef2"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.13",
+      "offset" : 60806324,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "a94ceef2"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.14",
+      "offset" : 60806328,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "1f0109eb"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.15",
+      "offset" : 60806332,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "40010054"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.16",
+      "offset" : 60806336,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "c92c8dd2"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.17",
+      "offset" : 60806340,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "89adacf2"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.18",
+      "offset" : 60806344,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "094ecef2"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.19",
+      "offset" : 60806348,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "e9cdeef2"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.20",
+      "offset" : 60806352,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "1f0109eb"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.21",
+      "offset" : 60806356,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "80000054"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.22",
+      "offset" : 60806360,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.23",
+      "offset" : 60806364,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "fd7bc3a8"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.24",
+      "offset" : 60806368,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "ff0f5fd6"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.25",
+      "offset" : 60806372,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "e00741a9"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.26",
+      "offset" : 60806376,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "e20f42a9"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.27",
+      "offset" : 60806380,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "fd7bc3a8"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.28",
+      "offset" : 60806384,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "ff2303d5"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.29",
+      "offset" : 60806388,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "d0071eca"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.30",
+      "offset" : 60806392,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "5000f0b6"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.31",
+      "offset" : 60806396,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "208e38d4"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-open.shim.32",
+      "offset" : 60806400,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "8953d417"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-exec.target",
+      "offset" : 17627216,
+      "originalBytes" : "f0d9f202",
+      "replacementBytes" : "f819f202"
+    },
+    {
+      "id" : "kernel.sandbox.file-check-mmap.result",
+      "offset" : 49420796,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sandbox.file-check-mmap.return",
+      "offset" : 49420800,
+      "originalBytes" : "fc6fbda9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-mount.result",
+      "offset" : 49412504,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-mount.return",
+      "offset" : 49412508,
+      "originalBytes" : "fc6fbda9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-remount.result",
+      "offset" : 49412040,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-remount.return",
+      "offset" : 49412044,
+      "originalBytes" : "f85fbca9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-unmount.result",
+      "offset" : 49411164,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-unmount.return",
+      "offset" : 49411168,
+      "originalBytes" : "fc6fbca9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-rename.result",
+      "offset" : 49390720,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-rename.return",
+      "offset" : 49390724,
+      "originalBytes" : "e923ba6d",
+      "replacementBytes" : "c0035fd6"
+    }
+  ],
+  "expectedSize" : 67534848,
+  "resolver" : "kernel-sandbox",
+  "sha256" : "fdaf5ccc03bd6e2415c00d0fd91ee1e81a72ac89e974c692ea53dce01761be3e",
+  "target" : {
+    "board" : "n104ap",
+    "build" : "24A435",
+    "component" : "kernelcache.release.iphone12b",
+    "device" : "iPhone 11"
+  }
+}

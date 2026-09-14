@@ -23,12 +23,14 @@ public struct ResolverVariantProfile: Equatable, Sendable {
     }
 }
 
-/// Human-readable identity for a reviewed firmware artifact.
+/// Kernel identity and resolver-variant selection for one known build.
 ///
 /// Apple build IDs such as `24A5390f` are not stored in a decompressed
 /// kernelcache. The registry therefore detects the embedded XNU fingerprint
-/// and maps it to the build and board metadata recorded from BuildManifest.
-public struct FirmwareProfile: Equatable, Sendable {
+/// and maps it to build metadata plus the signature/payload variants that have
+/// been recovered for individual kernel resolvers. This does not grant access
+/// to the full device workflow; `DeviceWorkflowProfile` owns that decision.
+public struct KernelResolverProfile: Equatable, Sendable {
     public let id: String
     public let productVersion: String
     public let build: String
@@ -64,9 +66,9 @@ public struct FirmwareProfile: Equatable, Sendable {
 ///
 /// This table contains no offsets. Offsets remain outputs of semantic
 /// resolution and fixture-only verification oracles.
-public enum FirmwareProfileRegistry {
-    public static let profiles: [FirmwareProfile] = [
-        FirmwareProfile(
+public enum KernelResolverProfileRegistry {
+    public static let profiles: [KernelResolverProfile] = [
+        KernelResolverProfile(
             id: "ios27-beta2-24A5370h-d421ap",
             productVersion: "27.0 beta 2",
             build: "24A5370h",
@@ -80,7 +82,7 @@ public enum FirmwareProfileRegistry {
                 ),
             ]
         ),
-        FirmwareProfile(
+        KernelResolverProfile(
             id: "ios27-beta4-24A5390f-n104ap",
             productVersion: "27.0 beta 4",
             build: "24A5390f",
@@ -94,7 +96,7 @@ public enum FirmwareProfileRegistry {
                 ),
             ]
         ),
-        FirmwareProfile(
+        KernelResolverProfile(
             // Use the immutable build ID in the profile name. Whether this
             // artifact is called RC or final release does not affect matching.
             id: "ios27-24A435-n104ap",
@@ -104,13 +106,13 @@ public enum FirmwareProfileRegistry {
             component: "kernelcache.release.iphone12b",
             embeddedFingerprint: "xnu-13432.2.10~2/RELEASE_ARM64_T8030",
             resolverVariants: [
-                // The release function shapes must be reversed before this
-                // signature family can be marked supported. Recording the
-                // pending name now prevents accidental early-beta fallback.
+                // All 26 release method bodies are now recorded in
+                // KernelCredentialManagerSignatures.release24A435V1, recovered
+                // from com.apple.driver.AppleSEPCredentialManager and checked to
+                // keep beta 4's relative order.
                 "kernel-credential-manager": ResolverVariantProfile(
                     signature: "ios27-24A435-acm-v1",
-                    payload: "acm-return-success-v1",
-                    support: .pendingResearch
+                    payload: "acm-return-success-v1"
                 ),
             ]
         ),
@@ -119,7 +121,7 @@ public enum FirmwareProfileRegistry {
     /// Detect a profile using evidence embedded in the artifact itself.
     /// Returning nil is intentional: unknown firmware must never be silently
     /// labelled as one of the reviewed builds.
-    public static func detect(in image: BinaryImage) -> FirmwareProfile? {
+    public static func detect(in image: BinaryImage) -> KernelResolverProfile? {
         let matches = profiles.filter {
             !image.findAll(utf8: $0.embeddedFingerprint).isEmpty
         }

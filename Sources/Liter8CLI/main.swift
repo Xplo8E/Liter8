@@ -10,6 +10,16 @@ private func usage() -> Never {
       liter8 fw <actions|prepare|prepare-rootfs|unmount-rootfs|make-cfw|capture-ticket|get-rd|get-boot|verify-cfw|restore-cfw|boot-rd|boot|bootstrap|provision|finalize|setup-shell> [options]
       liter8 profile <binary>
       liter8 profiles
+      liter8 fixture <component> <plan> <input> <manifest.json>
+          --device <name> --board <board> --build <build>
+          --component-name <component> [--boot-args <literal>]
+      liter8 inspect <binary> segments
+      liter8 inspect <binary> strings <text>
+      liter8 inspect <binary> objc-methods <selector> [words]
+      liter8 inspect <binary> <xrefs|func|calls> <offset>
+      liter8 inspect <binary> dis <offset> [words]
+      liter8 inspect <binary> pattern <word[/mask]> ...
+      liter8 inspect <binary> pattern-at <offset> <word[/mask]> ...
       liter8 verify <manifest.json> <binary>
       liter8 im4p <info|extract|repack> ...
       liter8 img4 create <input.im4p> <ticket.im4m> <output.img4> [--fourcc <type>]
@@ -28,10 +38,12 @@ private func usage() -> Never {
     options:
       --json  --boot-args <literal>  --pinot-id <value>
       --file <firmware.ipsw>  --work-dir <directory>  --python <executable>
+      --experimental  opt in to a firmware workflow that still needs device validation
       --resource-dir <directory>  --ticket <apticket.im4m>
       --sshrd-payload <ssh.tar.gz>
       --irecovery <custom-irecovery>  --idevicerestore <executable>
       --rootfs <mounted-root-filesystem>  --check
+      --records-out <records.json>  write records from the same apply operation
 
     """.utf8))
     exit(2)
@@ -41,6 +53,7 @@ private struct ResolverOptions {
     var bootArguments: String?
     var panelID: UInt32?
     var json = false
+    var recordsOutput: URL?
 }
 
 /// Keep the public CLI small while retaining descriptive internal resolver
@@ -66,7 +79,9 @@ private let resolverGroups: [String: [String: String]] = [
         "credential-manager": KernelCredentialManagerResolver.name,
         "sandbox": KernelSandboxResolver.name,
         "boot": KernelBootResolver.name,
-        "boot-public": KernelBootPublicBeta4Resolver.name,
+        // Keep the public CLI spelling stable while the Swift type describes
+        // the plan's real cross-build compatibility contract.
+        "boot-public": KernelBootCompatibilityResolver.name,
         "diagnostic": KernelDiagnosticResolver.name,
     ],
     "txm": [
@@ -93,7 +108,11 @@ private func resolverName(component: String, plan: String) -> String? {
 /// Parse only the two resolver options we currently support. Keeping this tiny
 /// avoids hiding patch semantics behind a command framework while the research
 /// interface is still changing.
-private func parseResolverOptions(_ arguments: ArraySlice<String>, allowJSON: Bool) -> ResolverOptions {
+private func parseResolverOptions(
+    _ arguments: ArraySlice<String>,
+    allowJSON: Bool,
+    allowRecordsOutput: Bool = false
+) -> ResolverOptions {
     var options = ResolverOptions()
     var index = arguments.startIndex
     while index < arguments.endIndex {
@@ -118,6 +137,12 @@ private func parseResolverOptions(_ arguments: ArraySlice<String>, allowJSON: Bo
             }
             guard let value else { usage() }
             options.panelID = value
+            index = arguments.index(after: valueIndex)
+        case "--records-out" where allowRecordsOutput:
+            let valueIndex = arguments.index(after: index)
+            guard valueIndex < arguments.endIndex else { usage() }
+            options.recordsOutput = URL(fileURLWithPath: arguments[valueIndex])
+                .standardizedFileURL
             index = arguments.index(after: valueIndex)
         default:
             usage()
@@ -205,9 +230,9 @@ private func resolveRecords(
     case KernelBootResolver.name:
         guard options.bootArguments == nil, options.panelID == nil else { usage() }
         return try KernelBootResolver().resolve(in: image)
-    case KernelBootPublicBeta4Resolver.name:
+    case KernelBootCompatibilityResolver.name:
         guard options.bootArguments == nil, options.panelID == nil else { usage() }
-        return try KernelBootPublicBeta4Resolver().resolve(in: image)
+        return try KernelBootCompatibilityResolver().resolve(in: image)
     case KernelDiagnosticResolver.name:
         guard options.bootArguments == nil, options.panelID == nil else { usage() }
         return try KernelDiagnosticResolver().resolve(in: image)
@@ -216,11 +241,40 @@ private func resolveRecords(
     }
 }
 
+/// Accept `0x`-prefixed and decimal literals alike. Research notes quote file
+/// offsets in hexadecimal, while some tables carry plain decimal.
+private func parseNumber(_ text: String) -> UInt64? {
+    if text.hasPrefix("0x") || text.hasPrefix("0X") {
+        return UInt64(text.dropFirst(2), radix: 16)
+    }
+    return UInt64(text, radix: 10)
+}
+
+private func hex(_ value: UInt64) -> String { String(format: "0x%llx", value) }
+
+/// Parse `<word>` or `<word>/<mask>` signature arguments. A bare word is
+/// compared in full, which is how a freshly transcribed reference signature
+/// behaves before any field is deliberately relaxed.
+private func parseMaskedWords(_ arguments: [String]) -> (values: [UInt32], masks: [UInt32])? {
+    var values: [UInt32] = []
+    var masks: [UInt32] = []
+    for argument in arguments {
+        let parts = argument.split(separator: "/", maxSplits: 1)
+        guard let rawWord = parseNumber(String(parts[0])) else { return nil }
+        var mask = UInt32.max
+        if parts.count > 1 {
+            guard let rawMask = parseNumber(String(parts[1])) else { return nil }
+            mask = UInt32(truncatingIfNeeded: rawMask)
+        }
+        values.append(UInt32(truncatingIfNeeded: rawWord) & mask)
+        masks.append(mask)
+    }
+    return (values, masks)
+}
+
 private func printRecords(_ records: [PatchRecord], json: Bool) throws {
     if json {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        print(String(decoding: try encoder.encode(records), as: UTF8.self))
+        print(String(decoding: try encodedRecords(records), as: UTF8.self), terminator: "")
     } else {
         for record in records {
             print(String(
@@ -233,6 +287,17 @@ private func printRecords(_ records: [PatchRecord], json: Bool) throws {
             ))
         }
     }
+}
+
+/// Encode the stable machine-readable record format used by `resolve --json`
+/// and `apply --records-out`. Keeping one encoder prevents the workflow's
+/// evidence file from drifting away from the interactive resolver output.
+private func encodedRecords(_ records: [PatchRecord]) throws -> Data {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    var data = try encoder.encode(records)
+    data.append(0x0A)
+    return data
 }
 
 private func deviceTreePlan(named name: String) -> DeviceTreePatchPlan? {
@@ -255,7 +320,7 @@ private func reportProfile(
     handle: FileHandle = .standardError
 ) {
     guard resolver.hasPrefix("kernel-") else { return }
-    guard let profile = FirmwareProfileRegistry.detect(in: image) else {
+    guard let profile = KernelResolverProfileRegistry.detect(in: image) else {
         handle.write(Data("firmware profile: unidentified\n".utf8))
         return
     }
@@ -278,7 +343,7 @@ private func reportProfile(
     handle.write(Data((lines.joined(separator: "\n") + "\n").utf8))
 }
 
-private func printProfile(_ profile: FirmwareProfile) {
+private func printProfile(_ profile: KernelResolverProfile) {
     print("\(profile.id): iOS \(profile.productVersion), build \(profile.build)")
     print("  boards: \(profile.boards.joined(separator: ", "))")
     print("  component: \(profile.component)")
@@ -331,10 +396,16 @@ do {
         var idevicerestoreArgument: String?
         var rootfsArgument: String?
         var checkOnly = false
+        var includeExperimental = false
         var index = 2
         while index < arguments.count {
             if arguments[index] == "--check" {
                 checkOnly = true
+                index += 1
+                continue
+            }
+            if arguments[index] == "--experimental" {
+                includeExperimental = true
                 index += 1
                 continue
             }
@@ -381,7 +452,7 @@ do {
                   rootfsArgument == nil,
                   !checkOnly else {
                 throw PatchfinderError.invalidFixture(
-                    "fw prepare accepts only --file and --work-dir"
+                    "fw prepare accepts only --file, --work-dir and --experimental"
                 )
             }
             // An explicit option always wins. The environment fallback is useful
@@ -395,7 +466,8 @@ do {
             }
             try FirmwareWorkflowRunner.run(
                 file: URL(fileURLWithPath: file).standardizedFileURL,
-                workDirectory: workDirectoryURL
+                workDirectory: workDirectoryURL,
+                includeExperimental: includeExperimental
             )
         } else {
             guard fileArgument == nil else { usage() }
@@ -470,6 +542,7 @@ do {
                 sshrdPayload: sshrdPayloadArgument.map {
                     URL(fileURLWithPath: $0).standardizedFileURL
                 },
+                includeExperimental: includeExperimental,
                 workflowEnvironment: workflowEnvironment
             )
         }
@@ -498,7 +571,7 @@ do {
         guard arguments.count == 2 else { usage() }
         let artifact = try FirmwareArtifact(contentsOf: URL(fileURLWithPath: arguments[1]))
         let image = BinaryImage(data: artifact.payload)
-        guard let profile = FirmwareProfileRegistry.detect(in: image) else {
+        guard let profile = KernelResolverProfileRegistry.detect(in: image) else {
             throw PatchfinderError.unsupportedFirmwareProfile(
                 resolver: "profile",
                 profile: "unidentified",
@@ -509,9 +582,165 @@ do {
 
     case "profiles":
         guard arguments.count == 1 else { usage() }
-        for (index, profile) in FirmwareProfileRegistry.profiles.enumerated() {
+        for (index, profile) in KernelResolverProfileRegistry.profiles.enumerated() {
             if index > 0 { print("") }
             printProfile(profile)
+        }
+
+    case "fixture":
+        // Emit an exact-build oracle for one resolver.
+        //
+        // The manifest has to bind the clean input hash, every resolved record,
+        // and the complete patched-output hash. Producing that by hand invites
+        // transcription errors in exactly the values a fixture exists to pin,
+        // so it is generated from the same resolver and the same
+        // GuardedPatchApplier the CLI uses everywhere else. Firmware identity
+        // stays explicit: a fixture asserts which build it describes, and
+        // guessing that would defeat the point.
+        guard arguments.count >= 5,
+              let resolver = resolverName(component: arguments[1], plan: arguments[2]) else {
+            usage()
+        }
+        let inputURL = URL(fileURLWithPath: arguments[3]).standardizedFileURL
+        let outputURL = URL(fileURLWithPath: arguments[4]).standardizedFileURL
+
+        var device: String?
+        var board: String?
+        var build: String?
+        var componentName: String?
+        var index = 5
+        var passthrough: [String] = []
+        while index < arguments.count {
+            guard index + 1 < arguments.count else { usage() }
+            switch arguments[index] {
+            case "--device": device = arguments[index + 1]
+            case "--board": board = arguments[index + 1]
+            case "--build": build = arguments[index + 1]
+            case "--component-name": componentName = arguments[index + 1]
+            case "--boot-args", "--pinot-id":
+                passthrough.append(arguments[index])
+                passthrough.append(arguments[index + 1])
+            default: usage()
+            }
+            index += 2
+        }
+        guard let device, let board, let build, let componentName else {
+            throw PatchfinderError.invalidFixture(
+                "fixture requires --device, --board, --build and --component-name"
+            )
+        }
+
+        let artifact = try FirmwareArtifact(contentsOf: inputURL)
+        let image = BinaryImage(data: artifact.payload)
+        let options = parseResolverOptions(passthrough[...], allowJSON: false)
+        let records = try resolveRecords(named: resolver, in: image, options: options)
+        let patched = try GuardedPatchApplier.apply(records, to: image)
+
+        let manifest = FixtureManifest(
+            resolver: resolver,
+            target: .init(device: device, board: board, build: build, component: componentName),
+            expectedSize: image.count,
+            sha256: FixtureManifest.digest(of: image.data),
+            expectedPatches: records.map {
+                .init(
+                    id: $0.id,
+                    offset: $0.offset,
+                    originalBytes: $0.originalBytes.hexadecimalString,
+                    replacementBytes: $0.replacementBytes.hexadecimalString
+                )
+            },
+            expectedOutputSHA256: FixtureManifest.digest(of: patched.data)
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        var json = try encoder.encode(manifest)
+        json.append(0x0A)
+        try json.write(to: outputURL, options: .atomic)
+
+        // Read it straight back through the same oracle the tests use. A
+        // manifest that cannot verify its own binary is worse than none.
+        let written = try FixtureManifest.load(from: outputURL)
+        let verified = try written.verify(binaryAt: inputURL)
+        print("\(resolver): \(verified.count) records")
+        print("  input  \(manifest.sha256)")
+        print("  output \(manifest.expectedOutputSHA256 ?? "-")")
+        print("wrote \(outputURL.path)")
+
+    case "inspect":
+        guard arguments.count >= 3 else { usage() }
+        let artifact = try FirmwareArtifact(contentsOf: URL(fileURLWithPath: arguments[1]))
+        let inspector = try BinaryInspector(image: BinaryImage(data: artifact.payload))
+        let query = arguments[2]
+        let parameters = Array(arguments.dropFirst(3))
+
+        switch query {
+        case "segments":
+            guard parameters.isEmpty else { usage() }
+            inspector.segmentReport().forEach { print($0) }
+
+        case "objc-methods":
+            guard let selector = parameters.first, parameters.count <= 2 else { usage() }
+            let words = parameters.count > 1 ? Int(parameters[1]) ?? 2 : 2
+            let methods = try inspector.objcMethods(named: selector, words: words)
+            print("implementations: \(methods.count)")
+            methods.forEach { print("  \($0)") }
+
+        case "strings":
+            guard let text = parameters.first, parameters.count == 1 else { usage() }
+            let occurrences = inspector.stringOccurrences(text)
+            print("occurrences: \(occurrences.count)")
+            occurrences.forEach { print("  \($0)") }
+
+        case "xrefs":
+            guard parameters.count == 1, let offset = parseNumber(parameters[0]) else { usage() }
+            let references = try inspector.references(toFileOffset: offset)
+            print("adrp+add references: \(references.count)")
+            references.forEach { print("  \($0)") }
+
+        case "func":
+            guard parameters.count == 1, let offset = parseNumber(parameters[0]) else { usage() }
+            guard let start = inspector.functionStart(beforeOrAt: offset) else {
+                print("no enclosing arm64e prologue within 0x4000 bytes")
+                break
+            }
+            let end = inspector.nextFunctionStart(after: start)
+            print("start \(hex(start))  end \(hex(end))  words \((end - start) / 4)")
+
+        case "calls":
+            guard parameters.count == 1, let offset = parseNumber(parameters[0]) else { usage() }
+            let targets = try inspector.directCallTargets(inFunctionContaining: offset)
+            print("distinct direct call targets: \(targets.count)")
+            targets.forEach { print("  \(hex($0))") }
+
+        case "dis":
+            guard let offset = parseNumber(parameters.first ?? "") else { usage() }
+            let words = parameters.count > 1 ? Int(parameters[1]) ?? 16 : 16
+            try inspector.disassembly(at: offset, words: words).forEach { print($0) }
+
+        case "pattern":
+            guard !parameters.isEmpty, let signature = parseMaskedWords(parameters) else { usage() }
+            let hits = try inspector.patternMatches(
+                values: signature.values,
+                masks: signature.masks
+            )
+            print("matches: \(hits.count)")
+            hits.forEach { print("  \(hex($0))") }
+
+        case "pattern-at":
+            // Report which words of a signature survive at one candidate, so a
+            // drifted function reveals the single instruction that changed.
+            guard parameters.count >= 2,
+                  let offset = parseNumber(parameters[0]),
+                  let signature = parseMaskedWords(Array(parameters.dropFirst()))
+            else { usage() }
+            try inspector.patternWordReport(
+                values: signature.values,
+                masks: signature.masks,
+                at: offset
+            ).forEach { print($0) }
+
+        default:
+            usage()
         }
 
     case "verify":
@@ -595,16 +824,29 @@ do {
               let resolver = resolverName(component: arguments[1], plan: arguments[2]) else {
             usage()
         }
-        let options = parseResolverOptions(arguments.dropFirst(5), allowJSON: false)
+        let options = parseResolverOptions(
+            arguments.dropFirst(5),
+            allowJSON: false,
+            allowRecordsOutput: true
+        )
         let inputURL = URL(fileURLWithPath: arguments[3]).standardizedFileURL
         let outputURL = URL(fileURLWithPath: arguments[4]).standardizedFileURL
         guard inputURL != outputURL else {
             throw PatchfinderError.invalidFixture("input and output paths must differ")
         }
+        if let recordsOutput = options.recordsOutput {
+            guard recordsOutput != inputURL, recordsOutput != outputURL else {
+                throw PatchfinderError.invalidFixture(
+                    "records output must differ from artifact input and output"
+                )
+            }
+        }
 
         let artifact = try FirmwareArtifact(contentsOf: inputURL)
         if let plan = deviceTreePlan(named: resolver) {
-            guard options.bootArguments == nil, options.panelID == nil else { usage() }
+            guard options.bootArguments == nil,
+                  options.panelID == nil,
+                  options.recordsOutput == nil else { usage() }
             try artifact.requireIM4PFourCC("dtre")
             let result = try DeviceTreePatcher.patch(artifact.payload, plan: plan)
             let output = try artifact.encoded(replacingPayloadWith: result.data)
@@ -624,6 +866,12 @@ do {
         // Atomic replacement protects an existing output path from a partial
         // write. The input artifact is never modified in place.
         try output.write(to: outputURL, options: .atomic)
+        if let recordsOutput = options.recordsOutput {
+            // Publish evidence only after the patched artifact is complete.
+            // A resolution, pre-image, encoding or artifact-write failure
+            // therefore cannot leave records claiming a successful output.
+            try encodedRecords(records).write(to: recordsOutput, options: .atomic)
+        }
         try printRecords(records, json: false)
         print("wrote \(outputURL.path)")
 

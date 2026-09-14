@@ -13,10 +13,22 @@ enum FirmwareWorkflowRunner {
 
     static func run(
         file: URL,
-        workDirectory: URL
+        workDirectory: URL,
+        includeExperimental: Bool
     ) throws {
         let identity = try IPSWManifestInspector.inspect(ipsw: file)
-        guard let profile = IPSWWorkflowRegistry.profile(for: identity) else {
+        guard let profile = DeviceWorkflowRegistry.profile(
+            for: identity,
+            includeExperimental: includeExperimental
+        ) else {
+            if let candidate = DeviceWorkflowRegistry.profile(
+                for: identity,
+                includeExperimental: true
+            ), candidate.validationState == .experimental {
+                throw PatchfinderError.invalidFixture(
+                    "firmware profile \(candidate.id) is experimental; rerun with --experimental"
+                )
+            }
             let devices = identity.productTypes.joined(separator: ", ")
             let boards = Set(identity.buildIdentities.map(\.deviceClass)).sorted()
                 .joined(separator: ", ")
@@ -37,6 +49,9 @@ enum FirmwareWorkflowRunner {
         }
 
         print("firmware profile: \(profile.id)")
+        if profile.validationState == .experimental {
+            print("  validation: EXPERIMENTAL, device restore and repeat boot are not proven")
+        }
         print("  iOS/build: \(identity.productVersion) (\(identity.build))")
         print("  device/board: \(profile.productType) / \(profile.deviceClass)")
         print("  IPSW: \(file.path)")
@@ -82,7 +97,7 @@ enum FirmwareWorkflowRunner {
         print("verified extracted firmware: \(extracted.path)")
     }
 
-    private static func verify(profile: IPSWWorkflowProfile, in directory: URL) throws {
+    private static func verify(profile: DeviceWorkflowProfile, in directory: URL) throws {
         let manifest = directory.appendingPathComponent("BuildManifest.plist")
         let identity = try IPSWManifestInspector.parse(Data(contentsOf: manifest))
         guard profile.supports(identity) else {
@@ -102,15 +117,25 @@ enum FirmwareWorkflowRunner {
         resourceDirectory: URL?,
         ticket: URL?,
         sshrdPayload: URL?,
+        includeExperimental: Bool,
         workflowEnvironment: [String: String] = [:]
     ) throws {
-        let matches = try IPSWWorkflowRegistry.profiles.compactMap { profile -> IPSWWorkflowProfile? in
+        let allMatches = try DeviceWorkflowRegistry.profiles.compactMap { profile -> DeviceWorkflowProfile? in
             let manifest = workDirectory
                 .appendingPathComponent(profile.extractedDirectoryName)
                 .appendingPathComponent("BuildManifest.plist")
             guard FileManager.default.fileExists(atPath: manifest.path) else { return nil }
             let identity = try IPSWManifestInspector.parse(Data(contentsOf: manifest))
             return profile.supports(identity) ? profile : nil
+        }
+        if !includeExperimental,
+           let candidate = allMatches.first(where: { $0.validationState == .experimental }) {
+            throw PatchfinderError.invalidFixture(
+                "firmware profile \(candidate.id) is experimental; rerun with --experimental"
+            )
+        }
+        let matches = allMatches.filter {
+            $0.validationState == .reviewed || includeExperimental
         }
 
         guard matches.count == 1, let profile = matches.first else {
@@ -123,6 +148,9 @@ enum FirmwareWorkflowRunner {
         }
 
         print("firmware profile: \(profile.id)")
+        if profile.validationState == .experimental {
+            print("  validation: EXPERIMENTAL, device restore and repeat boot are not proven")
+        }
         print("  iOS/build: \(profile.productVersion) (\(profile.build))")
         print("  device/board: \(profile.productType) / \(profile.deviceClass)")
         fflush(stdout)
@@ -144,6 +172,16 @@ enum FirmwareWorkflowRunner {
                 )
             }
             selectedEnvironment["LITER8_LAUNCHD_SHA"] = launchdSHA256
+            selectedEnvironment["LITER8_LAUNCHD_CACHE_SHA"] = profile.launchdCacheSHA256
+            selectedEnvironment["LITER8_LAUNCHD_CACHE_DAEMONS"] = String(
+                profile.launchdCacheDaemonCount
+            )
+            selectedEnvironment["LITER8_SETUP_METHODS"] = String(
+                profile.setupControllerMethodCount
+            )
+        }
+        if profile.validationState == .experimental {
+            selectedEnvironment["LITER8_EXPERIMENTAL_WORKFLOW"] = "1"
         }
         try FirmwareScriptRunner.run(
             action: action,

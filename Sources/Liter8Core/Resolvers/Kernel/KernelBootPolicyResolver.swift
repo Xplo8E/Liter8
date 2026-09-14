@@ -149,7 +149,7 @@ public struct KernelBootPolicyResolver: Sendable {
                 in: image,
                 layout: layout
             ),
-            let functionStart = try? nearestPACIBSP(
+            let functionStart = try? nearestFunctionEntry(
                 beforeOrAt: reference.adrpOffset,
                 maximumDistance: 0x100,
                 in: image,
@@ -185,10 +185,13 @@ public struct KernelBootPolicyResolver: Sendable {
         }
 
         let uniqueCandidates = Array(Set(candidates)).sorted()
-        guard let start = uniqueCandidates.only else {
+        guard let entry = uniqueCandidates.only else {
             if uniqueCandidates.isEmpty { throw PatchfinderError.noCandidate("isDeviceInRestoreMode") }
             throw PatchfinderError.ambiguousCandidate("isDeviceInRestoreMode", offsets: uniqueCandidates)
         }
+        // Write from the prologue so a BTI landing pad, when the build has one,
+        // stays intact for any indirect branch to this predicate.
+        let start = ARM64.stubStart(atEntry: entry, in: image)
         return try [
             wordPatch(
                 id: "kernel.usb.restore-mode-result",
@@ -228,22 +231,30 @@ public struct KernelBootPolicyResolver: Sendable {
         return addOffset + 12
     }
 
-    private func nearestPACIBSP(
+    /// Nearest function entry before the boot-argument xref.
+    ///
+    /// This returns the address a caller would branch to, which on a
+    /// BTI-enabled build is the `BTI C` pad rather than the `PACIBSP`. The
+    /// predecessor test below depends on that: the word before the entry must
+    /// be the previous function's terminator, not this function's landing pad.
+    private func nearestFunctionEntry(
         beforeOrAt offset: UInt64,
         maximumDistance: UInt64,
         in image: BinaryImage,
         layout: MachOLayout
     ) throws -> UInt64 {
-        guard let range = layout.executableFileRanges.first(where: { $0.contains(offset) }) else {
+        guard layout.executableFileRanges.contains(where: { $0.contains(offset) }) else {
             throw PatchfinderError.noCandidate("executable range for boot-argument xref")
         }
-        let floor = max(range.lowerBound, offset - min(maximumDistance, offset - range.lowerBound))
-        var cursor = offset & ~UInt64(3)
-        while cursor >= floor + 4 {
-            if try image.readUInt32(at: cursor) == 0xD503_237F { return cursor } // PACIBSP
-            cursor -= 4
+        guard let start = ARM64.functionStart(
+            beforeOrAt: offset,
+            in: image,
+            layout: layout,
+            limit: maximumDistance
+        ) else {
+            throw PatchfinderError.noCandidate("PACIBSP before boot-argument xref")
         }
-        throw PatchfinderError.noCandidate("PACIBSP before boot-argument xref")
+        return start
     }
 
     private func directCallTarget(

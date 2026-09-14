@@ -143,18 +143,32 @@ else
 fi
 
 say "automatic boot job"
+# Report each prerequisite independently. The old all-or-nothing expression
+# blamed the token and persona when only the persistent wallpaper watcher was
+# absent, which hid the actual RC failure during first device validation.
 boot_job=$(sh_dev "$RPATH
     log=/var/mobile/jbboot.log
-    [ -s \"\$log\" ] &&
-    grep -q 'persona 99 created' \"\$log\" &&
-    grep -q 'icon read token ready' \"\$log\" &&
-    [ -s /private/var/tmp/sbext.token ] &&
-    /bin/ps aux | grep -q '[p]fwatch' && echo OK || echo INCOMPLETE" \
+    [ -s \"\$log\" ] && grep -q 'persona 99 created' \"\$log\" && echo PERSONA_OK
+    [ -s \"\$log\" ] && grep -q 'icon read token ready' \"\$log\" &&
+        [ -s /private/var/tmp/sbext.token ] && echo TOKEN_OK
+    /bin/ps aux | grep -q '[p]fwatch' && echo WATCHER_OK" \
     2>/dev/null | tr -d '\r')
-if [[ "$boot_job" == "OK" ]]; then
-    ok "persona 99 and icon token recorded"
+if print -r -- "$boot_job" | grep -q '^PERSONA_OK$'; then
+    ok "persona 99 recorded"
 else
-    skip "INCOMPLETE: jbboot did not record persona 99 and icon token"
+    skip "INCOMPLETE: jbboot did not create persona 99"
+    FINALIZE_INCOMPLETE=1
+fi
+if print -r -- "$boot_job" | grep -q '^TOKEN_OK$'; then
+    ok "icon read token recorded"
+else
+    skip "INCOMPLETE: jbboot did not create the icon read token"
+    FINALIZE_INCOMPLETE=1
+fi
+if print -r -- "$boot_job" | grep -q '^WATCHER_OK$'; then
+    ok "PosterBoard repair watcher running"
+else
+    skip "INCOMPLETE: PosterBoard repair watcher is not running"
     FINALIZE_INCOMPLETE=1
 fi
 

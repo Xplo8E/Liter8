@@ -97,11 +97,6 @@ DROPBEAR_JOB = {
     "StandardErrorPath": "/var/mobile/dropbear.log",
 }
 
-# The untouched cache, so we can refuse to operate on something unexpected.
-EXPECTED_SIZE = 2464857
-EXPECTED_DAEMONS = 731
-
-
 def load(path):
     with open(path, "rb") as f:
         return plistlib.load(f)
@@ -119,6 +114,11 @@ def main():
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--apply", action="store_true", help="add the dropbear job")
     g.add_argument("--remove", action="store_true", help="remove it again")
+    ap.add_argument(
+        "--expected-pristine-daemons",
+        type=int,
+        help="exact profile-owned LaunchDaemons count before Liter8 adds jobs",
+    )
     args = ap.parse_args()
 
     p = Path(args.cache)
@@ -130,12 +130,17 @@ def main():
     ld, present = describe(d)
 
     print(f"[*] {p}")
-    print(f"    size            {size}" + ("" if size == EXPECTED_SIZE
-          else f"   (pristine is {EXPECTED_SIZE}; already modified?)"))
+    print(f"    size            {size}")
     print(f"    VersionNumber   {d.get('VersionNumber')}")
-    print(f"    LaunchDaemons   {len(ld)}" + ("" if len(ld) == EXPECTED_DAEMONS
-          else f"   (pristine is {EXPECTED_DAEMONS})"))
+    print(f"    LaunchDaemons   {len(ld)}")
     print(f"    dropbear job    {'PRESENT' if present else 'absent'}")
+
+    if args.expected_pristine_daemons is not None:
+        expected_input = args.expected_pristine_daemons + (1 if present else 0)
+        if len(ld) != expected_input:
+            sys.exit(
+                f"[!] cache has {len(ld)} daemons, expected {expected_input} for this profile"
+            )
 
     if not (args.apply or args.remove):
         if present:
@@ -181,14 +186,14 @@ def main():
     d2 = load(p)
     ld2, present2 = describe(d2)
     ok = (present2 if args.apply else not present2)
-    expect = EXPECTED_DAEMONS + (1 if args.apply else 0)
+    expect = len(ld)
 
     print(f"\n[*] verify (re-read from disk)")
     print(f"    size            {p.stat().st_size}")
     print(f"    LaunchDaemons   {len(ld2)}   (expected {expect})")
     print(f"    dropbear job    {'PRESENT' if present2 else 'absent'}   -> {'OK' if ok else 'FAIL'}")
 
-    if not ok:
+    if not ok or len(ld2) != expect:
         sys.exit("[!] round-trip failed; restore from the .bak")
 
     # Spot-check that an untouched neighbour survived the re-encode, since plistlib

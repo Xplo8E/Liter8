@@ -5,7 +5,7 @@ import Testing
 @Suite("FirmwareWorkflowContext")
 struct FirmwareWorkflowContextTests {
     @Test func selectsNormalEraseIdentityAndExportsComponentPaths() throws {
-        let profile = try #require(IPSWWorkflowRegistry.profiles.first)
+        let profile = try #require(DeviceWorkflowRegistry.profiles.first)
         let source = try firmwareDirectory(identities: [
             identity(variant: "Research Developer Erase Install (IPSW)", ibss: "research/iBSS.im4p"),
             identity(variant: "Developer Erase Install (IPSW)", ibss: "release/iBSS.im4p"),
@@ -19,10 +19,13 @@ struct FirmwareWorkflowContextTests {
         #expect(context.components["iBSS"] == "release/iBSS.im4p")
         #expect(context.components["RestoreKernelCache"] == "kernelcache.test")
         #expect(context.components["OS"] == "rootfs.dmg.aea")
+        #expect(context.schema == 2)
+        #expect(context.bootPlan.normalIBSSAdditionalPlans == [.skipDisplayInitialization])
+        #expect(context.bootPlan.restoreIBSSAdditionalPlans == [.skipDisplayInitialization])
     }
 
     @Test func rejectsTraversalInManifestComponent() throws {
-        let profile = try #require(IPSWWorkflowRegistry.profiles.first)
+        let profile = try #require(DeviceWorkflowRegistry.profiles.first)
         let source = try firmwareDirectory(identities: [
             identity(variant: "Developer Erase Install (IPSW)", ibss: "../iBSS.im4p"),
         ])

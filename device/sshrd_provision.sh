@@ -34,6 +34,9 @@ PW=alpine
 IPSW_ROOT=${IPSW_ROOT:-/tmp/ios27-rootfs} # decrypted root filesystem, mounted
 STAGE=/mnt2/_provision                # device-side staging, Data volume
 LAUNCHD_SHA=${LITER8_LAUNCHD_SHA:?Liter8 did not provide the reviewed launchd hash}
+LAUNCHD_CACHE_SHA=${LITER8_LAUNCHD_CACHE_SHA:?Liter8 did not provide the reviewed launchd cache hash}
+LAUNCHD_CACHE_DAEMONS=${LITER8_LAUNCHD_CACHE_DAEMONS:?Liter8 did not provide the reviewed launchd daemon count}
+SETUP_METHODS=${LITER8_SETUP_METHODS:?Liter8 did not provide the reviewed Setup method count}
 
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 ok()   { printf '    [+] %s\n' "$1"; }
@@ -104,6 +107,14 @@ esac
 
 wants() { case " $WANT " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
+# Reap an owned USB forward before the shell exits. Provisioning runs directly
+# after install_dropbear.sh, and allowing either phase's old iproxy to linger
+# can make the next SSH connection authenticate through a dying transport.
+stop_owned_iproxy() {
+    kill "$IPROXY_PID" 2>/dev/null || true
+    wait "$IPROXY_PID" 2>/dev/null || true
+}
+
 # ---------------------------------------------------------------- preflight
 say "preflight"
 [ -x "$SSHPASS" ] || die "sshpass not found at $SSHPASS"
@@ -112,7 +123,7 @@ if ! sh_dev 'exit 0' >/dev/null 2>&1; then
     command -v iproxy >/dev/null 2>&1 || die "iproxy not found (brew install libimobiledevice)"
     iproxy 2222 22 >/dev/null 2>&1 &
     IPROXY_PID=$!
-    trap 'kill "$IPROXY_PID" 2>/dev/null' EXIT
+    trap stop_owned_iproxy EXIT
     sleep 2
 fi
 sh_dev 'exit 0' >/dev/null 2>&1 || die "cannot reach SSH on port 2222 (is SSHRD booted?)"
@@ -192,7 +203,9 @@ if wants setup && [ "$CHECK_ONLY" = 0 ]; then
         > "$setup_local" || die "could not read the pristine Setup executable"
     [ -s "$setup_local" ] || die "downloaded Setup executable is empty"
     cp "$setup_local" "$setup_patched"
-    python3 patch_setup.py "$setup_patched" --apply >/dev/null \
+    python3 patch_setup.py "$setup_patched" --apply \
+        --expect-count "$SETUP_METHODS" \
+        --records payload/.work/Setup.records.json >/dev/null \
         || die "Setup patch failed"
 
     # Raw instruction edits invalidate the embedded CodeDirectory. That reaches
@@ -335,7 +348,7 @@ echo DONE_OK
         || die "could not read back ScreenTime overrides"
     cmp "$DISABLED_LOCAL" payload/.work/disabled.readback \
         || die "ScreenTime override readback mismatch"
-    ok "five ScreenTime and FamilyControls jobs disabled"
+    ok "five ScreenTime and FamilyControls override labels installed"
 fi
 
 # --------------------------------------------------------------- injection
@@ -472,6 +485,8 @@ if wants cache && [ "$CHECK_ONLY" = 0 ]; then
         skip "no patched cache at $CACHE; build it with patch_launchd_cache.py + add_jbboot.py"
     else
         n=$(python3 -c "import plistlib,sys;print(len(plistlib.load(open('$CACHE','rb'))['LaunchDaemons']))")
+        [ "$n" = "$((LAUNCHD_CACHE_DAEMONS + 2))" ] \
+            || die "$CACHE has $n daemons, expected $((LAUNCHD_CACHE_DAEMONS + 2)) for this profile"
         for j in com.dropbear com.jbboot; do
             python3 -c "
 import plistlib,sys
@@ -486,6 +501,15 @@ d=plistlib.load(open('$CACHE','rb'))['LaunchDaemons']
 sys.exit(0 if d.get(CACHE_KEY) == DROPBEAR_JOB else 1)" \
             || die "$CACHE contains a stale or modified com.dropbear job"
         ok "cache has $n daemons including com.dropbear and com.jbboot"
+        # A stale .orig from another build would make a later rollback worse
+        # than the active patch. Bind the preserved source to this profile
+        # before changing the boot-critical service cache.
+        sh_dev 'T=/mnt1/System/Library/xpc/launchd.plist; if [ -f "$T.orig" ]; then cat "$T.orig"; else cat "$T"; fi' \
+            > payload/.work/device.launchd.plist.pristine \
+            || die "could not read the device's pristine launchd cache"
+        device_cache_sha=$(shasum -a 256 payload/.work/device.launchd.plist.pristine | awk '{print $1}')
+        [ "$device_cache_sha" = "$LAUNCHD_CACHE_SHA" ] \
+            || die "device launchd cache belongs to another build: $device_cache_sha"
         put "$CACHE" "$STAGE/launchd.plist"
         want=$(wc -c < "$CACHE" | tr -d ' ')
         must_dev "
@@ -496,7 +520,7 @@ cat $STAGE/launchd.plist > \$T
 rm -f $STAGE/launchd.plist
 set -- \$(wc -c < \$T); got=\$1
 [ \"\$got\" = \"$want\" ] || { echo \"deployed cache is \$got bytes, expected $want\"; exit 1; }
-[ -f \$T.sig ] || echo 'warning: detached .sig absent, launchd may reject the cache'
+[ -f \$T.sig ] || { echo 'detached launchd.plist.sig is absent'; exit 1; }
 echo DONE_OK
 " "failed to deploy the service cache"
         ok "deployed, $want bytes (the detached .sig is left in place deliberately)"
@@ -686,7 +710,8 @@ note "Sileo private marker" "$(sh_dev '[ -f /mnt2/jb/.installed_usbl8r ] && echo
 sh_dev '/bin/cat /mnt1/Applications/Setup.app/Setup' > payload/.work/verify.Setup 2>/dev/null || true
 sh_dev '/bin/cat /mnt1/Applications/Setup.app/Setup.orig' > payload/.work/verify.Setup.orig 2>/dev/null || true
 if [ -s payload/.work/verify.Setup ] && \
-   python3 patch_setup.py payload/.work/verify.Setup --verify >/dev/null 2>&1; then
+   python3 patch_setup.py payload/.work/verify.Setup --verify \
+       --expect-count "$SETUP_METHODS" >/dev/null 2>&1; then
     setup_state=OK
 else
     setup_state=MISMATCH
@@ -861,6 +886,9 @@ elif not dropbear_ok:
     state = "MISMATCH com.dropbear"
 else:
     state = "all jobs present"
+expected = int(__import__("os").environ["LITER8_LAUNCHD_CACHE_DAEMONS"]) + 2
+if len(ld) != expected:
+    state = f"MISMATCH count, expected {expected}"
 print(f"{len(ld)} daemons, {state}")
 PY
 )

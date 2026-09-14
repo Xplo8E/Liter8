@@ -10,21 +10,24 @@ trap 'rm -rf "$TEST_ROOT"' EXIT
 
 WORK_DIR="$TEST_ROOT/work"
 IPSW_FILE="$TEST_ROOT/renamed.ipsw"
+RC_IPSW_FILE="$TEST_ROOT/release-candidate.ipsw"
+RC_WORK_DIR="$TEST_ROOT/rc-work"
 BAD_WORK_DIR="$TEST_ROOT/bad-work"
 BAD_IPSW_FILE="$TEST_ROOT/traversal.ipsw"
 RESOURCE_DIR="$TEST_ROOT/resources"
 RUN_DIR="$TEST_ROOT/unrelated-current-directory"
-mkdir -p "$WORK_DIR" "$BAD_WORK_DIR" "$RESOURCE_DIR/scripts" "$RUN_DIR"
+mkdir -p "$WORK_DIR" "$RC_WORK_DIR" "$BAD_WORK_DIR" "$RESOURCE_DIR/scripts" "$RUN_DIR"
 
-/usr/bin/python3 - "$IPSW_FILE" "$BAD_IPSW_FILE" "$WORK_DIR" <<'PY'
+/usr/bin/python3 - "$IPSW_FILE" "$RC_IPSW_FILE" "$BAD_IPSW_FILE" "$WORK_DIR" <<'PY'
 import plistlib
 import sys
 import zipfile
 from pathlib import Path
 
 ipsw = Path(sys.argv[1])
-bad_ipsw = Path(sys.argv[2])
-work = Path(sys.argv[3])
+rc_ipsw = Path(sys.argv[2])
+bad_ipsw = Path(sys.argv[3])
+work = Path(sys.argv[4])
 manifest = {
     "ProductVersion": "27.0",
     "ProductBuildVersion": "24A5390f",
@@ -48,6 +51,13 @@ manifest = {
 with zipfile.ZipFile(ipsw, "w") as archive:
     archive.writestr("BuildManifest.plist", plistlib.dumps(manifest))
 
+# The same tiny archive with the RC build ID proves the reviewed profile is
+# selected from plist identity without relying on the IPSW filename.
+rc_manifest = dict(manifest)
+rc_manifest["ProductBuildVersion"] = "24A435"
+with zipfile.ZipFile(rc_ipsw, "w") as archive:
+    archive.writestr("BuildManifest.plist", plistlib.dumps(rc_manifest))
+
 # The manifest is valid, but extraction must reject the parent traversal before
 # it can write outside Liter8's staging directory.
 with zipfile.ZipFile(bad_ipsw, "w") as archive:
@@ -63,7 +73,13 @@ assert Path(os.environ["IPSW_SRC"]).resolve() == expected.resolve()
 assert Path(os.environ["LITER8_RESOURCE_DIR"]).resolve() == Path(__file__).resolve().parent.parent
 context = Path(os.environ["LITER8_CONTEXT"])
 assert context.resolve() == (Path.cwd() / "context.json").resolve()
-assert '"iBSS" : "Firmware/dfu/iBSS.test.im4p"' in context.read_text()
+document = __import__("json").loads(context.read_text())
+assert document["schema"] == 2
+assert document["components"]["iBSS"] == "Firmware/dfu/iBSS.test.im4p"
+assert document["bootPlan"] == {
+    "normalIBSSAdditionalPlans": ["ibss-skip-display-init"],
+    "restoreIBSSAdditionalPlans": ["ibss-skip-display-init"],
+}
 ''')
 PY
 
@@ -76,6 +92,9 @@ IPSW_FILE=/deliberately/wrong.ipsw WORK_DIR="$WORK_DIR" \
     "$PATCHER" fw prepare --file "$IPSW_FILE"
 
 test -f "$WORK_DIR/iPhone12,1_27.0_24A5390f_Restore/.extract-complete"
+
+WORK_DIR="$RC_WORK_DIR" "$PATCHER" fw prepare --file "$RC_IPSW_FILE"
+test -f "$RC_WORK_DIR/iPhone12,1_27.0_24A435_Restore/.extract-complete"
 
 if WORK_DIR="$BAD_WORK_DIR" "$PATCHER" fw prepare --file "$BAD_IPSW_FILE"; then
     echo "unsafe IPSW member unexpectedly extracted" >&2

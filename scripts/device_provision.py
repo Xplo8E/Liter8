@@ -98,6 +98,8 @@ def prepared_rootfs(context: Context, environment: dict[str, str]) -> Path:
         "productVersion": context.product_version,
         "build": context.build,
         "launchdSHA256": environment.get("LITER8_LAUNCHD_SHA"),
+        "launchdCacheSHA256": environment.get("LITER8_LAUNCHD_CACHE_SHA"),
+        "launchdCacheDaemonCount": environment.get("LITER8_LAUNCHD_CACHE_DAEMONS"),
     }
     if any(state.get(key) != value for key, value in expected_identity.items()):
         raise WorkflowError("root filesystem state belongs to another firmware profile")

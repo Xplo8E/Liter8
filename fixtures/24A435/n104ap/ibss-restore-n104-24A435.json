@@ -1,0 +1,44 @@
+{
+  "expectedOutputSHA256" : "337b8b490cbcb02bffd4d7981d8344acdfcb8ec972fdd1534b849a06f7122285",
+  "expectedPatches" : [
+    {
+      "id" : "ibss.validate-asn1.branch",
+      "offset" : 145128,
+      "originalBytes" : "01070054",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "ibss.validate-asn1.result",
+      "offset" : 145132,
+      "originalBytes" : "e00314aa",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "ibss.boot-args.adrp",
+      "offset" : 174604,
+      "originalBytes" : "620800f0",
+      "replacementBytes" : "021200d0"
+    },
+    {
+      "id" : "ibss.boot-args.add",
+      "offset" : 174608,
+      "originalBytes" : "423c3091",
+      "replacementBytes" : "42003f91"
+    },
+    {
+      "id" : "ibss.boot-args.string",
+      "offset" : 2543552,
+      "originalBytes" : "0000000000000000000000000000000000000000000000000000",
+      "replacementBytes" : "2d76207764743d2d312072643d6d6430202d726573746f726500"
+    }
+  ],
+  "expectedSize" : 2563464,
+  "resolver" : "ibss-restore",
+  "sha256" : "0a595a23eb3f7e2b2145d5ea4e9df419635b6cf527b11c3d24a480c6a8285bf8",
+  "target" : {
+    "board" : "n104ap",
+    "build" : "24A435",
+    "component" : "iBSS",
+    "device" : "iPhone 11"
+  }
+}

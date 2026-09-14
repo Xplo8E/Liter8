@@ -109,10 +109,8 @@ def build_normal_boot() -> None:
         ibss = staging / "iBSS.raw"
         context.extract_im4p(context.component("iBSS"), ibss)
         context.apply("iboot", "ibss-normal", ibss, record_name="boot-ibss-normal")
-        context.apply(
-            "iboot", "ibss-skip-display-init", ibss,
-            record_name="boot-ibss-skip-display-init",
-        )
+        for plan in context.normal_ibss_additional_plans:
+            context.apply("iboot", plan, ibss, record_name=f"boot-{plan}")
 
         # iBEC needs a patched IM4P before the device ticket is attached.
         print("[*] normal boot: patching and signing iBEC", flush=True)
@@ -186,13 +184,11 @@ def build_restore_boot() -> None:
         ibss = staging / "iBSS.raw"
         context.extract_im4p(context.component("iBSS"), ibss)
         context.apply("iboot", "ibss-ramdisk", ibss, record_name="rd-ibss")
-        # n104 needs iBEC, not iBSS, to own the display initialization handoff.
-        # Patch only the iBSS image here. Applying this word to the byte-identical
-        # iBEC would suppress the initialization the LCD still needs.
-        context.apply(
-            "iboot", "ibss-skip-display-init", ibss,
-            record_name="rd-ibss-skip-display-init",
-        )
+        # The selected profile may add a board-specific display handoff (n104
+        # currently does). Extra plans are intentionally applied only to iBSS;
+        # iBEC must retain its own display initialization behavior.
+        for plan in context.restore_ibss_additional_plans:
+            context.apply("iboot", plan, ibss, record_name=f"rd-{plan}")
 
         print("[*] SSHRD: patching and signing iBEC", flush=True)
         ibec_raw = staging / ".iBEC.raw"

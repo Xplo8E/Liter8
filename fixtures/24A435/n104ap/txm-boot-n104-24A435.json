@@ -1,0 +1,68 @@
+{
+  "expectedOutputSHA256" : "4102141819c6100edbb8097febf1fa9c2bc13018ec9fcdafdb89c5e069abfeca",
+  "expectedPatches" : [
+    {
+      "id" : "txm.query-module.0",
+      "offset" : 253768,
+      "originalBytes" : "65faff97",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "txm.query-module.1",
+      "offset" : 254128,
+      "originalBytes" : "0bfaff97",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "txm.query-module.2",
+      "offset" : 254532,
+      "originalBytes" : "a6f9ff97",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "txm.constraints.restricted-entitlements",
+      "offset" : 276292,
+      "originalBytes" : "20fdff54",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "txm.constraints.signature-type-range",
+      "offset" : 276400,
+      "originalBytes" : "a3000054",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "txm.constraints.signature-type-null",
+      "offset" : 276408,
+      "originalBytes" : "690000b4",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "txm.secure-channel.return-one",
+      "offset" : 195844,
+      "originalBytes" : "a90200b0",
+      "replacementBytes" : "200080d2"
+    },
+    {
+      "id" : "txm.secure-channel.return",
+      "offset" : 195848,
+      "originalBytes" : "29c13691",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "txm.developer-mode.publish",
+      "offset" : 195208,
+      "originalBytes" : "69000036",
+      "replacementBytes" : "1f2003d5"
+    }
+  ],
+  "expectedSize" : 557088,
+  "resolver" : "txm-boot",
+  "sha256" : "e058931840ac000f6d050578fd7fc4ddb8c640125d92a713f61433be793fbf04",
+  "target" : {
+    "board" : "n104ap",
+    "build" : "24A435",
+    "component" : "TXM",
+    "device" : "iPhone 11"
+  }
+}

@@ -18,7 +18,7 @@ public struct KernelCredentialManagerResolver: Sendable {
     public init() {}
 
     public func resolve(in image: BinaryImage) throws -> [PatchRecord] {
-        guard let profile = FirmwareProfileRegistry.detect(in: image) else {
+        guard let profile = KernelResolverProfileRegistry.detect(in: image) else {
             throw PatchfinderError.unsupportedFirmwareProfile(
                 resolver: Self.name,
                 profile: "unidentified",
@@ -83,9 +83,13 @@ public struct KernelCredentialManagerResolver: Sendable {
             let method = descriptor.needsScoring
                 ? "neighbor-bounded 32-word similarity"
                 : "unique relocation-masked function body"
+            // Ten of these methods have no direct branch reference at all on RC
+            // 24A435 and are reached only through a taken address, so the stub
+            // starts after any BTI C landing pad rather than on top of it.
+            let start = ARM64.stubStart(atEntry: entry, in: image)
             patches.append(try credentialPatch(
                 id: "kernel.credential-manager.\(descriptor.id).result",
-                offset: entry,
+                offset: start,
                 replacement: payload.result,
                 summary: "Return success from \(descriptor.name)",
                 evidence: [method, "genuine PACIBSP or BTI C function entry"],
@@ -93,7 +97,7 @@ public struct KernelCredentialManagerResolver: Sendable {
             ))
             patches.append(try credentialPatch(
                 id: "kernel.credential-manager.\(descriptor.id).return",
-                offset: entry + 4,
+                offset: start + 4,
                 replacement: payload.returnInstruction,
                 summary: "Return the forced AppleCredentialManager result",
                 evidence: ["paired entry-point stub"],

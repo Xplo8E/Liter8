@@ -1,28 +1,26 @@
-# Liter8
+<h1 align="center">Liter8</h1>
 
-Liter8 is a macOS firmware research CLI for resolving, verifying, applying, and
-booting reviewed iOS patch sets. It identifies firmware from
-`BuildManifest.plist`, discovers patch sites from binary structure and semantic
-anchors, verifies every original byte, and refuses unknown or ambiguous input.
+<p align="center">
+A macOS CLI for the usbliter8 firmware patching and boot workflow.
+</p>
 
-> [!IMPORTANT] 
-> Liter8 currently supports one complete device workflow: iPhone 11 (`iPhone12,1`, `n104ap`) on iOS 27.0 beta 4 (`24A5390f`). A resolver profile appearing in `liter8 profiles` does not mean the restore and boot workflow is supported for that build.
+> [!WARNING]
+> Liter8 is under active development. Support is exact-build and exact-device scoped; an unlisted IPSW or board is not implicitly compatible.
 
-That workflow has been exercised on a physical device through IPSW preparation, CFW restore, SSH restore ramdisk, device provisioning, normal boot, and post-boot finalization.
+Liter8 provides a unified CLI for preparing IPSWs, resolving and applying firmware patches, building custom firmware, restoring devices, booting SSH restore ramdisks, provisioning the filesystem, and generating patched normal-boot artifacts.
 
-Liter8 is profile-driven. Supporting a new build means adding reviewed signatures, payload variants, manifests, and exact-device evidence. It does not mean copying a build-specific workflow or falling back to known offsets.
+The project replaces build-specific patch scripts and hardcoded offsets with profile-driven firmware support and semantic patch resolution. Firmware-specific differences are isolated through reviewed resolver and payload variants, while exact-build fixtures are used to verify patch output.
 
-## Current support
+## Tested on
 
-| Firmware | Device | Status |
-| --- | --- | --- |
-| iOS 27 beta 4, `24A5390f` | iPhone 11, `n104ap` | End-to-end verified |
-| iOS 27 beta 2, `24A5370h` | `d421ap` / `d431ap` | Credential-manager resolver reference only |
-| iOS 27, `24A435` | iPhone 11, `n104ap` | Kernel profile placeholder; pending research |
+| Firmware                    | Device              | Status              |
+| --------------------------- | ------------------- | ------------------- |
+| iOS 27 beta 4, `24A5390f`   | iPhone 11, `n104ap` | End-to-end verified |
+| iOS 27 RC/release, `24A435` | iPhone 11, `n104ap` | End-to-end verified |
 
 An unsupported IPSW fails before extraction. A recognized firmware profile never supplies patch offsets; offsets remain outputs of the resolvers.
 
-> [!NOTE] 
+> [!NOTE]
 > IPSWs, extracted Apple binaries, tickets, and generated work directories are not included in this repository.
 
 ## Install and build
@@ -44,18 +42,14 @@ make setup
 make release
 ```
 
-The executable is `.build/release/liter8`. Device boot also requires the
-reviewed project-specific `irecovery`; pass its path with `--irecovery`.
+The executable is `.build/release/liter8`. Device boot also requires the reviewed project-specific `irecovery`; pass its path with `--irecovery`.
 
 ## Usage
 
-Keep every generated file under one work directory. `--work-dir` overrides
-`WORK_DIR`; without either, Liter8 uses the current directory.
+Keep every generated file under one work directory. `--work-dir` overrides `WORK_DIR`; without either, Liter8 uses the current directory.
 
 > [!WARNING]
-> `fw restore-cfw` performs an erase restore. It destroys the data currently on
-> the target device. Check the selected IPSW, device, build, board, and work
-> directory before running it.
+> `fw restore-cfw` performs an erase restore. It destroys the data currently on the target device. Check the selected IPSW, device, build, board, and work directory before running it.
 
 ### 1. Prepare the IPSW and build the CFW
 
@@ -152,7 +146,7 @@ Verify against an exact-build fixture:
   /path/to/kernelcache.raw
 ```
 
-> [!IMPORTANT] 
+> [!IMPORTANT]
 > Fixture offsets verify resolver output. Runtime resolution never uses them as fallbacks.
 
 ## How Liter8 works
@@ -197,14 +191,11 @@ vendor/                      pinned source dependencies
 docs/                        design notes and exact-device run evidence
 ```
 
-This remains one `Liter8Core` Swift target. The folders express ownership
-without adding artificial target boundaries or widening internal APIs.
+This remains one `Liter8Core` Swift target. The folders express ownership without adding artificial target boundaries or widening internal APIs.
 
 ## Contributing
 
-Read [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) before changing resolvers or
-workflows. Firmware ports also use the checklist in
-[docs/ADDING_FIRMWARE_SUPPORT.md](docs/ADDING_FIRMWARE_SUPPORT.md).
+Read [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) before changing resolvers or workflows. Firmware ports also use the checklist in [docs/ADDING_FIRMWARE_SUPPORT.md](docs/ADDING_FIRMWARE_SUPPORT.md).
 
 - Keep patch discovery and patch bytes in Swift.
 - Keep build-specific differences in profiles, signatures, and payloads.
@@ -216,14 +207,15 @@ workflows. Firmware ports also use the checklist in
 ## Running tests
 
 ```sh
-make test         # Fast suite; skips full kernel scans
-make integration  # Host workflow integration tests
-make test-full    # Optimized full resolver suite
-make check        # Full tests and integrations
+make test           # Fast suite; skips real-kernel fixture scans
+make test-fixtures  # Optimized exact-build fixture and one-pass apply checks
+make integration    # Host workflow integration tests
+make test-full      # Optimized suite except the uncached production composition
+make test-e2e       # Uncached production-composition resolver test
+make check          # Full resolver, E2E, and integration tiers
 ```
 
-Tests that need extracted Apple binaries skip when those files are absent. Use
-`LITER8_FIXTURE_ROOT` to point at a private fixture tree:
+Tests that need extracted Apple binaries skip when those files are absent. Use `LITER8_FIXTURE_ROOT` to point at a private fixture tree:
 
 ```sh
 LITER8_FIXTURE_ROOT=/path/to/private/research make test-full
@@ -233,42 +225,29 @@ LITER8_FIXTURE_ROOT=/path/to/private/research make test-full
 
 - [Architecture and onboarding](CODEBASE_GUIDE.md)
 - [Contributor guide](docs/CONTRIBUTING.md)
+- [Firmware and device support guide](docs/FIRMWARE_SUPPORT_GUIDE.md)
 - [Adding firmware support](docs/ADDING_FIRMWARE_SUPPORT.md)
+- [iOS 27 `24A435` resolver and device evidence](docs/plans/IOS_27_24A435_RC_PATCHES.md)
 - [iPhone 11 beta-4 device run](docs/runs/IOS_27_BETA4_IPHONE11.md)
 - [Bootstrap and provisioning status](docs/design/BOOTSTRAP_JB_STATUS.md)
 - [Normal boot handoff](docs/design/NORMAL_BOOT_HANDOFF.md)
 - [Performance backlog](docs/BACKLOG.md)
 
 > [!NOTE]
-> `fw get-rd` and `fw get-boot` currently rebuild more artifacts than needed.
-> Normal Apple pairing also remains separate from the verified Wi-Fi and
-> Dropbear SSH path. Both items are tracked in the project documentation.
+> `fw get-rd` and `fw get-boot` currently rebuild more artifacts than needed. Normal Apple pairing also remains separate from the verified Wi-Fi and Dropbear SSH path. Both items are tracked in the project documentation.
 
 ## Acknowledgements
 
-Liter8 builds on research and tooling published by the following projects and
-contributors:
+Liter8 builds on research and tooling published by the following projects and contributors:
 
-- [usbliter8-fun](https://github.com/wh1te4ever/usbliter8-fun) by
-  [wh1te4ever](https://github.com/wh1te4ever), whose iOS 27 beta 2 and beta 3
-  CFW and ramdisk work formed the base of the iPhone 11 beta-4 port.
-- [34306](https://github.com/34306/usbliter8-fun) (Huy Nguyen) for the fork,
-  tutorial, and original `patches/` scripts used by the public workflow.
+- [usbliter8-fun](https://github.com/wh1te4ever/usbliter8-fun) by [wh1te4ever](https://github.com/wh1te4ever), whose iOS 27 beta 2 and beta 3 CFW and ramdisk work formed the base of the iPhone 11 beta-4 port.
+- [34306](https://github.com/34306/usbliter8-fun) (Huy Nguyen) for the fork, tutorial, and original `patches/` scripts used by the public workflow.
 - [Procursus](https://github.com/ProcursusTeam) for the rootless bootstrap.
-- [khanhduytran0](https://github.com/khanhduytran0) for the DeviceTree and
-  kernel USB-restriction ideas.
-- [tihmstar](https://github.com/tihmstar) for `img4` and `img4tool` and their
-  APTicket-based IMG4 signing work.
-- [m1stadev](https://github.com/m1stadev) and
-  [doronz88](https://github.com/doronz88) for `pyimg4` and
-  `pymobiledevice3`, used by the earlier kernelcache and USB forwarding flows.
-- [Lakr233](https://github.com/Lakr233) for
-  [vphone-cli](https://github.com/Lakr233/vphone-cli), whose Swift CLI,
-  firmware workflow structure, and vendored IMG4 integration informed Liter8,
-  and for `trollvnc` and USB device-control work.
+- [khanhduytran0](https://github.com/khanhduytran0) for the DeviceTree and kernel USB-restriction ideas.
+- [tihmstar](https://github.com/tihmstar) for `img4` and `img4tool` and their APTicket-based IMG4 signing work.
+- [m1stadev](https://github.com/m1stadev) and [doronz88](https://github.com/doronz88) for `pyimg4` and `pymobiledevice3`, used by the earlier kernelcache and USB forwarding flows.
+- [Lakr233](https://github.com/Lakr233) for [vphone-cli](https://github.com/Lakr233/vphone-cli), whose Swift CLI, firmware workflow structure, and vendored IMG4 integration informed Liter8, and for `trollvnc` and USB device-control work.
 
 ## License
 
-Liter8's original source is available under the [MIT License](LICENSE).
-Third-party submodules, tools, and payloads remain subject to their respective
-licenses and distribution terms.
+Liter8's original source is available under the [MIT License](LICENSE). Third-party submodules, tools, and payloads remain subject to their respective licenses and distribution terms.
