@@ -1,5 +1,13 @@
 # Liter8 backlog
 
+## Device and runtime issues
+
+- [ ] Restore passcode functionality.
+- [ ] Fix cellular functionality.
+- [ ] Fix host-device pairing.
+- [ ] Fix Apple services.
+- [ ] Update the existing tweak-injection path for the current Liter8 runtime.
+
 ## P1: Make `fw get-boot` and `fw get-rd` incremental
 
 Both commands currently rebuild every artifact even when the IPSW, APTicket, patch plans and bundled payloads are unchanged. This makes normal boot and SSHRD iteration unnecessarily slow.
