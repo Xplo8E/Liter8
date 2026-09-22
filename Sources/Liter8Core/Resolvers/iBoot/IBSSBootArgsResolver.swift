@@ -30,8 +30,13 @@ public struct IBSSBootArgsResolver: Sendable {
     /// Current normal-boot arguments from the validated beta-4 Python patcher.
     /// Callers may supply a different literal, but `%` is rejected because the
     /// selected pointer remains an `snprintf` format string.
+    ///
+    /// `serial=3` and `backlight-level=1024` do not both fit: the 79-byte
+    /// page-tail run leaves 63 characters, and keeping both needs 78. The
+    /// kernel console is what this literal exists to expose, so the backlight
+    /// request is the one that goes. Pass --boot-args to get it back.
     public static let normalBootArguments =
-        "-v debug=0x2014e launchd_unsecure_cache=1 wdt=-1 backlight-level=1024"
+        "-v debug=0x2014e launchd_unsecure_cache=1 wdt=-1 serial=3"
 
     public let bootArguments: String
 
@@ -79,7 +84,7 @@ public struct IBSSBootArgsResolver: Sendable {
         let evidence = [
             "unique ADRP X2 / ADD X2 / ADD X0,SP / MOV W1,#0x400 / BL call shape",
             "original pointer resolves to isolated %s string at \(site.formatOffset.hex)",
-            "unique zero run ending at page boundary \(slot.runEnd.hex)",
+            "zero run ends \(slot.endAlignment)-byte aligned at \(slot.runEnd.hex)",
             "aligned string slot \(slot.writeOffset.hex) has \(slot.capacity) bytes available",
         ]
 
@@ -203,13 +208,13 @@ public struct IBSSBootArgsResolver: Sendable {
     /// only when the zero run cannot hold the literal at a wider one.
     private static let alignments = [16, 8, 4, 2, 1]
 
-    /// Every zero run that ends on a 4 KiB boundary, largest first.
+    /// Every zero run in the payload, largest first, with the alignment its end
+    /// satisfies.
     ///
-    /// A run is accepted only when it reaches the boundary. This models linker
-    /// padding at the end of a mapped section and excludes arbitrary zero-filled
-    /// structures elsewhere in the image.
-    func pageTailRuns(in image: BinaryImage) -> [(start: Int, end: Int)] {
-        var runs: [(start: Int, end: Int)] = []
+    /// `endAlignment` is the largest power of two dividing the run's end offset,
+    /// which is what lets padding be told apart from data further down.
+    private func zeroRuns(in image: BinaryImage) -> [(start: Int, end: Int, endAlignment: Int)] {
+        var runs: [(start: Int, end: Int, endAlignment: Int)] = []
         var runStart: Int?
         for offset in 0...image.count {
             let isZero = offset < image.count && image.data[offset] == 0
@@ -217,10 +222,39 @@ public struct IBSSBootArgsResolver: Sendable {
                 runStart = offset
             } else if !isZero, let start = runStart {
                 runStart = nil
-                if offset.isMultiple(of: 0x1000) { runs.append((start, offset)) }
+                // offset & -offset isolates the lowest set bit: the largest
+                // power of two that divides it.
+                runs.append((start, offset, offset == 0 ? 0 : offset & -offset))
             }
         }
         return runs.sorted { $0.end - $0.start > $1.end - $1.start }
+    }
+
+    /// Every zero run that ends on a 4 KiB boundary, largest first.
+    ///
+    /// A run is accepted only when it reaches the boundary. This models linker
+    /// padding at the end of a mapped section and excludes arbitrary zero-filled
+    /// structures elsewhere in the image.
+    public func pageTailRuns(in image: BinaryImage) -> [(start: Int, end: Int)] {
+        zeroRuns(in: image)
+            .filter { $0.end.isMultiple(of: 0x1000) }
+            .map { ($0.start, $0.end) }
+    }
+
+    /// Zero runs that carry the arithmetic signature of alignment padding.
+    ///
+    /// Padding inserted to align the next structure to N bytes is always
+    /// shorter than N, because a full N bytes would mean the structure was
+    /// already aligned. Requiring `length < endAlignment` therefore admits
+    /// genuine inter-structure padding while rejecting large zero-filled
+    /// regions, which are the ones that might be written at runtime.
+    ///
+    /// The 256-byte floor keeps incidental short gaps inside packed tables out:
+    /// a few zero bytes before a 16-byte-aligned record is not a free slot.
+    func alignmentPaddingRuns(in image: BinaryImage) -> [(start: Int, end: Int)] {
+        zeroRuns(in: image)
+            .filter { $0.endAlignment >= 256 && ($0.end - $0.start) < $0.endAlignment }
+            .map { ($0.start, $0.end) }
     }
 
     func findPageTailSlots(in image: BinaryImage, requiredLength: Int) -> [PageTailSlot] {
@@ -236,28 +270,68 @@ public struct IBSSBootArgsResolver: Sendable {
         // (beta 4: 476 bytes vs 35; RC 24A435: 79 vs 35), so requiring a unique
         // maximum is a stronger identity than any length test.
         let runs = pageTailRuns(in: image)
-        guard let best = runs.first else { return [] }
-        let bestLength = best.end - best.start
-        guard runs.count == 1 || runs[1].end - runs[1].start < bestLength else { return [] }
 
-        // Leave eight bytes after the last non-zero section contents, then align
-        // the string. Alignment is a convention, not a requirement: the slot
-        // holds a NUL-terminated C string read by a byte copy, and ADRP+ADD can
-        // address any byte in the page. Take the widest alignment the run can
-        // actually accommodate. The guard gap is never traded away.
-        let guarded = best.start + 8
-        guard let writeOffset = Self.alignments.lazy
-            .map({ (guarded + $0 - 1) & ~($0 - 1) })
-            .first(where: { $0 + requiredLength <= best.end })
-        else { return [] }
+        // While page-tail padding big enough for the literal exists, this rule
+        // is authoritative -- including its refusal to choose between equal
+        // candidates. Falling through to the fallback on ambiguity would turn
+        // that deliberate refusal into a silent guess by a different criterion,
+        // which is the one behaviour this selection must never have.
+        if runs.contains(where: { slot(in: $0, requiredLength: requiredLength) != nil }) {
+            guard let best = runs.first else { return [] }
+            let bestLength = best.end - best.start
+            guard runs.count == 1 || runs[1].end - runs[1].start < bestLength else { return [] }
+            return slot(in: best, requiredLength: requiredLength).map { [$0] } ?? []
+        }
 
-        return [.init(
-            writeOffset: UInt64(writeOffset),
-            runEnd: UInt64(best.end),
-            capacity: best.end - writeOffset
-        )]
+        // Fall back only when no page-tail run can hold the literal at all.
+        //
+        // That test was never a property of padding. iOS 27.2 grew the embedded
+        // device tree by 2048 bytes, which shifted the rest of iBSS by half a
+        // page: the same 79-byte gap that 24A435 used still exists, byte for
+        // byte, but now ends 2048-aligned instead of 4096-aligned and every
+        // page-tail run in the image is under 12 bytes.
+        //
+        // The primary rule is kept ahead of this one so builds that do have
+        // page-tail padding keep selecting exactly what they selected before,
+        // which is what the pinned fixtures record.
+        //
+        // Smallest-that-fits rather than largest: the literal needs one slot,
+        // and a tight gap is more certainly inter-structure padding than a
+        // roomy one. On 27.2 this lands on the same device-tree padding 24A435
+        // used, which is the strongest evidence available that the fallback
+        // selects the same kind of place.
+        let padding = alignmentPaddingRuns(in: image)
+            .sorted { $0.end - $0.start < $1.end - $1.start }
+        for run in padding {
+            if let slot = slot(in: run, requiredLength: requiredLength) { return [slot] }
+        }
+        return []
     }
 
+    /// Place the literal inside one accepted run, or report that it cannot fit.
+    ///
+    /// Leaves eight bytes after the last non-zero contents, then aligns the
+    /// string. Alignment is a convention, not a requirement: the slot holds a
+    /// NUL-terminated C string read by a byte copy, and ADRP+ADD can address any
+    /// byte in the page. Take the widest alignment the run can accommodate. The
+    /// guard gap is never traded away.
+    private func slot(
+        in run: (start: Int, end: Int),
+        requiredLength: Int
+    ) -> PageTailSlot? {
+        let guarded = run.start + 8
+        guard let writeOffset = Self.alignments.lazy
+            .map({ (guarded + $0 - 1) & ~($0 - 1) })
+            .first(where: { $0 + requiredLength <= run.end })
+        else { return nil }
+
+        return PageTailSlot(
+            endAlignment: run.end == 0 ? 0 : run.end & -run.end,
+            writeOffset: UInt64(writeOffset),
+            runEnd: UInt64(run.end),
+            capacity: run.end - writeOffset
+        )
+    }
 }
 
 private struct BootArgsCallSite {
@@ -267,6 +341,13 @@ private struct BootArgsCallSite {
 }
 
 struct PageTailSlot {
+    /// Power-of-two boundary the run's end satisfies.
+    ///
+    /// Recorded so the evidence can state which boundary was actually found
+    /// rather than asserting a page. 24A435's run ends 4096-aligned and 27.2's
+    /// ends 2048-aligned, and a fixture that claimed "page boundary" for the
+    /// second would be recording something untrue.
+    let endAlignment: Int
     let writeOffset: UInt64
     let runEnd: UInt64
     let capacity: Int

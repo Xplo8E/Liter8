@@ -1,0 +1,20 @@
+{
+  "expectedOutputSHA256" : "6a18bd3e04de267d23905e4c117d44604a6596aa1001bc3a7c9c23c6c14a3314",
+  "expectedPatches" : [
+    {
+      "id" : "asr.signature-mismatch-branch",
+      "offset" : 128624,
+      "originalBytes" : "20310035",
+      "replacementBytes" : "1f2003d5"
+    }
+  ],
+  "expectedSize" : 380192,
+  "resolver" : "asr-signature",
+  "sha256" : "51be59b27a71a87cd02b4bca08563e101fc49eb979132a4a873b09b93a2654dd",
+  "target" : {
+    "board" : "n104ap",
+    "build" : "24B5084k",
+    "component" : "asr",
+    "device" : "iPhone 11"
+  }
+}

@@ -13,10 +13,18 @@ The project replaces build-specific patch scripts and hardcoded offsets with pro
 
 ## Tested on
 
-| Firmware                    | Device              | Status              |
-| --------------------------- | ------------------- | ------------------- |
-| iOS 27 beta 4, `24A5390f`   | iPhone 11, `n104ap` | End-to-end verified |
-| iOS 27 RC/release, `24A435` | iPhone 11, `n104ap` | End-to-end verified |
+| Firmware                     | Device              | Status              |
+| ---------------------------- | ------------------- | ------------------- |
+| iOS 27 beta 4, `24A5390f`    | iPhone 11, `n104ap` | End-to-end verified |
+| iOS 27 RC/release, `24A435`  | iPhone 11, `n104ap` | End-to-end verified |
+| iOS 27.0 release, `24A437`   | iPhone 11, `n104ap` | End-to-end verified |
+| iOS 27.2 beta 1, `24B5084k`  | iPhone 11, `n104ap` | End-to-end verified |
+
+**End-to-end verified** means an erase restore, normal boot and repeat boot passed on hardware. Repeat boot is listed separately because a first boot that works and a second that does not is a distinct failure mode.
+
+Every patch is additionally pinned by an exact-build fixture recording the input digest, each offset with its original and replacement bytes, and the digest of the complete patched output.
+
+`24A437` is `24A435` rebuilt and the two share one firmware profile: identical iBSS, iBEC, TXM and SPTM, and a kernelcache differing only in build-host paths and Mach-O UUIDs.
 
 An unsupported IPSW fails before extraction. A recognized firmware profile never supplies patch offsets; offsets remain outputs of the resolvers.
 

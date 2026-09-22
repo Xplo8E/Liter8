@@ -141,6 +141,8 @@ public struct FixtureManifest: Codable, Sendable {
             return try IBSSNormalResolver().resolve(in: image)
         case IBSSRestoreResolver.name:
             return try IBSSRestoreResolver().resolve(in: image)
+        case IBECRestoreResolver.name:
+            return try IBECRestoreResolver().resolve(in: image)
         case IBSSRamdiskResolver.name:
             return try IBSSRamdiskResolver().resolve(in: image)
         case RestoredExternalResolver.name:

@@ -1,0 +1,134 @@
+{
+  "expectedOutputSHA256" : "d1607955f199ef4371d4f0582a263c02927b3d23948ecad3d6849ca6d5437496",
+  "expectedPatches" : [
+    {
+      "id" : "kernel.identity.0",
+      "offset" : 259173,
+      "originalBytes" : "2f52454c454153455f41524d36345f5438303330",
+      "replacementBytes" : "2f504154434845445f41524d36345f5438303330"
+    },
+    {
+      "id" : "kernel.identity.1",
+      "offset" : 259282,
+      "originalBytes" : "2f52454c454153455f41524d36345f5438303330",
+      "replacementBytes" : "2f504154434845445f41524d36345f5438303330"
+    },
+    {
+      "id" : "kernel.panic.root-snapshot",
+      "offset" : 51458260,
+      "originalBytes" : "28062837",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.panic.seal-broken",
+      "offset" : 50855284,
+      "originalBytes" : "60017037",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.panic.rootvp-authentication",
+      "offset" : 58334956,
+      "originalBytes" : "00130035",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.panic.unencrypted-data-volume",
+      "offset" : 51463432,
+      "originalBytes" : "a8000037",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.amfi.trust-cache.0",
+      "offset" : 33251444,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "5f2403d5"
+    },
+    {
+      "id" : "kernel.amfi.trust-cache.1",
+      "offset" : 33251448,
+      "originalBytes" : "ffc300d1",
+      "replacementBytes" : "200080d2"
+    },
+    {
+      "id" : "kernel.amfi.trust-cache.2",
+      "offset" : 33251452,
+      "originalBytes" : "f44f01a9",
+      "replacementBytes" : "430000b4"
+    },
+    {
+      "id" : "kernel.amfi.trust-cache.3",
+      "offset" : 33251456,
+      "originalBytes" : "fd7b02a9",
+      "replacementBytes" : "600000f9"
+    },
+    {
+      "id" : "kernel.amfi.trust-cache.4",
+      "offset" : 33251460,
+      "originalBytes" : "fd830091",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.amfi.launch-constraints.result",
+      "offset" : 33271308,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.amfi.launch-constraints.return",
+      "offset" : 33271312,
+      "originalBytes" : "ff0306d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.debugger.result",
+      "offset" : 61775556,
+      "originalBytes" : "e88dfeb0",
+      "replacementBytes" : "200080d2"
+    },
+    {
+      "id" : "kernel.debugger.return",
+      "offset" : 61775560,
+      "originalBytes" : "e00000b4",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.amfi.developer-mode.result",
+      "offset" : 58916252,
+      "originalBytes" : "08a1feb0",
+      "replacementBytes" : "20008052"
+    },
+    {
+      "id" : "kernel.amfi.developer-mode.return",
+      "offset" : 58916256,
+      "originalBytes" : "08f945f9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.amfi.post-validation.compare",
+      "offset" : 33303500,
+      "originalBytes" : "1f040071",
+      "replacementBytes" : "ff070071"
+    },
+    {
+      "id" : "kernel.amfi.dyld-policy.0",
+      "offset" : 33304888,
+      "originalBytes" : "c5620094",
+      "replacementBytes" : "20008052"
+    },
+    {
+      "id" : "kernel.amfi.dyld-policy.1",
+      "offset" : 33304900,
+      "originalBytes" : "72deff97",
+      "replacementBytes" : "20008052"
+    }
+  ],
+  "expectedSize" : 68927488,
+  "resolver" : "kernel-restore",
+  "sha256" : "cff26a8a9c3184d38cc3df3b284ff61cc9dd19ab11517e86aaf8019f3a95d76f",
+  "target" : {
+    "board" : "n104ap",
+    "build" : "24B5084k",
+    "component" : "kernelcache.release.iphone12b",
+    "device" : "iPhone 11"
+  }
+}

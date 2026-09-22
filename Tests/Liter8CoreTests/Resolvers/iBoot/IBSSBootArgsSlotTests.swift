@@ -76,6 +76,46 @@ final class IBSSBootArgsSlotTests: XCTestCase {
         XCTAssertTrue(resolver.findPageTailSlots(in: image, requiredLength: length(restore)).isEmpty)
     }
 
+    /// Ambiguity must refuse even though a fallback exists.
+    ///
+    /// The alignment-padding fallback was added for iOS 27.2, whose page-tail
+    /// runs are all under twelve bytes. It must not rescue the case above: two
+    /// equally good page-tail runs is a deliberate refusal, and reaching the
+    /// fallback there would convert it into a guess made on different grounds.
+    /// The first version of that fallback did exactly this.
+    func testFallbackDoesNotRescueAnAmbiguousPageTailChoice() {
+        // Both page-tail runs fit the literal, and a large aligned-padding run
+        // exists elsewhere that the fallback would happily take.
+        var data = payload(pages: 8, runs: [(3, 128), (6, 128)]).data
+        data.replaceSubrange(0x1000 - 300..<0x1000 - 100, with: Data(repeating: 0, count: 200))
+        XCTAssertTrue(
+            resolver.findPageTailSlots(in: BinaryImage(data: data),
+                                       requiredLength: length(restore)).isEmpty,
+            "an ambiguous page-tail choice must refuse, not fall through"
+        )
+    }
+
+    /// The fallback engages when every page-tail run is too small to be used.
+    ///
+    /// This is the iOS 27.2 shape: the device tree grew by 2048 bytes, so the
+    /// padding that 24A435 used still exists at the same size but now ends
+    /// 2048-aligned rather than 4096-aligned.
+    func testFallbackSelectsAlignmentPaddingWhenNoPageTailRunFits() {
+        var data = Data(repeating: 0xAA, count: 0x8000)
+        // Page-tail runs exist but are far too short for any literal.
+        data.replaceSubrange(0x3000 - 8..<0x3000, with: Data(repeating: 0, count: 8))
+        // 79 bytes of padding ending 2048-aligned, exactly 27.2's shape.
+        data.replaceSubrange(0x5800 - 79..<0x5800, with: Data(repeating: 0, count: 79))
+
+        let slots = resolver.findPageTailSlots(
+            in: BinaryImage(data: data),
+            requiredLength: length(restore)
+        )
+        XCTAssertEqual(slots.count, 1)
+        XCTAssertEqual(slots.first?.runEnd, 0x5800)
+        XCTAssertEqual(slots.first?.endAlignment, 2048)
+    }
+
     // MARK: - Placement inside the chosen run
 
     func testWidestAlignmentIsPreferredWhenTheRunHasRoom() {

@@ -25,7 +25,7 @@ def build() -> None:
     print("[*] CFW component 2/6: restore iBEC", flush=True)
     ibec = context.component("iBEC", in_cfw=True)
     context.reset_to_pristine(ibec)
-    context.apply("iboot", "ibss-restore", ibec, record_name="ibec-restore")
+    context.apply("iboot", "ibec-restore", ibec, record_name="ibec-restore")
 
     print("[*] CFW component 3/6: restore DeviceTree", flush=True)
     devicetree = context.component("RestoreDeviceTree", in_cfw=True)

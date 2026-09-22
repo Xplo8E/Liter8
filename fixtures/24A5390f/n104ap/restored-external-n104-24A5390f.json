@@ -1,20 +1,44 @@
 {
-  "resolver": "restored-external-fdr",
-  "target": {
-    "device": "iPhone 11",
-    "board": "n104ap",
-    "build": "24A5390f",
-    "component": "restored_external"
-  },
-  "expectedSize": 3340448,
-  "sha256": "f54aaf9e75484177201281fd746d24f9bb4b057661e2fda77a7f051266e410f4",
-  "expectedOutputSHA256": "d6e210099f4ca88b202669ce66e3539dbc250ee015a3af37e5bde21664eb7553",
-  "expectedPatches": [
+  "expectedOutputSHA256" : "4f1d03eedf88a44c4e513364ed14c252f92d4d88e560895350606d77a15b27f8",
+  "expectedPatches" : [
     {
-      "id": "restored-external.fdr-result",
-      "offset": 517464,
-      "originalBytes": "e0031aaa",
-      "replacementBytes": "000080d2"
+      "id" : "restored-external.fdr-result",
+      "offset" : 517464,
+      "originalBytes" : "e0031aaa",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "restored-external.baseband.present",
+      "offset" : 302656,
+      "originalBytes" : "68150090",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "restored-external.baseband.present-return",
+      "offset" : 302660,
+      "originalBytes" : "082147f9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "restored-external.baseband.legacy",
+      "offset" : 302536,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "restored-external.baseband.legacy-return",
+      "offset" : 302540,
+      "originalBytes" : "f44fbea9",
+      "replacementBytes" : "c0035fd6"
     }
-  ]
+  ],
+  "expectedSize" : 3340448,
+  "resolver" : "restored-external-fdr",
+  "sha256" : "f54aaf9e75484177201281fd746d24f9bb4b057661e2fda77a7f051266e410f4",
+  "target" : {
+    "board" : "n104ap",
+    "build" : "24A5390f",
+    "component" : "restored_external",
+    "device" : "iPhone 11"
+  }
 }

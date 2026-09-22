@@ -33,6 +33,12 @@ cd "${0:A:h}"
 
 ZST=bootstrap_1900.tar.zst
 ZST_SHA=8354c3aa1ecdad8ebc47d9a76dfca6f830a2b757278068bd33b98bf1d638a9cb
+
+# The bootstrap's own launchctl aborts on load from iOS 26 onwards: it imports
+# _launch_active_user_switch strongly and Apple removed that routine. See
+# launchctl/README.md for the reversing notes and what this replacement changes.
+LAUNCHCTL=launchctl/launchctl
+LAUNCHCTL_SHA=c46e143151f4d56fd9e3c088d74e231f4b6f4ff7477aad080359454821ec0125
 STAGE=${TMPDIR:-/tmp}/bootstrap-stage-$$
 TGZ=$STAGE/bootstrap.tar.gz
 SSHPASS=../tools/sshpass
@@ -72,6 +78,12 @@ trust_state() {
 GOT_SHA=$(shasum -a 256 "$ZST" | awk '{print $1}')
 [[ "$GOT_SHA" == "$ZST_SHA" ]] || {
     print -u2 "[!] bootstrap SHA-256 mismatch: got $GOT_SHA expected $ZST_SHA"
+    exit 1
+}
+[[ -f "$LAUNCHCTL" ]] || { print -u2 "[!] missing $LAUNCHCTL"; exit 1; }
+GOT_LAUNCHCTL_SHA=$(shasum -a 256 "$LAUNCHCTL" | awk '{print $1}')
+[[ "$GOT_LAUNCHCTL_SHA" == "$LAUNCHCTL_SHA" ]] || {
+    print -u2 "[!] launchctl SHA-256 mismatch: got $GOT_LAUNCHCTL_SHA expected $LAUNCHCTL_SHA"
     exit 1
 }
 [[ -x "$SSHPASS" ]] || { print -u2 "[!] missing $SSHPASS"; exit 1; }
@@ -185,6 +197,40 @@ if (( ! RESUME )); then
     sshdev "/bin/rmdir '$DEV_STAGE/var' '$DEV_STAGE' 2>/dev/null; /bin/rm -f '$DEV_TGZ'; sync" >/dev/null 2>&1
 fi
 
+# ---------------------------------------------------------------- launchctl
+# Procursus launchctl 1:1.1.1 imports _launch_active_user_switch strongly, and
+# Apple removed that routine in the iOS 26 line, so dyld aborts the process
+# during load and every subcommand fails, not just userswitch. The bootstrap
+# archive stays byte-identical to the reviewed copy; the replacement goes in
+# afterwards so the archive digest above keeps meaning what it says.
+#
+# Outside the extraction branch on purpose: re-running against an already
+# installed bootstrap must still repair launchctl.
+print "[*] replacing launchctl (bootstrap copy aborts on load from iOS 26 onwards)"
+sshdev "[ -f '$DEV_JB/usr/bin/launchctl.procursus' ] || \
+        /bin/cp -p '$DEV_JB/usr/bin/launchctl' '$DEV_JB/usr/bin/launchctl.procursus'" \
+    || { print -u2 "[!] could not back up the original launchctl"; exit 1; }
+
+# Staged next to the target and renamed, so an interrupted transfer can never
+# leave a truncated launchctl in place. cat rather than scp: the ramdisk ships
+# no sftp-server, and scp -r would dereference symlinks anyway.
+"$SSHPASS" -p alpine ssh "${SSH_OPTS[@]}" root@localhost \
+    "/bin/cat > '$DEV_JB/usr/bin/launchctl.new'" < "$LAUNCHCTL" \
+    || { print -u2 "[!] could not transfer launchctl"; exit 1; }
+
+DEV_LAUNCHCTL_SIZE=$(sshdev "stat -f %z '$DEV_JB/usr/bin/launchctl.new'" 2>/dev/null | tr -d ' \r')
+LOCAL_LAUNCHCTL_SIZE=$(stat -f %z "$LAUNCHCTL")
+[[ "$DEV_LAUNCHCTL_SIZE" == "$LOCAL_LAUNCHCTL_SIZE" ]] || {
+    print -u2 "[!] launchctl transfer truncated: got $DEV_LAUNCHCTL_SIZE want $LOCAL_LAUNCHCTL_SIZE"
+    sshdev "/bin/rm -f '$DEV_JB/usr/bin/launchctl.new'"
+    exit 1
+}
+
+sshdev "/usr/sbin/chown 0:0 '$DEV_JB/usr/bin/launchctl.new' && \
+        /bin/chmod 0755 '$DEV_JB/usr/bin/launchctl.new' && \
+        /bin/mv '$DEV_JB/usr/bin/launchctl.new' '$DEV_JB/usr/bin/launchctl'" \
+    || { print -u2 "[!] could not install launchctl"; exit 1; }
+
 # ---------------------------------------------------------------- apt cache owner
 # Sileo downloads as mobile and only installs as root, so the apt archive directory
 # has to be writable by mobile or every install dies with "Unable to fetch some
@@ -244,6 +290,10 @@ chk "sudo is setuid root"         "ls -l '$DEV_JB/usr/bin/sudo' | cut -c1-10"   
 chk "sudo owned by root"          "[ -O '$DEV_JB/usr/bin/sudo' ] && echo root || echo notroot"  "root"
 chk "symlinks preserved (sh)"     "[ -L '$DEV_JB/usr/bin/sh' ] && echo yes || echo no"          "yes"
 chk "dpkg present"                "[ -x '$DEV_JB/usr/bin/dpkg' ] && echo yes || echo no"        "yes"
+# Size, not a digest: the ramdisk has no shasum, and the Mac-side digest was
+# already checked in preflight. This only has to prove the right file landed.
+chk "launchctl replaced"          "stat -f %z '$DEV_JB/usr/bin/launchctl'"                      "$(stat -f %z "$LAUNCHCTL")"
+chk "original launchctl kept"     "[ -f '$DEV_JB/usr/bin/launchctl.procursus' ] && echo yes || echo no" "yes"
 chk "apt present"                 "[ -x '$DEV_JB/usr/bin/apt' ] && echo yes || echo no"         "yes"
 # stat -f %u, not ls: the ramdisk ships no passwd or group file, so ls would print the
 # numeric id anyway, and -O only ever tests against the effective uid, which is root.

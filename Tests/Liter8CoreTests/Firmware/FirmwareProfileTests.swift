@@ -13,7 +13,7 @@ final class FirmwareProfileTests: XCTestCase {
                 + Data([0x00, 0xCC])
             let detected = KernelResolverProfileRegistry.detect(in: BinaryImage(data: data))
             XCTAssertEqual(detected?.id, expected.id)
-            XCTAssertEqual(detected?.build, expected.build)
+            XCTAssertEqual(detected?.builds, expected.builds)
         }
     }
 
@@ -22,12 +22,96 @@ final class FirmwareProfileTests: XCTestCase {
         XCTAssertNil(KernelResolverProfileRegistry.detect(in: image))
     }
 
+    /// A build ID must resolve to at most one profile.
+    ///
+    /// `builds` exists because one XNU fingerprint can ship under several Apple
+    /// build IDs, but the reverse must never happen: if two profiles claimed the
+    /// same build ID, `covers(build:)` would silently return whichever was
+    /// declared first and the ACM signature family could be picked from the
+    /// wrong kernel.
+    func testNoBuildIDIsClaimedByTwoProfiles() {
+        let claimed = KernelResolverProfileRegistry.profiles.flatMap(\.builds)
+        XCTAssertEqual(
+            claimed.count, Set(claimed).count,
+            "a build ID appears in more than one profile: \(claimed.sorted())"
+        )
+    }
+
+    /// Fingerprints must stay unique, or `detect` silently answers nil.
+    ///
+    /// Two profiles sharing a fingerprint makes `matches.count == 1` false and
+    /// every kernel plan loses its variant selection with no error. Builds that
+    /// share an XNU version belong in one profile's `builds`, not in two.
+    func testFingerprintsAreUniqueAcrossProfiles() {
+        let fingerprints = KernelResolverProfileRegistry.profiles.map(\.embeddedFingerprint)
+        XCTAssertEqual(fingerprints.count, Set(fingerprints).count)
+    }
+
+    /// 27.2 gets its own ACM family even though most shapes still match.
+    ///
+    /// Probing 24A435's signatures against 24B5084k matches 23 of 26, which is
+    /// exactly the situation where sharing a variant looks harmless and then
+    /// lets one build's shapes stand in for another's. The registry must keep
+    /// them apart, and both must still resolve to a real recorded family.
+    func testTwoSevenTwoUsesItsOwnACMFamily() throws {
+        let release = try XCTUnwrap(
+            KernelResolverProfileRegistry.profiles.first { $0.covers(build: "24A435") }
+        )
+        let twoSevenTwo = try XCTUnwrap(
+            KernelResolverProfileRegistry.profiles.first { $0.covers(build: "24B5084k") }
+        )
+        let releaseVariant = try XCTUnwrap(
+            release.variants(for: KernelCredentialManagerResolver.name)
+        )
+        let newVariant = try XCTUnwrap(
+            twoSevenTwo.variants(for: KernelCredentialManagerResolver.name)
+        )
+
+        XCTAssertNotEqual(newVariant.signature, releaseVariant.signature)
+        // The patch itself did not change, only where to apply it.
+        XCTAssertEqual(newVariant.payload, releaseVariant.payload)
+        XCTAssertNotNil(KernelCredentialManagerSignatures.variant(named: newVariant.signature))
+    }
+
+    /// Every registered ACM signature variant must name 26 methods, in one order.
+    ///
+    /// The resolver scores four bodies against the entries either side of them,
+    /// so a family that dropped or reordered an entry would still resolve and
+    /// would silently patch the wrong function.
+    func testEveryACMVariantDescribesTheSameTwentySixMethods() throws {
+        let ids = KernelResolverProfileRegistry.profiles.compactMap {
+            $0.variants(for: KernelCredentialManagerResolver.name)?.signature
+        }
+        XCTAssertFalse(ids.isEmpty)
+
+        var reference: [String]?
+        for id in ids {
+            let variant = try XCTUnwrap(KernelCredentialManagerSignatures.variant(named: id))
+            let names = variant.functions.map(\.name)
+            XCTAssertEqual(names.count, 26, "\(id) must describe 26 methods")
+            if let reference {
+                XCTAssertEqual(names, reference, "\(id) must keep the shared method order")
+            } else {
+                reference = names
+            }
+        }
+    }
+
+    /// 24A437 is 24A435 rebuilt, and both must select the same reviewed profile.
+    func testReleaseProfileCoversBothShippedBuildIDs() throws {
+        let release = try XCTUnwrap(
+            KernelResolverProfileRegistry.profiles.first { $0.covers(build: "24A435") }
+        )
+        XCTAssertTrue(release.covers(build: "24A437"))
+        XCTAssertFalse(release.covers(build: "24A5390f"))
+    }
+
     func testEarlyBetasShareACMSignaturesAndPayload() throws {
         let beta2 = try XCTUnwrap(
-            KernelResolverProfileRegistry.profiles.first { $0.build == "24A5370h" }
+            KernelResolverProfileRegistry.profiles.first { $0.covers(build: "24A5370h") }
         )
         let beta4 = try XCTUnwrap(
-            KernelResolverProfileRegistry.profiles.first { $0.build == "24A5390f" }
+            KernelResolverProfileRegistry.profiles.first { $0.covers(build: "24A5390f") }
         )
         let beta2Variants = try XCTUnwrap(beta2.variants(for: KernelCredentialManagerResolver.name))
         let beta4Variants = try XCTUnwrap(beta4.variants(for: KernelCredentialManagerResolver.name))
@@ -48,10 +132,10 @@ final class FirmwareProfileTests: XCTestCase {
     /// not describe.
     func testReleaseProfileUsesItsOwnACMSignatureFamily() throws {
         let release = try XCTUnwrap(
-            KernelResolverProfileRegistry.profiles.first { $0.build == "24A435" }
+            KernelResolverProfileRegistry.profiles.first { $0.covers(build: "24A435") }
         )
         let beta4 = try XCTUnwrap(
-            KernelResolverProfileRegistry.profiles.first { $0.build == "24A5390f" }
+            KernelResolverProfileRegistry.profiles.first { $0.covers(build: "24A5390f") }
         )
         let releaseVariants = try XCTUnwrap(
             release.variants(for: KernelCredentialManagerResolver.name)

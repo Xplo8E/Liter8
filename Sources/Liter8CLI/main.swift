@@ -8,12 +8,15 @@ private func usage() -> Never {
       liter8 resolve <component> <plan> <input> [options]
       liter8 apply <component> <plan> <input> <output> [options]
       liter8 fw <actions|prepare|prepare-rootfs|unmount-rootfs|make-cfw|capture-ticket|get-rd|get-boot|verify-cfw|restore-cfw|boot-rd|boot|bootstrap|provision|finalize|setup-shell> [options]
+      liter8 survey <extracted-firmware-directory>
+      liter8 acm-probe <kernelcache> <signature-variant>
       liter8 profile <binary>
       liter8 profiles
       liter8 fixture <component> <plan> <input> <manifest.json>
           --device <name> --board <board> --build <build>
           --component-name <component> [--boot-args <literal>]
       liter8 inspect <binary> segments
+      liter8 inspect <binary> page-tail-runs [count]
       liter8 inspect <binary> strings <text>
       liter8 inspect <binary> objc-methods <selector> [words]
       liter8 inspect <binary> <xrefs|func|calls> <offset>
@@ -26,7 +29,7 @@ private func usage() -> Never {
       liter8 setup [--resource-dir <directory>]
 
     components and plans:
-      iboot       ibss-validate, ibss-bootargs, ibss-normal, ibss-restore,
+      iboot       ibss-validate, ibss-bootargs, ibss-normal, ibss-restore, ibec-restore,
                   ibss-ramdisk, ibss-skip-display-init,
                   ibec-ignore-pinot-failure, ibec-force-pinot-id
       kernel      restore, boot-policy, aks, sep-silence, sep,
@@ -49,7 +52,7 @@ private func usage() -> Never {
     exit(2)
 }
 
-private struct ResolverOptions {
+struct ResolverOptions {
     var bootArguments: String?
     var panelID: UInt32?
     var json = false
@@ -59,12 +62,13 @@ private struct ResolverOptions {
 /// Keep the public CLI small while retaining descriptive internal resolver
 /// names and fixture IDs. Adding a plan is one table entry, not another command
 /// parser branch or usage line.
-private let resolverGroups: [String: [String: String]] = [
+let resolverGroups: [String: [String: String]] = [
     "iboot": [
         "ibss-validate": IBSSValidateResolver.name,
         "ibss-bootargs": IBSSBootArgsResolver.name,
         "ibss-normal": IBSSNormalResolver.name,
         "ibss-restore": IBSSRestoreResolver.name,
+        "ibec-restore": IBECRestoreResolver.name,
         "ibss-ramdisk": IBSSRamdiskResolver.name,
         "ibss-skip-display-init": IBSSSkipDisplayInitResolver.name,
         "ibec-ignore-pinot-failure": IBECPinotIgnoreFailureResolver.name,
@@ -101,7 +105,7 @@ private let resolverGroups: [String: [String: String]] = [
     ],
 ]
 
-private func resolverName(component: String, plan: String) -> String? {
+func resolverName(component: String, plan: String) -> String? {
     resolverGroups[component]?[plan]
 }
 
@@ -153,7 +157,7 @@ private func parseResolverOptions(
 
 /// Dispatch a named semantic resolver. The known-offset fixture registry lives
 /// elsewhere and is intentionally not reachable from this function.
-private func resolveRecords(
+func resolveRecords(
     named name: String,
     in image: BinaryImage,
     options: ResolverOptions
@@ -173,6 +177,9 @@ private func resolveRecords(
     case IBSSRestoreResolver.name:
         guard options.bootArguments == nil, options.panelID == nil else { usage() }
         return try IBSSRestoreResolver().resolve(in: image)
+    case IBECRestoreResolver.name:
+        guard options.bootArguments == nil, options.panelID == nil else { usage() }
+        return try IBECRestoreResolver().resolve(in: image)
     case IBSSRamdiskResolver.name:
         guard options.bootArguments == nil, options.panelID == nil else { usage() }
         return try IBSSRamdiskResolver().resolve(in: image)
@@ -327,7 +334,10 @@ private func reportProfile(
 
     var lines = [
         "firmware profile: \(profile.id)",
-        "  iOS/build: \(profile.productVersion) (\(profile.build))",
+        // Plural when a fingerprint covers several Apple build IDs: the
+        // kernelcache cannot say which of them this artifact is.
+        "  iOS/build\(profile.builds.count == 1 ? "" : "s"): \(profile.productVersion) "
+            + "(\(profile.builds.joined(separator: ", ")))",
         "  boards: \(profile.boards.joined(separator: ", "))",
         "  component: \(profile.component)",
     ]
@@ -344,7 +354,8 @@ private func reportProfile(
 }
 
 private func printProfile(_ profile: KernelResolverProfile) {
-    print("\(profile.id): iOS \(profile.productVersion), build \(profile.build)")
+    let buildLabel = profile.builds.count == 1 ? "build" : "builds"
+    print("\(profile.id): iOS \(profile.productVersion), \(buildLabel) \(profile.builds.joined(separator: ", "))")
     print("  boards: \(profile.boards.joined(separator: ", "))")
     print("  component: \(profile.component)")
     for resolver in profile.resolverVariants.keys.sorted() {
@@ -574,6 +585,42 @@ do {
         let records = try resolveRecords(named: resolver, in: image, options: options)
         try printRecords(records, json: options.json)
 
+    case "survey":
+        guard arguments.count == 2 else { usage() }
+        let status = try Survey.run(
+            directory: URL(fileURLWithPath: arguments[1]).standardizedFileURL
+        )
+        exit(status)
+
+    case "acm-probe":
+        guard arguments.count == 3 else { usage() }
+        let artifact = try FirmwareArtifact(contentsOf: URL(fileURLWithPath: arguments[1]))
+        let reports = try KernelCredentialManagerProbe.probe(
+            image: BinaryImage(data: artifact.payload),
+            variant: arguments[2]
+        )
+        let exact = reports.filter(\.isExact).count
+        print("FUNCTION                                     WORDS  RESULT")
+        print("-------------------------------------------------------------------")
+        for report in reports {
+            let result: String
+            if report.isExact {
+                result = "exact at 0x\(String(report.offsets[0], radix: 16))"
+            } else if report.matchedWords == 0 {
+                result = "NO MATCH even at quarter length"
+            } else if report.offsets.count == 1 {
+                result = "\(report.matchedWords)/\(report.recordedWords) words"
+                    + " at 0x\(String(report.offsets[0], radix: 16))"
+            } else {
+                result = "\(report.matchedWords)/\(report.recordedWords) words,"
+                    + " \(report.offsets.count) sites (ambiguous)"
+            }
+            print("\(report.name.padding(toLength: 44, withPad: " ", startingAt: 0))"
+                + "\(String(report.recordedWords).padding(toLength: 7, withPad: " ", startingAt: 0))\(result)")
+        }
+        print("-------------------------------------------------------------------")
+        print("\(exact)/\(reports.count) usable as recorded")
+
     case "profile":
         guard arguments.count == 2 else { usage() }
         let artifact = try FirmwareArtifact(contentsOf: URL(fileURLWithPath: arguments[1]))
@@ -676,10 +723,27 @@ do {
     case "inspect":
         guard arguments.count >= 3 else { usage() }
         let artifact = try FirmwareArtifact(contentsOf: URL(fileURLWithPath: arguments[1]))
-        let inspector = try BinaryInspector(image: BinaryImage(data: artifact.payload))
+        let inspectImage = BinaryImage(data: artifact.payload)
         let query = arguments[2]
         let parameters = Array(arguments.dropFirst(3))
 
+        // iBoot is raw ARM64, not a Mach-O, so BinaryInspector cannot even be
+        // constructed for it. Queries that need only the bytes are answered
+        // before that point, or they would be unavailable on exactly the
+        // component they were added to debug.
+        if query == "page-tail-runs" {
+            guard parameters.count <= 1 else { usage() }
+            let limit = parameters.first.flatMap(Int.init) ?? 12
+            let runs = IBSSBootArgsResolver().pageTailRuns(in: inspectImage)
+            print("page-tail zero runs, largest first: \(runs.count)")
+            for run in runs.prefix(limit) {
+                let span = String(format: "0x%llx..0x%llx", UInt64(run.start), UInt64(run.end))
+                print("  \(span)  \(run.end - run.start) bytes")
+            }
+            break
+        }
+
+        let inspector = try BinaryInspector(image: inspectImage)
         switch query {
         case "segments":
             guard parameters.isEmpty else { usage() }

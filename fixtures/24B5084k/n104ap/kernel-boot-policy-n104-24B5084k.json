@@ -1,0 +1,38 @@
+{
+  "expectedOutputSHA256" : "1def038b9eb1916b22058254f9b0cc001c3683cffbdf9a8f84f8e24386e50ca7",
+  "expectedPatches" : [
+    {
+      "id" : "kernel.persona.uid-zero",
+      "offset" : 58576772,
+      "originalBytes" : "e8000034",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.persona.gid-zero",
+      "offset" : 58576780,
+      "originalBytes" : "a8000034",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.usb.restore-mode-result",
+      "offset" : 43172352,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "200080d2"
+    },
+    {
+      "id" : "kernel.usb.restore-mode-return",
+      "offset" : 43172356,
+      "originalBytes" : "ff4301d1",
+      "replacementBytes" : "c0035fd6"
+    }
+  ],
+  "expectedSize" : 68927488,
+  "resolver" : "kernel-boot-policy",
+  "sha256" : "cff26a8a9c3184d38cc3df3b284ff61cc9dd19ab11517e86aaf8019f3a95d76f",
+  "target" : {
+    "board" : "n104ap",
+    "build" : "24B5084k",
+    "component" : "kernelcache.release.iphone12b",
+    "device" : "iPhone 11"
+  }
+}

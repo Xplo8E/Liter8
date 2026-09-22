@@ -1,0 +1,44 @@
+{
+  "expectedOutputSHA256" : "6b9103f0741c6060aeff755eb9b72218be84f8a98be349bd16253a132bf4e01d",
+  "expectedPatches" : [
+    {
+      "id" : "restored-external.fdr-result",
+      "offset" : 518520,
+      "originalBytes" : "e0031aaa",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "restored-external.baseband.present",
+      "offset" : 302520,
+      "originalBytes" : "88150090",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "restored-external.baseband.present-return",
+      "offset" : 302524,
+      "originalBytes" : "082947f9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "restored-external.baseband.legacy",
+      "offset" : 302400,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "restored-external.baseband.legacy-return",
+      "offset" : 302404,
+      "originalBytes" : "f44fbea9",
+      "replacementBytes" : "c0035fd6"
+    }
+  ],
+  "expectedSize" : 3357024,
+  "resolver" : "restored-external-fdr",
+  "sha256" : "4f018781b4b9a338952843e3a78a42bb3d7c32ccb85a5e797d9b39bb9a87d074",
+  "target" : {
+    "board" : "n104ap",
+    "build" : "24B5084k",
+    "component" : "restored_external",
+    "device" : "iPhone 11"
+  }
+}

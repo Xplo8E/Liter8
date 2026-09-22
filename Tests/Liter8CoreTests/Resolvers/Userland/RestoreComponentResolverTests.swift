@@ -21,10 +21,11 @@ final class RestoreComponentResolverTests: XCTestCase {
             in: BinaryImage(contentsOf: binary)
         )
 
-        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.count, 5)
         XCTAssertEqual(records[0].offset, 0x7E558)
         XCTAssertEqual(records[0].originalWord, 0xAA1A03E0)
         XCTAssertEqual(records[0].replacementWord, 0xD2800000)
+        XCTAssertEqual(records.map(\.offset), [0x7E558, 0x49E40, 0x49E44, 0x49DC8, 0x49DCC])
     }
 
     func testASRResolverFollowsReporterCallChain() throws {
@@ -54,7 +55,7 @@ final class RestoreComponentResolverTests: XCTestCase {
             // test normally instead of being converted into a failed assert.
             let binary = try fixture(binaryPath)
             let records = try manifest.verify(binaryAt: binary)
-            XCTAssertEqual(records.count, 1, manifestPath)
+            XCTAssertEqual(records.count, manifestPath.contains("restored-external") ? 5 : 1, manifestPath)
         }
     }
 }

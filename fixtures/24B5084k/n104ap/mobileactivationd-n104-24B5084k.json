@@ -1,0 +1,44 @@
+{
+  "expectedOutputSHA256" : "59806f39255c7c1b4f8d034ec3bdfab343ce28cbd0eaf71989b8897e6cacef5a",
+  "expectedPatches" : [
+    {
+      "id" : "mobileactivationd.should-hactivate",
+      "offset" : 3064680,
+      "originalBytes" : "00504039",
+      "replacementBytes" : "20008052"
+    },
+    {
+      "id" : "mobileactivationd.activation-state.migration-gate",
+      "offset" : 3316712,
+      "originalBytes" : "76050036",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "mobileactivationd.activation-state.adrp",
+      "offset" : 3316808,
+      "originalBytes" : "28050090",
+      "replacementBytes" : "200600d0"
+    },
+    {
+      "id" : "mobileactivationd.activation-state.add",
+      "offset" : 3316812,
+      "originalBytes" : "08410c91",
+      "replacementBytes" : "00e01b91"
+    },
+    {
+      "id" : "mobileactivationd.activation-state.dereference",
+      "offset" : 3316816,
+      "originalBytes" : "000140f9",
+      "replacementBytes" : "1f2003d5"
+    }
+  ],
+  "expectedSize" : 4658208,
+  "resolver" : "mobileactivationd",
+  "sha256" : "1ad745c398630cf8f1c68d507769634b9e51fc88b41f875b68aa772c5ae396f3",
+  "target" : {
+    "board" : "n104ap",
+    "build" : "24B5084k",
+    "component" : "mobileactivationd",
+    "device" : "iPhone 11"
+  }
+}

@@ -2,6 +2,10 @@
 .swiftpm/
 .vscode/
 .liter8/
+# Same role as .liter8/ for an explicitly named work directory: extracted IPSW
+# components, decrypted rootfs images and their mounts. Tens of GB of Apple
+# firmware that must never be committed.
+.ios27/
 .setup-cache/
 tools/idevicerestore
 tools/.idevicerestore-commit
@@ -11,3 +15,7 @@ tools/*.setup-new
 # the reviewed Objective-C sources before copying them to the phone.
 device/photoforce/pfruntimeprobe
 device/photoforce/pfwatch
+.ios272/
+
+# macOS Finder metadata. Not content, and it churns on every directory view.
+.DS_Store

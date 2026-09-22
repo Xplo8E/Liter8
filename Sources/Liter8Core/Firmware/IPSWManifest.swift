@@ -227,6 +227,41 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
             )
         ),
+        // Device-validated on an iPhone 11: erase restore, normal boot, repeat
+        // boot and bootstrap all passed. Repeat boot is called out separately
+        // because a first boot that works and a second that does not is a
+        // failure mode this device has produced before, and it is the
+        // difference between "it booted" and reviewed.
+        //
+        // Finalization, Dropbear, persona 99, icon token and PosterBoard repair
+        // are recorded on the 24A435 entry but have not been exercised here, so
+        // they are deliberately not claimed.
+        //
+        // Every value below was read from this build rather than carried over:
+        // 27.2 ships a different XNU, its own AppleCredentialManager signature
+        // family, an iBSS whose boot-argument padding moved off a page
+        // boundary, and a Setup with one fewer pane controller (65, not 66).
+        // The method used to measure them reproduces 24A435's recorded values
+        // exactly, which is why these are trusted.
+        DeviceWorkflowProfile(
+            id: "iphone12,1-n104ap-24B5084k",
+            productVersion: "27.2",
+            build: "24B5084k",
+            productType: "iPhone12,1",
+            deviceClass: "n104ap",
+            chipID: 0x8030,
+            boardID: 0x04,
+            extractedDirectoryName: "iPhone12,1_27.2_24B5084k_Restore",
+            validationState: .reviewed,
+            launchdSHA256: "b2445ebe4ead365eabe6214f7f7a75e107a3ebd5c92b683058dab1eee1432a55",
+            launchdCacheSHA256: "1babf8e67f857f2ffd4d037d9fb84ff80dd71427679e764bb61734deedbeedc9",
+            launchdCacheDaemonCount: 733,
+            setupControllerMethodCount: 65,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [.skipDisplayInitialization],
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
+            )
+        ),
     ]
 
     public static func profile(

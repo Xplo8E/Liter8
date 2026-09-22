@@ -1,0 +1,50 @@
+{
+  "expectedOutputSHA256" : "770513d44a695e66e8c27dd365b016cb51bbd55f3b94e5ce406644f0cb1ae309",
+  "expectedPatches" : [
+    {
+      "id" : "txm.query-module.0",
+      "offset" : 253956,
+      "originalBytes" : "65faff97",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "txm.query-module.1",
+      "offset" : 254316,
+      "originalBytes" : "0bfaff97",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "txm.query-module.2",
+      "offset" : 254720,
+      "originalBytes" : "a6f9ff97",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "txm.constraints.restricted-entitlements",
+      "offset" : 276480,
+      "originalBytes" : "20fdff54",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "txm.constraints.signature-type-range",
+      "offset" : 276588,
+      "originalBytes" : "a3000054",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "txm.constraints.signature-type-null",
+      "offset" : 276596,
+      "originalBytes" : "690000b4",
+      "replacementBytes" : "1f2003d5"
+    }
+  ],
+  "expectedSize" : 557088,
+  "resolver" : "txm-restore",
+  "sha256" : "f3979dbe47dc7085dcf46fcdc485f605b49b08a85a04be04dde9999659446c38",
+  "target" : {
+    "board" : "n104ap",
+    "build" : "24B5084k",
+    "component" : "TXM",
+    "device" : "iPhone 11"
+  }
+}
