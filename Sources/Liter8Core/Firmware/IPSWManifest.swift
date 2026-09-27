@@ -262,6 +262,34 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
             )
         ),
+        // iOS 27.2 beta 2. Every plan resolves and all four oracles below were
+        // measured from this build's own root filesystem, but no restore or
+        // boot has been attempted on it yet, so this entry does not carry the
+        // device-run record the 24A435 and 24B5084k entries do.
+        //
+        // The daemon count and Setup controller count happen to match beta 1
+        // exactly. That is a measurement, not an assumption: the two digests
+        // above them differ, so the images are not the same and the counts were
+        // read rather than carried across.
+        DeviceWorkflowProfile(
+            id: "iphone12,1-n104ap-24B5089g",
+            productVersion: "27.2",
+            build: "24B5089g",
+            productType: "iPhone12,1",
+            deviceClass: "n104ap",
+            chipID: 0x8030,
+            boardID: 0x04,
+            extractedDirectoryName: "iPhone12,1_27.2_24B5089g_Restore",
+            validationState: .reviewed,
+            launchdSHA256: "05339fedc5f34c31704b2ed4e92e2e7e92f1bf1ef401c04ac5389f62b07e4490",
+            launchdCacheSHA256: "bc13dfbacf37af78be13353fcea82a3f7b0780788a00b9d09f88982113bc0098",
+            launchdCacheDaemonCount: 733,
+            setupControllerMethodCount: 65,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [.skipDisplayInitialization],
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
+            )
+        ),
     ]
 
     public static func profile(

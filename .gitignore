@@ -16,6 +16,7 @@ tools/*.setup-new
 device/photoforce/pfruntimeprobe
 device/photoforce/pfwatch
 .ios272/
+.ios272b2/
 
 # macOS Finder metadata. Not content, and it churns on every directory view.
 .DS_Store

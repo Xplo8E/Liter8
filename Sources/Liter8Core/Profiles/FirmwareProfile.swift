@@ -155,6 +155,27 @@ public enum KernelResolverProfileRegistry {
                 ),
             ]
         ),
+        KernelResolverProfile(
+            // A separate profile from beta 1 because the fingerprint differs,
+            // which is what detection keys on. The two seeds cannot share one
+            // entry the way 24A435 and 24A437 do: those carry the same XNU
+            // string, these do not.
+            id: "ios272b2-24B5089g-n104ap",
+            productVersion: "27.2 beta 2",
+            builds: ["24B5089g"],
+            boards: ["n104ap"],
+            component: "kernelcache.release.iphone12b",
+            embeddedFingerprint: "xnu-13432.40.162~93/RELEASE_ARM64_T8030",
+            resolverVariants: [
+                // Shape-identical to beta 1, recorded separately because the
+                // raw words differ in the fields masked as layout drift. See
+                // KernelCredentialManagerSignatures.release24B5089gV1.
+                "kernel-credential-manager": ResolverVariantProfile(
+                    signature: "ios272b2-24B5089g-acm-v1",
+                    payload: "acm-return-success-v1"
+                ),
+            ]
+        ),
     ]
 
     /// Detect a profile using evidence embedded in the artifact itself.

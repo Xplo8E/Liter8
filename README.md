@@ -19,10 +19,11 @@ The project replaces build-specific patch scripts and hardcoded offsets with pro
 | iOS 27 RC/release, `24A435`  | iPhone 11, `n104ap` | End-to-end verified |
 | iOS 27.0 release, `24A437`   | iPhone 11, `n104ap` | End-to-end verified |
 | iOS 27.2 beta 1, `24B5084k`  | iPhone 11, `n104ap` | End-to-end verified |
+| iOS 27.2 beta 2, `24B5089g`  | iPhone 11, `n104ap` | Patches verified, no device run |
 
 **End-to-end verified** means an erase restore, normal boot and repeat boot passed on hardware. Repeat boot is listed separately because a first boot that works and a second that does not is a distinct failure mode.
 
-Every patch is additionally pinned by an exact-build fixture recording the input digest, each offset with its original and replacement bytes, and the digest of the complete patched output.
+**Patches verified, no device run** means every plan resolves and the custom firmware builds and verifies its own artifacts, but nothing has been restored or booted on that build.
 
 `24A437` is `24A435` rebuilt and the two share one firmware profile: identical iBSS, iBEC, TXM and SPTM, and a kernelcache differing only in build-host paths and Mach-O UUIDs.
 
