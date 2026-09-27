@@ -31,12 +31,13 @@ public struct IBSSBootArgsResolver: Sendable {
     /// Callers may supply a different literal, but `%` is rejected because the
     /// selected pointer remains an `snprintf` format string.
     ///
-    /// `serial=3` and `backlight-level=1024` do not both fit: the 79-byte
-    /// page-tail run leaves 63 characters, and keeping both needs 78. The
-    /// kernel console is what this literal exists to expose, so the backlight
-    /// request is the one that goes. Pass --boot-args to get it back.
-    public static let normalBootArguments =
-        "-v debug=0x2014e launchd_unsecure_cache=1 wdt=-1 serial=3"
+    /// `serial=3` is appended only when `--serial` was passed to the command
+    /// that builds the artifact. See `SerialConsole`: it moves the console to
+    /// the UART and the screen stops showing this log, so it cannot be the
+    /// default.
+    public static var normalBootArguments: String {
+        SerialConsole.applied(to: "-v debug=0x2014e launchd_unsecure_cache=1 wdt=-1")
+    }
 
     public let bootArguments: String
 

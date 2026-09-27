@@ -1,5 +1,5 @@
 {
-  "expectedOutputSHA256" : "e179183c6d597969649f23a5259a29007d358a214baafec0cb6af65d4cd6f391",
+  "expectedOutputSHA256" : "6bbb8aa6048deb54131285ebae2a43a2cf836717ab42952a68f29fcb55457bf3",
   "expectedPatches" : [
     {
       "id" : "ibss.validate-asn1.branch",
@@ -28,8 +28,8 @@
     {
       "id" : "ibss.boot-args.string",
       "offset" : 2543552,
-      "originalBytes" : "0000000000000000000000000000000000000000000000000000000000000000000000",
-      "replacementBytes" : "2d76207764743d2d312072643d6d6430202d726573746f72652073657269616c3d3300"
+      "originalBytes" : "0000000000000000000000000000000000000000000000000000",
+      "replacementBytes" : "2d76207764743d2d312072643d6d6430202d726573746f726500"
     },
     {
       "id" : "ibec.recovery-nonce.preserve",

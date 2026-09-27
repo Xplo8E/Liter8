@@ -19,6 +19,15 @@ import XCTest
 final class ReleaseFixtureTests: XCTestCase {
     private var packageRoot: URL { liter8PackageRoot(from: #filePath) }
 
+    /// These manifests pin the **default** boot-argument literals, so the suite
+    /// must not inherit `--serial` from whoever ran it. A developer with
+    /// `LITER8_SERIAL=1` exported would otherwise see every iBoot fixture fail
+    /// for a reason that has nothing to do with their change.
+    override func setUp() {
+        super.setUp()
+        unsetenv(SerialConsole.environmentKey)
+    }
+
     private func binary(_ name: String, build: String = "24A435") -> URL {
         liter8PrivateFixtureRoot(from: #filePath)
             .appendingPathComponent("offsets/\(build)/\(name)")

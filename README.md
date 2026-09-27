@@ -69,6 +69,9 @@ export WORK_DIR="$PWD/.liter8"
 
 `fw prepare` identifies the build from `BuildManifest.plist`; the IPSW filename is ignored. Set `IPSW_FILE` if you do not want to pass `--file`.
 
+> [!IMPORTANT]
+> `fw make-cfw`, `fw get-rd` and `fw get-boot` accept `--serial`, adding `serial=3` to the boot arguments of the artifact they build. Off by default: it moves the kernel console to the UART, and the device then shows no boot log on its own screen. The literal is fixed at build time, so pass it per artifact.
+
 ### Two workflows
 
 Everything after `fw prepare` belongs to one of two workflows. They share the prepared IPSW and nothing else. Choose deliberately.

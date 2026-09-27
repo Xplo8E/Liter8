@@ -8,7 +8,11 @@ import Foundation
 /// latter. That keeps all three modes on the same fail-closed discovery path.
 public struct IBSSRestoreResolver: Sendable {
     public static let name = "ibss-restore"
-    public static let bootArguments = "-v wdt=-1 rd=md0 -restore serial=3"
+    /// `serial=3` only when `--serial` was passed to `fw make-cfw`. See
+    /// `SerialConsole`.
+    public static var bootArguments: String {
+        SerialConsole.applied(to: "-v wdt=-1 rd=md0 -restore")
+    }
 
     public init() {}
 
@@ -100,11 +104,12 @@ public struct IBECRestoreResolver: Sendable {
 /// its backlight must be requested explicitly just like the normal boot path.
 public struct IBSSRamdiskResolver: Sendable {
     public static let name = "ibss-ramdisk"
-    // Length is not free here. The 24A435 iBSS page-tail zero run is 79 bytes at
-    // 0x26cfb1, and after the 8-byte guard gap and 16-byte alignment the slot
-    // holds 64, so 63 characters plus NUL. Anything longer fails to resolve.
-    public static let bootArguments =
-        "rd=md0 -v wdt=-1 debug=0x2014e serial=3 backlight-level=1024"
+    /// `serial=3` only when `--serial` was passed to `fw get-rd`. See
+    /// `SerialConsole`. The backlight request stays unconditional: an SSHRD
+    /// with a dark screen and no serial cable shows nothing at all.
+    public static var bootArguments: String {
+        SerialConsole.applied(to: "rd=md0 -v wdt=-1 debug=0x2014e backlight-level=1024")
+    }
 
     public init() {}
 

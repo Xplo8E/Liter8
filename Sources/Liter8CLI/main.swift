@@ -46,6 +46,10 @@ private func usage() -> Never {
       --sshrd-payload <ssh.tar.gz>
       --irecovery <custom-irecovery>  --idevicerestore <executable>
       --rootfs <mounted-root-filesystem>  --check
+      --serial  add serial=3 to the boot arguments of the artifact being built
+                (make-cfw, get-rd, get-boot). Off by default: it moves the
+                kernel console to the UART and the device screen stops showing
+                the verbose boot log.
       --records-out <records.json>  write records from the same apply operation
 
     """.utf8))
@@ -408,8 +412,14 @@ do {
         var rootfsArgument: String?
         var checkOnly = false
         var includeExperimental = false
+        var serialConsole = false
         var index = 2
         while index < arguments.count {
+            if arguments[index] == "--serial" {
+                serialConsole = true
+                index += 1
+                continue
+            }
             if arguments[index] == "--check" {
                 checkOnly = true
                 index += 1
@@ -536,7 +546,20 @@ do {
                     "--check is only valid for bootstrap, provision, finalize and setup-shell"
                 )
             }
+            // The literal is written into iBSS and iBEC when the artifact is
+            // built, so --serial is meaningful only for the commands that build
+            // one. Accepting it elsewhere would look like it had an effect.
+            let serialBuildActions: Set<String> = ["make-cfw", "get-rd", "get-boot"]
+            guard !serialConsole || serialBuildActions.contains(action) else {
+                throw PatchfinderError.invalidFixture(
+                    "--serial is only valid for make-cfw, get-rd and get-boot, "
+                        + "because the boot-argument literal is fixed when the artifact is built"
+                )
+            }
             var workflowEnvironment: [String: String] = [:]
+            if serialConsole {
+                workflowEnvironment[SerialConsole.environmentKey] = "1"
+            }
             if let irecoveryArgument {
                 workflowEnvironment["LITER8_IRECOVERY"] = irecoveryArgument
             }
