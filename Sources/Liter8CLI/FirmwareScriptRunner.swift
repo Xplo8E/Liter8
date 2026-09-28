@@ -132,8 +132,10 @@ enum FirmwareScriptRunner {
         print("  helper: \(scriptName)")
         fflush(stdout)
 
-        try process.run()
-        process.waitUntilExit()
+        // This is the path that reaches the device. Interrupting Liter8 has to
+        // stop the helper and the restore tools it spawned, not leave them
+        // streaming to a phone in DFU. See InterruptibleProcess.
+        try InterruptibleProcess.run(process)
         guard process.terminationReason == .exit, process.terminationStatus == 0 else {
             throw PatchfinderError.invalidFixture(
                 "\(scriptName) exited with status \(process.terminationStatus)"

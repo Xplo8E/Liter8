@@ -102,6 +102,10 @@ public enum IPSWUnzip {
 
         let finished = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in finished.signal() }
+        // Extraction drives its own wait so it can print progress, so it
+        // supervises the child rather than using InterruptibleProcess.run.
+        let restoreSignals = InterruptibleProcess.beginSupervising(process)
+        defer { restoreSignals() }
         try process.run()
         while finished.wait(timeout: .now() + 5) == .timedOut {
             let extracted = logicalFileSize(of: destination)
@@ -328,6 +332,10 @@ public enum IPSWUnzip {
         process.standardOutput = standardOutput
         process.standardError = diagnostics.handle
 
+        // Reads the child's output as it arrives, so it supervises rather than
+        // using InterruptibleProcess.run.
+        let restoreSignals = InterruptibleProcess.beginSupervising(process)
+        defer { restoreSignals() }
         try process.run()
         var result = Data()
         while let chunk = try standardOutput.fileHandleForReading.read(upToCount: 64 * 1024),

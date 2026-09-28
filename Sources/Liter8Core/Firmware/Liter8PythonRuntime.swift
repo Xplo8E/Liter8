@@ -174,8 +174,9 @@ public enum Liter8PythonRuntime {
         process.standardInput = FileHandle.standardInput
         process.standardOutput = FileHandle.standardOutput
         process.standardError = FileHandle.standardError
-        try process.run()
-        process.waitUntilExit()
+        // Provisioning a venv downloads packages, so it is long enough to be
+        // worth interrupting. See InterruptibleProcess.
+        try InterruptibleProcess.run(process)
         guard process.terminationReason == .exit, process.terminationStatus == 0 else {
             throw PatchfinderError.invalidFixture(
                 "\(executable.lastPathComponent) exited with status \(process.terminationStatus)"
