@@ -19,7 +19,7 @@ The project replaces build-specific patch scripts and hardcoded offsets with pro
 | iOS 27 RC/release, `24A435`  | iPhone 11, `n104ap` | End-to-end verified |
 | iOS 27.0 release, `24A437`   | iPhone 11, `n104ap` | End-to-end verified |
 | iOS 27.2 beta 1, `24B5084k`  | iPhone 11, `n104ap` | End-to-end verified |
-| iOS 27.2 beta 2, `24B5089g`  | iPhone 11, `n104ap` | Patches verified, no device run |
+| iOS 27.2 beta 2, `24B5089g`  | iPhone 11, `n104ap` | End-to-end verified |
 
 **End-to-end verified** means an erase restore, normal boot and repeat boot passed on hardware. Repeat boot is listed separately because a first boot that works and a second that does not is a distinct failure mode.
 
