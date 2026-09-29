@@ -116,12 +116,22 @@ public enum KernelResolverProfileRegistry {
             // is kept stable across later builds that share it, because it is
             // an identifier rather than a claim about which build is loaded.
             id: "ios27-24A435-n104ap",
-            productVersion: "27.0 RC/release",
+            productVersion: "27.0 RC/release, 27.0.1",
             // 24A437 is 24A435 rebuilt: identical iBSS/iBEC, TXM and SPTM, and
             // a kernelcache differing only in build-host paths and Mach-O
             // UUIDs. All 198 resolved records land on identical offsets with
             // identical original bytes, so both share this profile's variants.
-            builds: ["24A435", "24A437"],
+            //
+            // 27.0.1 (24A446) is the same relationship measured again against
+            // 24A437: iBSS, iBEC, SPTM and TXM are byte-identical, and the
+            // kernelcache differs in 6189 bytes spread over 778 runs, every one
+            // of them inside __TEXT (one LC_UUID), __PRELINK_TEXT (kext LC_UUIDs
+            // and `built <date> <time>` strings) or __PRELINK_INFO
+            // (DTPlatformBuild 24A429 -> 24A440). Not one differing byte lands
+            // in __TEXT_EXEC or __TEXT_BOOT_EXEC, and all 501 records resolved
+            // by the ten kernel plans match 24A437 on id, offset, original bytes
+            // and replacement bytes.
+            builds: ["24A435", "24A437", "24A446"],
             boards: ["n104ap"],
             component: "kernelcache.release.iphone12b",
             embeddedFingerprint: "xnu-13432.2.10~2/RELEASE_ARM64_T8030",

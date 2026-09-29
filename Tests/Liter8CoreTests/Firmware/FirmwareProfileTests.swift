@@ -97,12 +97,14 @@ final class FirmwareProfileTests: XCTestCase {
         }
     }
 
-    /// 24A437 is 24A435 rebuilt, and both must select the same reviewed profile.
-    func testReleaseProfileCoversBothShippedBuildIDs() throws {
+    /// 24A437 is 24A435 rebuilt and 24A446 is 27.0.1 on the same XNU. All three
+    /// must select the same reviewed profile.
+    func testReleaseProfileCoversEveryShippedBuildID() throws {
         let release = try XCTUnwrap(
             KernelResolverProfileRegistry.profiles.first { $0.covers(build: "24A435") }
         )
         XCTAssertTrue(release.covers(build: "24A437"))
+        XCTAssertTrue(release.covers(build: "24A446"))
         XCTAssertFalse(release.covers(build: "24A5390f"))
     }
 
@@ -186,5 +188,23 @@ final class FirmwareProfileTests: XCTestCase {
         XCTAssertEqual(beta?.validationState, .reviewed)
         XCTAssertEqual(beta?.launchdCacheDaemonCount, 731)
         XCTAssertEqual(beta?.setupControllerMethodCount, 65)
+    }
+
+    /// 27.0.1 became reviewed after its own erase restore, normal boot, repeat
+    /// boot and finalization on hardware.
+    ///
+    /// Its launchd digest and Setup count match 24A435 because those two files
+    /// are byte-identical across the builds. The service cache digest is what
+    /// proves the images are nevertheless different, so it is pinned here: two
+    /// entries agreeing on every oracle would be the signature of one having
+    /// been copied from the other instead of measured.
+    func testPointReleaseWorkflowIsReviewedAfterItsOwnDeviceRun() throws {
+        let release = try XCTUnwrap(DeviceWorkflowRegistry.profiles.first { $0.build == "24A435" })
+        let point = try XCTUnwrap(DeviceWorkflowRegistry.profiles.first { $0.build == "24A446" })
+        XCTAssertEqual(point.validationState, .reviewed)
+        XCTAssertEqual(point.productVersion, "27.0.1")
+        XCTAssertEqual(point.launchdSHA256, release.launchdSHA256)
+        XCTAssertEqual(point.setupControllerMethodCount, release.setupControllerMethodCount)
+        XCTAssertNotEqual(point.launchdCacheSHA256, release.launchdCacheSHA256)
     }
 }

@@ -18,6 +18,7 @@ The project replaces build-specific patch scripts and hardcoded offsets with pro
 | iOS 27 beta 4, `24A5390f`    | iPhone 11, `n104ap` | End-to-end verified |
 | iOS 27 RC/release, `24A435`  | iPhone 11, `n104ap` | End-to-end verified |
 | iOS 27.0 release, `24A437`   | iPhone 11, `n104ap` | End-to-end verified |
+| iOS 27.0.1, `24A446`         | iPhone 11, `n104ap` | End-to-end verified |
 | iOS 27.2 beta 1, `24B5084k`  | iPhone 11, `n104ap` | End-to-end verified |
 | iOS 27.2 beta 2, `24B5089g`  | iPhone 11, `n104ap` | End-to-end verified |
 
@@ -26,6 +27,8 @@ The project replaces build-specific patch scripts and hardcoded offsets with pro
 **Patches verified, no device run** means every plan resolves and the custom firmware builds and verifies its own artifacts, but nothing has been restored or booted on that build.
 
 `24A437` is `24A435` rebuilt and the two share one firmware profile: identical iBSS, iBEC, TXM and SPTM, and a kernelcache differing only in build-host paths and Mach-O UUIDs.
+
+`24A446` (27.0.1) joins that same profile, measured rather than assumed: its iBSS, iBEC, SPTM, TXM and every userland binary Liter8 patches are byte-identical to `24A437`, and its kernelcache differs only in Mach-O UUIDs, kext build timestamps and `DTPlatformBuild` strings. Not one differing byte lands in an executable segment, and all 501 records resolved by the kernel plans match `24A437` on offset and original bytes. It still carries its own device run rather than inheriting `24A437`'s.
 
 An unsupported IPSW fails before extraction. A recognized firmware profile never supplies patch offsets; offsets remain outputs of the resolvers.
 

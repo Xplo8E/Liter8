@@ -290,6 +290,50 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
             )
         ),
+        // iOS 27.0.1, device-validated on an iPhone 11: erase restore, SSHRD
+        // provisioning, normal boot, repeat boot, Procursus finalization,
+        // Dropbear, persona 99, icon token and PosterBoard repair all passed.
+        // Repeat boot is recorded separately on purpose, because a first boot
+        // that works and a second that does not is a failure mode this device
+        // has produced before, and it is the difference between "it booted" and
+        // reviewed.
+        //
+        // This build shares the 24A435 kernel profile, and the measurement
+        // behind that is recorded beside the profile in FirmwareProfile.swift:
+        // every artifact Liter8 patches is byte-identical to 24A437 apart from
+        // kernelcache metadata outside any executable segment, and all 501
+        // kernel records land on identical offsets with identical original
+        // bytes. Resolution was checked before the device run rather than
+        // inferred from it: `survey` reported 20 plans resolved and 0 failed,
+        // `acm-probe` against ios27-24A435-acm-v1 reported the usual 24/26
+        // exact matches, and the five userland plans resolved 5/1/1/2/5.
+        //
+        // All four oracles below were measured from this build's own root
+        // filesystem, with the method first checked against 24A435, where it
+        // reproduces the recorded launchd digest and 66 Setup controllers
+        // exactly. launchd, Setup, mobileactivationd, coreauthd, ctkd, asr and
+        // restored_external are byte-identical to 24A437; only
+        // /System/Library/xpc/launchd.plist changed, and its 729 daemons were
+        // counted from this image rather than carried across.
+        DeviceWorkflowProfile(
+            id: "iphone12,1-n104ap-24A446",
+            productVersion: "27.0.1",
+            build: "24A446",
+            productType: "iPhone12,1",
+            deviceClass: "n104ap",
+            chipID: 0x8030,
+            boardID: 0x04,
+            extractedDirectoryName: "iPhone12,1_27.0.1_24A446_Restore",
+            validationState: .reviewed,
+            launchdSHA256: "c640246d38aaeb2d2372aff1e5aa0de59dec267f53c0dfc155f7837e717af68b",
+            launchdCacheSHA256: "5e0c65cf8ee4e6551325afdc4c283c350281d98e14f67b45bc55acfa536ae6e1",
+            launchdCacheDaemonCount: 729,
+            setupControllerMethodCount: 66,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [.skipDisplayInitialization],
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
+            )
+        ),
     ]
 
     public static func profile(
