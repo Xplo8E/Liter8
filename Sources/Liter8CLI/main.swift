@@ -512,7 +512,7 @@ do {
                         : "no APTicket at \(candidate.path)"
                     throw PatchfinderError.invalidFixture(
                         "fw \(action) needs an APTicket: \(detail). An erase restore is "
-                            + "not a prerequisite; see the README \"Two workflows\" section"
+                            + "one way to obtain one, not a prerequisite"
                     )
                 }
                 selectedTicket = candidate

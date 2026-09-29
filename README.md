@@ -1,41 +1,31 @@
-<h1 align="center">Liter8</h1>
+# Liter8
 
-<p align="center">
-A macOS CLI for the usbliter8 firmware patching and boot workflow.
-</p>
+Patch, restore and boot custom iOS firmware on an iPhone 11 from macOS, using the usbliter8 exploit.
+
+[![License](https://img.shields.io/github/license/Xplo8E/liter8?style=flat-square&color=blue)](LICENSE) ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey?style=flat-square) ![Swift](https://img.shields.io/badge/Swift-6-F05138?style=flat-square&logo=swift&logoColor=white) ![Firmware](https://img.shields.io/badge/iOS-27.0%20to%2027.2%20beta%202-2ea043?style=flat-square)
+
+<img src="./docs/iphone11-sileo.jpg" alt="iPhone 11 running patched iOS 27 with Sileo" width="760">
 
 > [!WARNING]
 > Liter8 is under active development. Support is exact-build and exact-device scoped; an unlisted IPSW or board is not implicitly compatible.
 
-Liter8 provides a unified CLI for preparing IPSWs, resolving and applying firmware patches, building custom firmware, restoring devices, booting SSH restore ramdisks, provisioning the filesystem, and generating patched normal-boot artifacts.
-
-The project replaces build-specific patch scripts and hardcoded offsets with profile-driven firmware support and semantic patch resolution. Firmware-specific differences are isolated through reviewed resolver and payload variants, while exact-build fixtures are used to verify patch output.
-
 ## Tested on
 
-| Firmware                     | Device              | Status              |
-| ---------------------------- | ------------------- | ------------------- |
-| iOS 27 beta 4, `24A5390f`    | iPhone 11, `n104ap` | End-to-end verified |
-| iOS 27 RC/release, `24A435`  | iPhone 11, `n104ap` | End-to-end verified |
-| iOS 27.0 release, `24A437`   | iPhone 11, `n104ap` | End-to-end verified |
-| iOS 27.0.1, `24A446`         | iPhone 11, `n104ap` | End-to-end verified |
-| iOS 27.2 beta 1, `24B5084k`  | iPhone 11, `n104ap` | End-to-end verified |
-| iOS 27.2 beta 2, `24B5089g`  | iPhone 11, `n104ap` | End-to-end verified |
+| Firmware        | Build      | Device               |
+| --------------- | ---------- | -------------------- |
+| iOS 27.0 beta 4 | `24A5390f` | iPhone 11 · `n104ap` |
+| iOS 27.0 RC     | `24A435`   | iPhone 11 · `n104ap` |
+| iOS 27.0        | `24A437`   | iPhone 11 · `n104ap` |
+| iOS 27.0.1      | `24A446`   | iPhone 11 · `n104ap` |
+| iOS 27.2 beta 1 | `24B5084k` | iPhone 11 · `n104ap` |
+| iOS 27.2 beta 2 | `24B5089g` | iPhone 11 · `n104ap` |
 
-**End-to-end verified** means an erase restore, normal boot and repeat boot passed on hardware. Repeat boot is listed separately because a first boot that works and a second that does not is a distinct failure mode.
+Every build listed is **end-to-end verified**: an erase restore, a normal boot and a repeat boot all passed on hardware.
 
-**Patches verified, no device run** means every plan resolves and the custom firmware builds and verifies its own artifacts, but nothing has been restored or booted on that build.
-
-`24A437` is `24A435` rebuilt and the two share one firmware profile: identical iBSS, iBEC, TXM and SPTM, and a kernelcache differing only in build-host paths and Mach-O UUIDs.
-
-`24A446` (27.0.1) joins that same profile, measured rather than assumed: its iBSS, iBEC, SPTM, TXM and every userland binary Liter8 patches are byte-identical to `24A437`, and its kernelcache differs only in Mach-O UUIDs, kext build timestamps and `DTPlatformBuild` strings. Not one differing byte lands in an executable segment, and all 501 records resolved by the kernel plans match `24A437` on offset and original bytes. It still carries its own device run rather than inheriting `24A437`'s.
+> [!IMPORTANT]
+> A build Apple no longer signs cannot be restored. `fw restore-cfw` captures a fresh APTicket from Apple's TSS during the restore, so once signing stops the build stays listed as tested but is no longer installable. Check signing status for your device before picking a build.
 
 An unsupported IPSW fails before extraction. A recognized firmware profile never supplies patch offsets; offsets remain outputs of the resolvers.
-
-The temporary SSHRD workflow was additionally verified against an untouched stock installation: the device booted the ramdisk, served SSH with no volume mounted, and returned to the original iOS after a reboot. No restore was performed.
-
-> [!NOTE]
-> IPSWs, extracted Apple binaries, tickets, and generated work directories are not included in this repository.
 
 ## Install and build
 
@@ -44,8 +34,11 @@ Liter8 requires macOS 14 or newer, Xcode Command Line Tools with Swift 6, and Ho
 ```sh
 brew install \
   sevenzip blacktop/tap/ipsw gnu-tar coreutils zstd autoconf automake libtool pkg-config \
-  libimobiledevice libimobiledevice-glue libirecovery libusbmuxd libplist libtatsu libzip curl
+  libimobiledevice libimobiledevice-glue libirecovery libusbmuxd libplist libtatsu libzip curl 
 ```
+
+> [!NOTE]
+> IPSW extraction uses `7zz` from the `sevenzip` formula, and Liter8 looks for it at `/opt/homebrew/bin/7zz`. On Intel Homebrew it lands in `/usr/local/bin`, so set `LITER8_7ZZ` to its path.
 
 Clone, prepare the pinned tools, and build the release executable:
 
@@ -62,7 +55,13 @@ The executable is `.build/release/liter8`. Device boot also requires the reviewe
 
 Keep every generated file under one work directory. `--work-dir` overrides `WORK_DIR`; without either, Liter8 uses the current directory.
 
-Every workflow starts by preparing the IPSW:
+> [!TIP]
+> Run the steps in order, every time. Each one consumes the previous step's output, so a part-stale work directory is not a supported starting point. If you come back to a device later, start again from `fw make-cfw` rather than resuming halfway.
+
+> [!CAUTION]
+> Step 3 erases the device. `fw restore-cfw` performs an erase restore and destroys everything on it. There is no undo. Check the selected IPSW, device, build, board and work directory before running it.
+
+### 1. Prepare the IPSW
 
 ```sh
 export WORK_DIR="$PWD/.liter8"
@@ -72,61 +71,16 @@ export WORK_DIR="$PWD/.liter8"
 
 `fw prepare` identifies the build from `BuildManifest.plist`; the IPSW filename is ignored. Set `IPSW_FILE` if you do not want to pass `--file`.
 
-> [!IMPORTANT]
-> `fw make-cfw`, `fw get-rd` and `fw get-boot` accept `--serial`, adding `serial=3` to the boot arguments of the artifact they build. Off by default: it moves the kernel console to the UART, and the device then shows no boot log on its own screen. The literal is fixed at build time, so pass it per artifact.
-
-### Two workflows
-
-Everything after `fw prepare` belongs to one of two workflows. They share the prepared IPSW and nothing else. Choose deliberately.
-
-|                      | [Temporary SSHRD](#temporary-sshrd-non-destructive) | [Custom firmware](#custom-firmware-destructive) |
-| -------------------- | --------------------------------------------------- | ----------------------------------------------- |
-| What it does         | Boots an SSH ramdisk in RAM over the installed OS    | Erases the device and installs a patched OS     |
-| Data on the device   | Untouched                                            | Destroyed                                       |
-| After a reboot       | The original OS boots as before                      | The custom firmware boots                       |
-| Commands             | `fw get-rd`, `fw boot-rd`                            | `fw make-cfw`, `fw restore-cfw`, then provisioning |
-| Needs Apple's TSS    | No                                                   | Yes                                             |
-
-
-## Temporary SSHRD (non-destructive)
-
-Boots Apple's restore ramdisk with an SSH server injected into it, over whatever is already installed. The ramdisk runs entirely in RAM, no volume is mounted, and the installed OS boots normally afterwards.
-
-This needs an APTicket. `fw get-rd` reads `$WORK_DIR/apticket.im4m` by default, or takes an explicit path.
-
-```sh
-# device in pwn DFU
-.build/release/liter8 fw get-rd --ticket /path/to/apticket.im4m
-.build/release/liter8 fw boot-rd --irecovery /path/to/custom/irecovery
-```
-
-Once the chain has booted, forward the SSH port and connect:
-
-```sh
-iproxy 2222 22 &
-ssh -p 2222 root@localhost
-```
-
-Reboot the device to return to the installed OS.
-
-> [!NOTE]
-> This chain boots through a patched iBSS and iBEC whose Image4 validation is deliberately bypassed, so `fw get-rd` accepts any APTicket that parses as an IM4M. Ticket freshness is not required for this path. Liter8 has no command yet for obtaining a first APTicket for a device you hold none for.
-
-## Custom firmware (destructive)
-
-> [!WARNING]
-> Step 2 erases the device. Check the selected IPSW, device, build, board, and work directory before running it.
-
-> [!CAUTION]
-> `fw restore-cfw` performs an erase restore and destroys everything on the target device. If you only want a shell on the OS that is already installed, do not run it. Use the temporary SSHRD workflow.
-
-### 1. Build the CFW
+### 2. Build the CFW
 
 ```sh
 .build/release/liter8 fw make-cfw
 ```
 
-### 2. Restore the CFW
+> [!IMPORTANT]
+> `fw make-cfw`, `fw get-rd` and `fw get-boot` accept `--serial`, adding `serial=3` to the boot arguments of the artifact they build. Off by default: it moves the kernel console to the UART, and the device then shows no boot log on its own screen. The literal is fixed at build time, so pass it per artifact.
+
+### 3. Restore the CFW
 
 Put the device in pwn DFU, then run:
 
@@ -136,7 +90,7 @@ Put the device in pwn DFU, then run:
 
 Liter8 verifies the CFW, manages the local TSS proxy, captures the restore-bound APTicket, and stops the proxy when `idevicerestore` exits.
 
-### 3. Boot the SSH restore ramdisk
+### 4. Boot the SSH restore ramdisk
 
 Return the device to pwn DFU:
 
@@ -145,9 +99,9 @@ Return the device to pwn DFU:
 .build/release/liter8 fw boot-rd --irecovery /path/to/custom/irecovery
 ```
 
-The ticket captured by step 2 is now at `$WORK_DIR/apticket.im4m`, so `--ticket` is not needed here.
+The ticket captured by step 3 is now at `$WORK_DIR/apticket.im4m`, so `--ticket` is not needed here.
 
-### 4. Provision the restored system
+### 5. Provision the restored system
 
 Run these while the device is in SSHRD:
 
@@ -160,7 +114,7 @@ Run these while the device is in SSHRD:
 .build/release/liter8 fw unmount-rootfs
 ```
 
-### 5. Boot iOS
+### 6. Boot iOS
 
 Return the device to pwn DFU:
 
@@ -169,7 +123,7 @@ Return the device to pwn DFU:
 .build/release/liter8 fw boot --irecovery /path/to/custom/irecovery
 ```
 
-### 6. Finalize the bootstrap
+### 7. Finalize the bootstrap
 
 After normal-boot SSH becomes available:
 
@@ -178,44 +132,6 @@ After normal-boot SSH becomes available:
 .build/release/liter8 fw finalize
 .build/release/liter8 fw finalize --check
 ```
-
-## Resolver-only commands
-
-These belong to neither workflow and never touch a device.
-
-List available profiles and plans:
-
-```sh
-.build/release/liter8 profiles
-.build/release/liter8 fw actions
-```
-
-Resolve a patch plan without changing the input:
-
-```sh
-.build/release/liter8 resolve kernel restore /path/to/kernelcache.raw
-.build/release/liter8 resolve iboot ibss-normal /path/to/iBSS.raw --json
-```
-
-Apply a plan to a separate output:
-
-```sh
-.build/release/liter8 apply \
-  kernel restore \
-  /path/to/kernelcache.raw \
-  /path/to/kernelcache.patched
-```
-
-Verify against an exact-build fixture:
-
-```sh
-.build/release/liter8 verify \
-  fixtures/24A5390f/n104ap/kernel-restore-n104-24A5390f.json \
-  /path/to/kernelcache.raw
-```
-
-> [!IMPORTANT]
-> Fixture offsets verify resolver output. Runtime resolution never uses them as fallbacks.
 
 ## How Liter8 works
 
@@ -243,6 +159,7 @@ Sources/
     Firmware/                IPSW, IMG4/IM4P and runtime resources
     Patching/                patch records, manifests and guarded writes
     Profiles/                build-to-signature and payload selection
+      Payloads/              the patch bytes each plan writes
     Resolvers/
       iBoot/                 iBSS, iBEC, boot arguments and display
       Kernel/                AMFI, AKS, SEP, sandbox and boot policy
@@ -263,38 +180,12 @@ This remains one `Liter8Core` Swift target. The folders express ownership withou
 
 ## Contributing
 
-Read [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) before changing resolvers or workflows. Firmware ports also use the checklist in [docs/ADDING_FIRMWARE_SUPPORT.md](docs/ADDING_FIRMWARE_SUPPORT.md).
-
-- Keep patch discovery and patch bytes in Swift.
-- Keep build-specific differences in profiles, signatures, and payloads.
-- Explain every opcode and raw byte sequence in a nearby comment.
-- Use fixture offsets only as verification oracles.
-- Include wrong-input and ambiguity tests.
-- Record a physical-device run before claiming end-to-end support.
-
-## Running tests
-
-```sh
-make test           # Fast suite; skips real-kernel fixture scans
-make test-fixtures  # Optimized exact-build fixture and one-pass apply checks
-make integration    # Host workflow integration tests
-make test-full      # Optimized suite except the uncached production composition
-make test-e2e       # Uncached production-composition resolver test
-make check          # Full resolver, E2E, and integration tiers
-```
-
-Tests that need extracted Apple binaries skip when those files are absent. Use `LITER8_FIXTURE_ROOT` to point at a private fixture tree:
-
-```sh
-LITER8_FIXTURE_ROOT=/path/to/private/research make test-full
-```
+Read [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) first. Firmware ports also follow [docs/ADDING_FIRMWARE_SUPPORT.md](docs/ADDING_FIRMWARE_SUPPORT.md).
 
 ## Documentation
 
 - [Architecture and onboarding](CODEBASE_GUIDE.md)
-- [Contributor guide](docs/CONTRIBUTING.md)
 - [Firmware and device support guide](docs/FIRMWARE_SUPPORT_GUIDE.md)
-- [Adding firmware support](docs/ADDING_FIRMWARE_SUPPORT.md)
 - [iOS 27 `24A435` resolver and device evidence](docs/plans/IOS_27_24A435_RC_PATCHES.md)
 - [iPhone 11 beta-4 device run](docs/runs/IOS_27_BETA4_IPHONE11.md)
 - [Bootstrap and provisioning status](docs/design/BOOTSTRAP_JB_STATUS.md)

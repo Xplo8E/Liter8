@@ -43,6 +43,36 @@ make release
 .build/release/liter8 resolve kernel restore /path/to/kernelcache.raw
 ```
 
+### Resolver-level commands
+
+These never touch a device. `resolve` reports what a plan would do without
+changing the input; add `--json` for machine-readable records:
+
+```sh
+.build/release/liter8 resolve iboot ibss-normal /path/to/iBSS.raw --json
+```
+
+`apply` writes a separately patched output, leaving the input untouched:
+
+```sh
+.build/release/liter8 apply \
+  kernel restore \
+  /path/to/kernelcache.raw \
+  /path/to/kernelcache.patched
+```
+
+`verify` checks a binary against an exact-build fixture:
+
+```sh
+.build/release/liter8 verify \
+  fixtures/24A5390f/n104ap/kernel-restore-n104-24A5390f.json \
+  /path/to/kernelcache.raw
+```
+
+Fixture offsets are verification oracles only. Runtime resolution never falls
+back to them, and a plan fails rather than guessing when its evidence is
+missing, duplicated or inconsistent.
+
 ## Design rules
 
 ### Resolve from evidence
