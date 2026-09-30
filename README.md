@@ -8,6 +8,7 @@ Patch, restore and boot custom iOS firmware on an iPhone 11 from macOS, using th
 
 > [!WARNING]
 > Liter8 is under active development. Support is exact-build and exact-device scoped; an unlisted IPSW or board is not implicitly compatible.
+> This is a tethered jailbreak: the device boots only from pwn DFU with `fw boot`, so the host is needed every time.
 
 ## Tested on
 
@@ -26,6 +27,19 @@ Every build listed is **end-to-end verified**: an erase restore, a normal boot a
 > A build Apple no longer signs cannot be restored. `fw restore-cfw` captures a fresh APTicket from Apple's TSS during the restore, so once signing stops the build stays listed as tested but is no longer installable. Check signing status for your device before picking a build.
 
 An unsupported IPSW fails before extraction. A recognized firmware profile never supplies patch offsets; offsets remain outputs of the resolvers.
+
+## TODO
+
+Known gaps. These need more research, and contributions are welcome.
+
+- [ ] SEP
+- [ ] Passcode
+- [ ] Cellular
+- [ ] Apple services
+- [ ] Improve Tweak injection (works, but not as robust as vphone)
+- [ ] iPhone 11 Pro and Pro Max support (i don't have device to verify)
+
+Everything else works: normal boot to the home screen, root SSH, apt and Sileo, TrollStore, and apps launching.
 
 ## Install and build
 
