@@ -18,11 +18,11 @@ Both builds are resolved with the same resolver binary, so the two sides are dir
 
 | Category                                            | Count |
 | --------------------------------------------------- | ----: |
-| `offset only` — opcode byte-identical, offset moved |   158 |
-| `ORIG CHANGED` — RC original bytes differ           |    12 |
-| `REPL CHANGED` — replacement is build-derived       |     4 |
-| `ORIG+REPL` — both differ                           |     4 |
-| `identical` — same offset _and_ bytes               |     2 |
+| `offset only`: opcode byte-identical, offset moved |   158 |
+| `ORIG CHANGED`: RC original bytes differ           |    12 |
+| `REPL CHANGED`: replacement is build-derived       |     4 |
+| `ORIG+REPL`: both differ                           |     4 |
+| `identical`: same offset _and_ bytes               |     2 |
 | `NOT RESOLVED`                                      | **0** |
 
 Two composite plans that have no fixture of their own also resolve: `kernel boot` (154 records) and `kernel boot-public` (119 records).
@@ -36,8 +36,6 @@ All 18 beta-4 fixtures verify unchanged, including `testCompatibilityKernelPlanC
 The RC profile is registered as reviewed after exact-device validation on 2026-09-13. Normal firmware commands select it without `--experimental`.
 
 ## How to read the tables
-
-Both builds were resolved with the same resolver binary, so the two sides are directly comparable.
 
 | Category | Meaning | Action |
 | --- | --- | --- |
@@ -57,7 +55,7 @@ Apple turned on Branch Target Identification for the RC kernelcache. Most functi
 | beta 4 `24A5390f` | **0** | 112050 |
 | RC `24A435` | **87629** | 109000 |
 
-IDA's own analysis of the RC kernelcache agrees and puts it more strongly: of 190337 functions it recognises, **140862 start with `BTI C`** and only 13233 start with `PACIBSP`. The higher number is expected — it includes functions that have a pad but no PAC prologue.
+IDA's own analysis of the RC kernelcache agrees and puts it more strongly: of 190337 functions it recognises, **140862 start with `BTI C`** and only 13233 start with `PACIBSP`. The higher number is expected. It includes functions that have a pad but no PAC prologue.
 
 ```asm
 ; beta 4                    ; RC 24A435
@@ -88,7 +86,7 @@ Conflating them breaks things in _both_ directions, and both were observed:
 
 ### Is BTI actually enforced?
 
-**Not determined.** Enforcement lives in `SCTLR_EL1.BT0`/`BT1`, and the RC kernelcache contains no writes to `SCTLR_EL1` — on SPTM-era devices that register is programmed by SPTM, which is a separate binary not present here.
+**Not determined.** Enforcement lives in `SCTLR_EL1.BT0`/`BT1`, and the RC kernelcache contains no writes to `SCTLR_EL1`. On SPTM-era devices that register is programmed by SPTM, which is a separate binary not present here.
 
 So the risk of overwriting a pad is **unquantified, not disproven**. Every stub in this tree now preserves pads regardless, because doing so is free: the patched function becomes `bti c; <stub>` instead of `<stub>`, which is correct either way.
 
@@ -104,7 +102,7 @@ The anchor `AMFI: code signature validation failed` occurs exactly once in RC, a
 
 ### Why the resolver had found nothing
 
-`KernelAMFIResolver` scanned each callee with `cursor = callee + 8` up to `nextFunctionStart(after: callee, 0x200)`. In RC the callee is the `BTI C` and `nextFunctionStart` looked only for `PACIBSP`, four bytes later — so `end` landed before `cursor` and the loop never ran.
+`KernelAMFIResolver` scanned each callee with `cursor = callee + 8` up to `nextFunctionStart(after: callee, 0x200)`. In RC the callee is the `BTI C` and `nextFunctionStart` looked only for `PACIBSP`, four bytes later, so `end` landed before `cursor` and the loop never ran.
 
 IDA confirms the boundary independently: it reports the function as `0xfffffff008f0c92c .. 0xfffffff008f0ca64`, i.e. **starting at the BTI**, exactly the address the resolver was treating as belonging to the previous function.
 
@@ -136,7 +134,7 @@ b.ne    0x1f3c800   ; -> REJECT        b.ne    0x1f08990   ; -> ACCEPT
 
 Beta 4 rejects when the hash type is **not** SHA256. RC rejects when it **is** SHA1. The branch sense is reversed.
 
-Beta 4's replacement `cmp w0,w0` (`1f00006b`) sets Z, so `b.ne` is never taken and control falls through to accept. The identical word at the RC site also sets Z, `b.ne` is still never taken — but in RC the fallthrough **is** the SHA1 rejection block, so the patch would refuse every binary.
+Beta 4's replacement `cmp w0,w0` (`1f00006b`) sets Z, so `b.ne` is never taken and control falls through to accept. The identical word at the RC site also sets Z, `b.ne` is still never taken, but in RC the fallthrough **is** the SHA1 rejection block, so the patch would refuse every binary.
 
 ### Fix
 
@@ -144,14 +142,14 @@ Beta 4's replacement `cmp w0,w0` (`1f00006b`) sets Z, so `b.ne` is never taken a
 
 | Build | Fallthrough | Replacement |
 | --- | --- | --- |
-| beta 4 | accept path | `1f00006b` — `cmp w0,w0`, forces EQ (unchanged) |
-| RC | reject path | `ff070071` — `cmp wzr,#1`, forces NE so the accept branch is taken |
+| beta 4 | accept path | `1f00006b`: `cmp w0,w0`, forces EQ (unchanged) |
+| RC | reject path | `ff070071`: `cmp wzr,#1`, forces NE so the accept branch is taken |
 
 `0x710007FF` is `SUBS WZR, WZR, #1`: `0 - 1` leaves Z clear, so the `b.ne` at `0x1f0897c` is unconditional.
 
 ## Blocker 2 (resolved): `isDeviceInRestoreMode`
 
-The anchor was always healthy — the cluster `…111\0rd\0rootdev\0-restore\0%02X` occurs exactly once, at `0x810e11`, and its `rd` literal has three ADRP+ADD references.
+The anchor was always healthy. The cluster `…111\0rd\0rootdev\0-restore\0%02X` occurs exactly once, at `0x810e11`, and its `rd` literal has three ADRP+ADD references.
 
 `KernelBootPolicyResolver` required `RETAB` at `functionStart - 4`. In RC that word is the `BTI C` pad for all three candidates, so all three were rejected:
 
@@ -165,7 +163,7 @@ IDA confirms all three: `starts_at_BTI: true` for every one.
 
 Fixed by routing the search through `ARM64.functionStart`, which returns the pad as the entry, so `entry - 4` reads the previous function's terminator again.
 
-## Blocker 3 (resolved): `current_thread_ro` — an over-constrained signature
+## Blocker 3 (resolved): `current_thread_ro`, an over-constrained signature
 
 Not a BTI problem. The 8-word signature matched beta 4 uniquely at `0x32a2b80` and RC zero times. Bisecting: 5 words matched RC uniquely at `0x323590c`, 8 did not. Exactly one word differed:
 
@@ -191,7 +189,7 @@ The global moved pages. `MaskedInstructionPattern` already masked the ADRP page,
 
 Fixed by extending `allowDataLayoutDrift` to `ADD (immediate, 64-bit, LSL #0)` with the same `0xFFC003FF` mask already used for load/store displacements.
 
-**IDA cross-check:** `sub_FFFFFFF00A23990C` (file offset `0x323590c`) has **771 callers** — a hot leaf helper, which is what `current_thread_ro` should be.
+**IDA cross-check:** `sub_FFFFFFF00A23990C` (file offset `0x323590c`) has **771 callers**, a hot leaf helper, which is what `current_thread_ro` should be.
 
 A second, independent break then appeared in the same plan: the `mpc_ops` slots store the address a call lands on, which in RC is the pad, so the resolver's `PACIBSP` guard on `file_check_mmap` failed. Every one of those five hooks is reached _only_ through that table, i.e. always indirectly, so the stubs now start at the prologue and keep their pads.
 
@@ -203,7 +201,7 @@ Located in RC by masked prologue matching, then verified in IDA.
 - **Order:** the 26 RC offsets appear in exactly beta 4's relative order. That is the cross-check that this is the same set and not 26 coincidences.
 - **Match quality:** 21 of 26 matched their full beta-4 signature exactly and uniquely. `updateAnalytics` and `unlockItem` share an identical 32-word prologue and were separated by position. `performCommandGated` (12/16), `sendSEPCommand` (27/32) and `setPowerStateGated` (19/32) matched partially and were placed by the resolver's existing neighbour-bounded scoring.
 
-**All 26 RC methods carry a `BTI C` pad, and ten of them have zero direct branch references** — they are reached only through a taken address:
+**All 26 RC methods carry a `BTI C` pad, and ten of them have zero direct branch references**. They are reached only through a taken address:
 
 `sepManagerMatchedThreadCallHandler`, `callPlatformFunction`, `cmdContextV2`, `performCommandGated`, `_setPropertiesGated`, `performDoubleClickQueryGated`, `performLoggingLevelQueryGated`, `handleSEPMessage`, `powerOffActionGated`, `sepManagerMatchedGated`.
 
@@ -239,7 +237,7 @@ The original code computed `writeOffset = (runStart + 8 + 15) & ~15` and kept ev
 
 ### The semantic fix
 
-Identify the run by what it is — the section-tail padding, i.e. the uniquely largest page-boundary zero run — and only then place the literal inside it. Selection no longer depends on literal length at all, which is what made it unstable. Both payloads have one clearly dominant run (476 vs 35; 79 vs 35), so requiring a unique maximum is a stronger identity than any fit test.
+Identify the run by what it is (the section-tail padding, i.e. the uniquely largest page-boundary zero run) and only then place the literal inside it. Selection no longer depends on literal length at all, which is what made it unstable. Both payloads have one clearly dominant run (476 vs 35; 79 vs 35), so requiring a unique maximum is a stronger identity than any fit test.
 
 Placement inside that run keeps the 8-byte guard after the last real section contents and then takes the widest alignment from 16, 8, 4, 2, 1 that fits. Alignment is a convention rather than a requirement: the slot holds a NUL-terminated C string read by a byte copy, and ADRP+ADD addresses any byte in the page. The guard gap is never traded away.
 
@@ -251,7 +249,7 @@ Placement inside that run keeps the 8-byte guard after the last real section con
 | SSHRD   | `0xd0e30` | `0x26cfc0` |
 | normal  | `0xd0e30` | `0x26cfba` |
 
-Beta 4 is unchanged on all three — the roomy run still satisfies 16-byte alignment. RC's normal literal lands at 2-byte alignment and ends exactly on the page boundary.
+Beta 4 is unchanged on all three. The roomy run still satisfies 16-byte alignment. RC's normal literal lands at 2-byte alignment and ends exactly on the page boundary.
 
 ## Decision: beta 4 stays byte-identical; RC keeps its pads
 
@@ -259,7 +257,7 @@ Preserving landing pads initially moved one beta-4 record, and I first decided t
 
 > This digest was produced independently by the public Python `apply_patches.py kc-boot` table. Matching it proves that the Swift compatibility plan changes the same bytes, not merely 119 bytes.
 
-The beta-4 byte sequence is not merely "what we shipped" — it is an independent cross-implementation check between the Swift resolvers and the public Python patcher. Breaking it to guard against unproven BTI enforcement on a _different_ build is a bad trade.
+The beta-4 byte sequence is an independent cross-implementation check between the Swift resolvers and the public Python patcher. Breaking it to guard against unproven BTI enforcement on a _different_ build is a bad trade.
 
 ### The discriminator
 
@@ -280,14 +278,14 @@ sub     sp, sp, #N                  mov     w0, #0
 |  | outcome |
 | --- | --- |
 | beta 4 `24A5390f` | **byte-identical**, all 13 available fixtures verify, Python cross-check intact |
-| RC `24A435` — `kernel restore` | 20 records, **0** overwrite a pad |
-| RC — `kernel boot-policy` | 4 records, **0** overwrite a pad |
-| RC — `kernel sandbox` | 46 records, **0** overwrite a pad |
-| RC — `kernel credential-manager` | 52 records, **1** overwrites a pad |
+| RC `24A435`, `kernel restore` | 20 records, **0** overwrite a pad |
+| RC, `kernel boot-policy` | 4 records, **0** overwrite a pad |
+| RC, `kernel sandbox` | 46 records, **0** overwrite a pad |
+| RC, `kernel credential-manager` | 52 records, **1** overwrites a pad |
 
 ### The one residual case
 
-`performLoggingLevelQueryGated` has the PAC-less-leaf shape on **both** builds (`bti c; cbz x1; mov w0,#0; …`), so on RC its stub is still written at the `BTI`. On RC that method has zero direct branch references and one address-taken reference, so it is reached indirectly — which under enforced BTI would fault.
+`performLoggingLevelQueryGated` has the PAC-less-leaf shape on **both** builds (`bti c; cbz x1; mov w0,#0; …`), so on RC its stub is still written at the `BTI`. On RC that method has zero direct branch references and one address-taken reference, so it is reached indirectly, which under enforced BTI would fault.
 
 This is a known, bounded risk rather than an oversight:
 
@@ -627,7 +625,7 @@ Apple binaries stay out of the repository. The suite reads them from `<fixture r
 | `043-69915-775.dmg` | 243269659 | `03768f01e4093f3f31a7aaca96f3abeebd744d2ffff980158d15e9a028b59a86` |
 | `BuildManifest.plist` | 637306 | `6bf6412d06e5770b77b08d8d79a955a9171907e6003ff07c6858c6679c436f1a` |
 
-### Decompressed payload SHA-256 — the offset reference frame
+### Decompressed payload SHA-256, the offset reference frame
 
 | Payload | Size | RC SHA-256 | beta-4 SHA-256 |
 | --- | --: | --- | --- |
@@ -665,7 +663,7 @@ Apple binaries stay out of the repository. The suite reads them from `<fixture r
 | `__DATA`           | `0xfffffff00ac38000` | `0x3c34000..0x3fb0000` |      |
 | `__LINKEDIT`       | `0xfffffff00afb4000` | `0x3fb0000..0x4068000` |      |
 
-Derived three ways that agree: `otool -l`, `liter8 inspect segments`, and IDA. The kernelcache is stripped — `nm` reports 728 symbols, none of them targets — so every kernel patch is recovered by code shape.
+Derived three ways that agree: `otool -l`, `liter8 inspect segments`, and IDA. The kernelcache is stripped (`nm` reports 728 symbols, none of them targets), so every kernel patch is recovered by code shape.
 
 ## DeviceTree
 
@@ -787,7 +785,7 @@ The patcher can also emit a JSON record containing each class, IMP, file offset,
 | **free header slack** | **48 bytes** |
 | `LC_RPATH` | **absent** |
 
-A `LC_LOAD_WEAK_DYLIB` is 24 bytes fixed plus path and NUL, padded to 8, so the path budget is 24 bytes — 23 characters.
+A `LC_LOAD_WEAK_DYLIB` is 24 bytes fixed plus path and NUL, padded to 8, so the path budget is 24 bytes, or 23 characters.
 
 | path | size | verdict |
 | --- | --: | --- |
@@ -813,7 +811,7 @@ The same patch/re-sign/byte-diff verifier was run against pristine beta-4 and RC
 | `Symlinks`               |                             1 |
 | `VersionNumber`          |                             7 |
 
-Jobs are keyed by source plist path; each value carries `Label`, `Program`, `MachServices` and friends. `com.dropbear` and `com.jbboot` are absent, as expected — they are what the rebuild inserts.
+Jobs are keyed by source plist path; each value carries `Label`, `Program`, `MachServices` and friends. `com.dropbear` and `com.jbboot` are absent, as expected. They are what the rebuild inserts.
 
 There is a **signature sidecar**, `launchd.plist.sig`, 19661 bytes. Provisioning requires it to be present and deliberately leaves it untouched, matching the beta-4 path under `launchd_unsecure_cache=1`.
 
@@ -849,12 +847,12 @@ Produced by `liter8 resolve <component> <plan> <binary> --json` against the same
 
 ### iBSS / iBEC
 
-#### `ibss-validate-asn1` — 2 records, 1 evidence set
+#### `ibss-validate-asn1`: 2 records, 1 evidence set
 
 **2 records**, `0x236e8`–`0x236ec`
 
-- `ibss.validate-asn1.branch` @ `0x236e8` — Bypass the ASN.1 validation failure branch
-- `ibss.validate-asn1.result` @ `0x236ec` — Return success after bypassing validation
+- `ibss.validate-asn1.branch` @ `0x236e8`: Bypass the ASN.1 validation failure branch
+- `ibss.validate-asn1.result` @ `0x236ec`: Return success after bypassing validation
 
 Evidence:
 
@@ -863,39 +861,12 @@ Evidence:
 - conditional branch target contains anchor xref at target+8
 - preceding BL and following mov x0,x20 / ldp x29,x30,[sp,#0xd0]
 
-#### `ibss-restore` — 5 records, 2 evidence sets
+#### `ibss-restore`: 5 records, 2 evidence sets
 
 **2 records**, `0x236e8`–`0x236ec`
 
-- `ibss.validate-asn1.branch` @ `0x236e8` — Bypass the ASN.1 validation failure branch
-- `ibss.validate-asn1.result` @ `0x236ec` — Return success after bypassing validation
-
-Evidence:
-
-- unique string anchor at 0x1392ea
-- ADRP+ADD xref at 0x237d0
-- conditional branch target contains anchor xref at target+8
-- preceding BL and following mov x0,x20 / ldp x29,x30,[sp,#0xd0]
-
-**3 records**, `0x2aa0c`–`0x26cfc0`
-
-- `ibss.boot-args.adrp` @ `0x2aa0c` — Redirect the boot-args format pointer to the selected page
-- `ibss.boot-args.add` @ `0x2aa10` — Redirect the boot-args format pointer within the selected page
-- `ibss.boot-args.string` @ `0x26cfc0` — Install the literal boot argument string
-
-Evidence:
-
-- unique ADRP X2 / ADD X2 / ADD X0,SP / MOV W1,#0x400 / BL call shape
-- original pointer resolves to isolated %s string at 0x139c0f
-- unique zero run ending at page boundary 0x26d000
-- aligned string slot 0x26cfc0 has 64 bytes available
-
-#### `ibss-ramdisk` — 5 records, 2 evidence sets
-
-**2 records**, `0x236e8`–`0x236ec`
-
-- `ibss.validate-asn1.branch` @ `0x236e8` — Bypass the ASN.1 validation failure branch
-- `ibss.validate-asn1.result` @ `0x236ec` — Return success after bypassing validation
+- `ibss.validate-asn1.branch` @ `0x236e8`: Bypass the ASN.1 validation failure branch
+- `ibss.validate-asn1.result` @ `0x236ec`: Return success after bypassing validation
 
 Evidence:
 
@@ -906,9 +877,9 @@ Evidence:
 
 **3 records**, `0x2aa0c`–`0x26cfc0`
 
-- `ibss.boot-args.adrp` @ `0x2aa0c` — Redirect the boot-args format pointer to the selected page
-- `ibss.boot-args.add` @ `0x2aa10` — Redirect the boot-args format pointer within the selected page
-- `ibss.boot-args.string` @ `0x26cfc0` — Install the literal boot argument string
+- `ibss.boot-args.adrp` @ `0x2aa0c`: Redirect the boot-args format pointer to the selected page
+- `ibss.boot-args.add` @ `0x2aa10`: Redirect the boot-args format pointer within the selected page
+- `ibss.boot-args.string` @ `0x26cfc0`: Install the literal boot argument string
 
 Evidence:
 
@@ -917,12 +888,39 @@ Evidence:
 - unique zero run ending at page boundary 0x26d000
 - aligned string slot 0x26cfc0 has 64 bytes available
 
-#### `ibss-normal` — 5 records, 2 evidence sets
+#### `ibss-ramdisk`: 5 records, 2 evidence sets
 
 **2 records**, `0x236e8`–`0x236ec`
 
-- `ibss.validate-asn1.branch` @ `0x236e8` — Bypass the ASN.1 validation failure branch
-- `ibss.validate-asn1.result` @ `0x236ec` — Return success after bypassing validation
+- `ibss.validate-asn1.branch` @ `0x236e8`: Bypass the ASN.1 validation failure branch
+- `ibss.validate-asn1.result` @ `0x236ec`: Return success after bypassing validation
+
+Evidence:
+
+- unique string anchor at 0x1392ea
+- ADRP+ADD xref at 0x237d0
+- conditional branch target contains anchor xref at target+8
+- preceding BL and following mov x0,x20 / ldp x29,x30,[sp,#0xd0]
+
+**3 records**, `0x2aa0c`–`0x26cfc0`
+
+- `ibss.boot-args.adrp` @ `0x2aa0c`: Redirect the boot-args format pointer to the selected page
+- `ibss.boot-args.add` @ `0x2aa10`: Redirect the boot-args format pointer within the selected page
+- `ibss.boot-args.string` @ `0x26cfc0`: Install the literal boot argument string
+
+Evidence:
+
+- unique ADRP X2 / ADD X2 / ADD X0,SP / MOV W1,#0x400 / BL call shape
+- original pointer resolves to isolated %s string at 0x139c0f
+- unique zero run ending at page boundary 0x26d000
+- aligned string slot 0x26cfc0 has 64 bytes available
+
+#### `ibss-normal`: 5 records, 2 evidence sets
+
+**2 records**, `0x236e8`–`0x236ec`
+
+- `ibss.validate-asn1.branch` @ `0x236e8`: Bypass the ASN.1 validation failure branch
+- `ibss.validate-asn1.result` @ `0x236ec`: Return success after bypassing validation
 
 Evidence:
 
@@ -933,9 +931,9 @@ Evidence:
 
 **3 records**, `0x2aa0c`–`0x26cfba`
 
-- `ibss.boot-args.adrp` @ `0x2aa0c` — Redirect the boot-args format pointer to the selected page
-- `ibss.boot-args.add` @ `0x2aa10` — Redirect the boot-args format pointer within the selected page
-- `ibss.boot-args.string` @ `0x26cfba` — Install the literal boot argument string
+- `ibss.boot-args.adrp` @ `0x2aa0c`: Redirect the boot-args format pointer to the selected page
+- `ibss.boot-args.add` @ `0x2aa10`: Redirect the boot-args format pointer within the selected page
+- `ibss.boot-args.string` @ `0x26cfba`: Install the literal boot argument string
 
 Evidence:
 
@@ -944,9 +942,9 @@ Evidence:
 - unique zero run ending at page boundary 0x26d000
 - aligned string slot 0x26cfba has 70 bytes available
 
-#### `ibss-skip-display-init` — 1 records, 1 evidence set
+#### `ibss-skip-display-init`: 1 records, 1 evidence set
 
-**`ibss.display.skip-initialization`** @ `0x35230` — Skip iBSS display initialization and take its handled-failure path
+**`ibss.display.skip-initialization`** @ `0x35230`: Skip iBSS display initialization and take its handled-failure path
 
 Evidence:
 
@@ -954,9 +952,9 @@ Evidence:
 - failure path writes one to an X20 state byte then returns zero
 - explicit iBSS-only operation because iBSS and iBEC payloads are identical
 
-#### `ibec-diag-ignore-pinot-id-failure` — 1 records, 1 evidence set
+#### `ibec-diag-ignore-pinot-id-failure`: 1 records, 1 evidence set
 
-**`ibec.pinot.zero-panel-id.return-success`** @ `0x9e6d4` — Redirect zero panel-ID failure to Pinot's existing success return
+**`ibec.pinot.zero-panel-id.return-success`** @ `0x9e6d4`: Redirect zero panel-ID failure to Pinot's existing success return
 
 Evidence:
 
@@ -966,13 +964,13 @@ Evidence:
 
 ### TXM
 
-#### `txm-restore` — 6 records, 3 evidence sets
+#### `txm-restore`: 6 records, 3 evidence sets
 
 **3 records**, `0x3df48`–`0x3e244`
 
-- `txm.query-module.0` @ `0x3df48` — Make queryModule CDHash comparison 0 report equality
-- `txm.query-module.1` @ `0x3e0b0` — Make queryModule CDHash comparison 1 report equality
-- `txm.query-module.2` @ `0x3e244` — Make queryModule CDHash comparison 2 report equality
+- `txm.query-module.0` @ `0x3df48`: Make queryModule CDHash comparison 0 report equality
+- `txm.query-module.1` @ `0x3e0b0`: Make queryModule CDHash comparison 1 report equality
+- `txm.query-module.2` @ `0x3e244`: Make queryModule CDHash comparison 2 report equality
 
 Evidence:
 
@@ -980,7 +978,7 @@ Evidence:
 - all three selected calls target one memcmp implementation
 - fourth 20-byte comparison rejected because it uses CMP after BL
 
-**`txm.constraints.restricted-entitlements`** @ `0x43744` — Do not reject the six restricted task-port entitlements
+**`txm.constraints.restricted-entitlements`** @ `0x43744`: Do not reject the six restricted task-port entitlements
 
 Evidence:
 
@@ -990,8 +988,8 @@ Evidence:
 
 **2 records**, `0x437b0`–`0x437b8`
 
-- `txm.constraints.signature-type-range` @ `0x437b0` — Keep validateConstraintsSignatureType on its benign path
-- `txm.constraints.signature-type-null` @ `0x437b8` — Do not skip to the 0x000130A1 error construction
+- `txm.constraints.signature-type-range` @ `0x437b0`: Keep validateConstraintsSignatureType on its benign path
+- `txm.constraints.signature-type-null` @ `0x437b8`: Do not skip to the 0x000130A1 error construction
 
 Evidence:
 
@@ -999,13 +997,13 @@ Evidence:
 - B.LO and CBZ X9 skip the benign MOV W0,#0xA1 path
 - fall-through branches directly to the epilogue before error construction
 
-#### `txm-boot` — 9 records, 5 evidence sets
+#### `txm-boot`: 9 records, 5 evidence sets
 
 **3 records**, `0x3df48`–`0x3e244`
 
-- `txm.query-module.0` @ `0x3df48` — Make queryModule CDHash comparison 0 report equality
-- `txm.query-module.1` @ `0x3e0b0` — Make queryModule CDHash comparison 1 report equality
-- `txm.query-module.2` @ `0x3e244` — Make queryModule CDHash comparison 2 report equality
+- `txm.query-module.0` @ `0x3df48`: Make queryModule CDHash comparison 0 report equality
+- `txm.query-module.1` @ `0x3e0b0`: Make queryModule CDHash comparison 1 report equality
+- `txm.query-module.2` @ `0x3e244`: Make queryModule CDHash comparison 2 report equality
 
 Evidence:
 
@@ -1013,7 +1011,7 @@ Evidence:
 - all three selected calls target one memcmp implementation
 - fourth 20-byte comparison rejected because it uses CMP after BL
 
-**`txm.constraints.restricted-entitlements`** @ `0x43744` — Do not reject the six restricted task-port entitlements
+**`txm.constraints.restricted-entitlements`** @ `0x43744`: Do not reject the six restricted task-port entitlements
 
 Evidence:
 
@@ -1023,8 +1021,8 @@ Evidence:
 
 **2 records**, `0x437b0`–`0x437b8`
 
-- `txm.constraints.signature-type-range` @ `0x437b0` — Keep validateConstraintsSignatureType on its benign path
-- `txm.constraints.signature-type-null` @ `0x437b8` — Do not skip to the 0x000130A1 error construction
+- `txm.constraints.signature-type-range` @ `0x437b0`: Keep validateConstraintsSignatureType on its benign path
+- `txm.constraints.signature-type-null` @ `0x437b8`: Do not skip to the 0x000130A1 error construction
 
 Evidence:
 
@@ -1034,8 +1032,8 @@ Evidence:
 
 **2 records**, `0x2fd04`–`0x2fd08`
 
-- `txm.secure-channel.return-one` @ `0x2fd04` — Make allowedBeforeSecureChannelOperational return true
-- `txm.secure-channel.return` @ `0x2fd08` — Return immediately after setting the secure-channel result
+- `txm.secure-channel.return-one` @ `0x2fd04`: Make allowedBeforeSecureChannelOperational return true
+- `txm.secure-channel.return` @ `0x2fd08`: Return immediately after setting the secure-channel result
 
 Evidence:
 
@@ -1043,7 +1041,7 @@ Evidence:
 - accessor and developer-mode routine reference state at 0x84db0
 - BTI landing pad is preserved; replacement begins after it
 
-**`txm.developer-mode.publish`** @ `0x2fa88` — Take the existing path that publishes developer mode as true
+**`txm.developer-mode.publish`** @ `0x2fa88`: Take the existing path that publishes developer mode as true
 
 Evidence:
 
@@ -1055,12 +1053,12 @@ Evidence:
 
 ### Kernel
 
-#### `kernel-restore` — 20 records, 14 evidence sets
+#### `kernel-restore`: 20 records, 14 evidence sets
 
 **2 records**, `0x3f2be`–`0x3f324`
 
-- `kernel.identity.0` @ `0x3f2be` — Mark kernel version string 0 as patched
-- `kernel.identity.1` @ `0x3f324` — Mark kernel version string 1 as patched
+- `kernel.identity.0` @ `0x3f2be`: Mark kernel version string 0 as patched
+- `kernel.identity.1` @ `0x3f324`: Mark kernel version string 1 as patched
 
 Evidence:
 
@@ -1068,7 +1066,7 @@ Evidence:
 - exactly two occurrences in the pristine kernelcache
 - replacement does not move data or alter container layout
 
-**`kernel.panic.root-snapshot`** @ `0x2fec20c` — Do not enter the root-snapshot panic block
+**`kernel.panic.root-snapshot`** @ `0x2fec20c`: Do not enter the root-snapshot panic block
 
 Evidence:
 
@@ -1076,7 +1074,7 @@ Evidence:
 - unique ADRP+ADD reference to its containing C string
 - conditional target is uniquely closest to that xref within the 0x40-byte panic-block window
 
-**`kernel.panic.seal-broken`** @ `0x2f58ed4` — Do not enter the seal-broken panic block
+**`kernel.panic.seal-broken`** @ `0x2f58ed4`: Do not enter the seal-broken panic block
 
 Evidence:
 
@@ -1084,7 +1082,7 @@ Evidence:
 - unique ADRP+ADD reference to its containing C string
 - conditional target is uniquely closest to that xref within the 0x40-byte panic-block window
 
-**`kernel.panic.rootvp-authentication`** @ `0x366924c` — Do not enter the rootvp-authentication panic block
+**`kernel.panic.rootvp-authentication`** @ `0x366924c`: Do not enter the rootvp-authentication panic block
 
 Evidence:
 
@@ -1092,7 +1090,7 @@ Evidence:
 - unique ADRP+ADD reference to its containing C string
 - conditional target is uniquely closest to that xref within the 0x40-byte panic-block window
 
-**`kernel.panic.unencrypted-data-volume`** @ `0x2fed640` — Do not enter the unencrypted-data-volume panic block
+**`kernel.panic.unencrypted-data-volume`** @ `0x2fed640`: Do not enter the unencrypted-data-volume panic block
 
 Evidence:
 
@@ -1102,9 +1100,9 @@ Evidence:
 
 **5 records**, `0x1efbe84`–`0x1efbe94`
 
-- `kernel.amfi.trust-cache.0` @ `0x1efbe84` — Make AMFI trust-cache lookup succeed (word 1/5)
-- `kernel.amfi.trust-cache.1` @ `0x1efbe88` — Make AMFI trust-cache lookup succeed (word 2/5)
-- `kernel.amfi.trust-cache.2` @ `0x1efbe8c` — Make AMFI trust-cache lookup succeed (word 3/5)
+- `kernel.amfi.trust-cache.0` @ `0x1efbe84`: Make AMFI trust-cache lookup succeed (word 1/5)
+- `kernel.amfi.trust-cache.1` @ `0x1efbe88`: Make AMFI trust-cache lookup succeed (word 2/5)
+- `kernel.amfi.trust-cache.2` @ `0x1efbe8c`: Make AMFI trust-cache lookup succeed (word 3/5)
 - … 2 further records in this group
 
 Evidence:
@@ -1112,43 +1110,43 @@ Evidence:
 - unique PACIBSP function with saved x3 out-parameter
 - stack result is passed to a lookup call and followed by result/out-parameter guards
 
-**`kernel.amfi.launch-constraints.result`** @ `0x1f00bb8` — Return success from AMFI launch-constraint validation
+**`kernel.amfi.launch-constraints.result`** @ `0x1f00bb8`: Return success from AMFI launch-constraint validation
 
 Evidence:
 
 - function uniquely owns the Validation Category diagnostic
 
-**`kernel.amfi.launch-constraints.return`** @ `0x1f00bbc` — Return immediately after the launch-constraint result
+**`kernel.amfi.launch-constraints.return`** @ `0x1f00bbc`: Return immediately after the launch-constraint result
 
 Evidence:
 
 - paired entry-point stub
 
-**`kernel.debugger.result`** @ `0x39abbfc` — Report that the platform permits a debugger
+**`kernel.debugger.result`** @ `0x39abbfc`: Report that the platform permits a debugger
 
 Evidence:
 
 - unique highest-call-count ADRP x8 leaf with optional x0 output-pointer data flow
 
-**`kernel.debugger.return`** @ `0x39abc00` — Return the forced debugger result
+**`kernel.debugger.return`** @ `0x39abc00`: Return the forced debugger result
 
 Evidence:
 
 - paired leaf-function stub
 
-**`kernel.amfi.developer-mode.result`** @ `0x36f4cd8` — Report developer mode enabled
+**`kernel.amfi.developer-mode.result`** @ `0x36f4cd8`: Report developer mode enabled
 
 Evidence:
 
 - unique shared-pointer byte accessor masked to bit zero
 
-**`kernel.amfi.developer-mode.return`** @ `0x36f4cdc` — Return the forced developer-mode result
+**`kernel.amfi.developer-mode.return`** @ `0x36f4cdc`: Return the forced developer-mode result
 
 Evidence:
 
 - paired accessor stub
 
-**`kernel.amfi.post-validation.compare`** @ `0x1f08978` — Force the post-validation comparison unequal so the accept branch is taken
+**`kernel.amfi.post-validation.compare`** @ `0x1f08978`: Force the post-validation comparison unequal so the accept branch is taken
 
 Evidence:
 
@@ -1158,31 +1156,31 @@ Evidence:
 
 **2 records**, `0x1f08ee4`–`0x1f08ef0`
 
-- `kernel.amfi.dyld-policy.0` @ `0x1f08ee4` — Make dyld policy helper 1 succeed
-- `kernel.amfi.dyld-policy.1` @ `0x1f08ef0` — Make dyld policy helper 2 succeed
+- `kernel.amfi.dyld-policy.0` @ `0x1f08ee4`: Make dyld policy helper 1 succeed
+- `kernel.amfi.dyld-policy.1` @ `0x1f08ef0`: Make dyld policy helper 2 succeed
 
 Evidence:
 
 - within 80 bytes of the Swift Playgrounds development entitlement xref
 - BL is immediately followed by a conditional test of w0 and the two helpers differ
 
-#### `kernel-boot-policy` — 4 records, 4 evidence sets
+#### `kernel-boot-policy`: 4 records, 4 evidence sets
 
-**`kernel.persona.uid-zero`** @ `0x36a21a4` — Allow the persona UID override to be zero
+**`kernel.persona.uid-zero`** @ `0x36a21a4`: Allow the persona UID override to be zero
 
 Evidence:
 
 - LDR Wn,[persona,#8] followed by CBZ Wn
 - UID and GID branches share the same result-one deny block
 
-**`kernel.persona.gid-zero`** @ `0x36a21ac` — Allow the persona GID override to be zero
+**`kernel.persona.gid-zero`** @ `0x36a21ac`: Allow the persona GID override to be zero
 
 Evidence:
 
 - LDR Wn,[persona,#0xc] followed by CBZ Wn
 - fallthrough writes result zero while the shared target writes result one
 
-**`kernel.usb.restore-mode-result`** @ `0x28053d0` — Report restore mode to the USB Restricted Mode policy
+**`kernel.usb.restore-mode-result`** @ `0x28053d0`: Report restore mode to the USB Restricted Mode policy
 
 Evidence:
 
@@ -1190,15 +1188,15 @@ Evidence:
 - function owns sibling rd and rootdev parser calls to the same helper
 - arm64e entry follows RETAB
 
-**`kernel.usb.restore-mode-return`** @ `0x28053d4` — Return the forced restore-mode result
+**`kernel.usb.restore-mode-return`** @ `0x28053d4`: Return the forced restore-mode result
 
 Evidence:
 
 - paired entry-point stub
 
-#### `kernel-sep` — 32 records, 6 evidence sets
+#### `kernel-sep`: 32 records, 6 evidence sets
 
-**`kernel.aks.start.sep-call`** @ `0x20e629c` — Skip the SEP-dependent call in AKSUserClient::start
+**`kernel.aks.start.sep-call`** @ `0x20e629c`: Skip the SEP-dependent call in AKSUserClient::start
 
 Evidence:
 
@@ -1206,9 +1204,9 @@ Evidence:
 
 **20 records**, `0x20f13a4`–`0x20f13f0`
 
-- `kernel.aks.external-method.selector7.0` @ `0x20f13a4` — Selector-7 shim: CMP W1,#7 - recognize selector 7
-- `kernel.aks.external-method.selector7.1` @ `0x20f13a8` — Selector-7 shim: B.NE success - other selectors keep the existing success path
-- `kernel.aks.external-method.selector7.2` @ `0x20f13ac` — Selector-7 shim: CBZ X2,badArgument - reject a null arguments pointer
+- `kernel.aks.external-method.selector7.0` @ `0x20f13a4`: Selector-7 shim: CMP W1,#7 - recognize selector 7
+- `kernel.aks.external-method.selector7.1` @ `0x20f13a8`: Selector-7 shim: B.NE success - other selectors keep the existing success path
+- `kernel.aks.external-method.selector7.2` @ `0x20f13ac`: Selector-7 shim: CBZ X2,badArgument - reject a null arguments pointer
 - … 17 further records in this group
 
 Evidence:
@@ -1217,7 +1215,7 @@ Evidence:
 - IOExternalMethodArguments LP64 offsets validated by the native selector-7 path
 - entry PACIBSP is deliberately preserved
 
-**`kernel.aks.external-method.log-call`** @ `0x20f15d8` — Silence the now-unreachable externalMethod IOLog call
+**`kernel.aks.external-method.log-call`** @ `0x20f15d8`: Silence the now-unreachable externalMethod IOLog call
 
 Evidence:
 
@@ -1225,9 +1223,9 @@ Evidence:
 
 **3 records**, `0x213d340`–`0x213a43c`
 
-- `kernel.sep.panic-check.result` @ `0x213d340` — Return success from sepPanicCheck
-- `kernel.sep.did-timeout.result` @ `0x2139aa4` — Report that the SEP command did not time out
-- `kernel.sep.power-notification.result` @ `0x213a43c` — Return success from the paging-off notification handler
+- `kernel.sep.panic-check.result` @ `0x213d340`: Return success from sepPanicCheck
+- `kernel.sep.did-timeout.result` @ `0x2139aa4`: Report that the SEP command did not time out
+- `kernel.sep.power-notification.result` @ `0x213a43c`: Return success from the paging-off notification handler
 
 Evidence:
 
@@ -1235,9 +1233,9 @@ Evidence:
 
 **3 records**, `0x213d344`–`0x213a440`
 
-- `kernel.sep.panic-check.return` @ `0x213d344` — Return the forced SEP result
-- `kernel.sep.did-timeout.return` @ `0x2139aa8` — Return the forced SEP result
-- `kernel.sep.power-notification.return` @ `0x213a440` — Return the forced SEP result
+- `kernel.sep.panic-check.return` @ `0x213d344`: Return the forced SEP result
+- `kernel.sep.did-timeout.return` @ `0x2139aa8`: Return the forced SEP result
+- `kernel.sep.power-notification.return` @ `0x213a440`: Return the forced SEP result
 
 Evidence:
 
@@ -1245,25 +1243,25 @@ Evidence:
 
 **4 records**, `0x213e1fc`–`0x213e7c4`
 
-- `kernel.sep.set-power-a` @ `0x213e1fc` — Do not enter the first setPowerState SEP failure path
-- `kernel.sep.notify-active` @ `0x213d194` — Do not enter the notifyOSActiveGated SEP failure path
-- `kernel.sep.set-power-b` @ `0x213e22c` — Do not enter the second setPowerState SEP failure path
+- `kernel.sep.set-power-a` @ `0x213e1fc`: Do not enter the first setPowerState SEP failure path
+- `kernel.sep.notify-active` @ `0x213d194`: Do not enter the notifyOSActiveGated SEP failure path
+- `kernel.sep.set-power-b` @ `0x213e22c`: Do not enter the second setPowerState SEP failure path
 - … 1 further records in this group
 
 Evidence:
 
 - unique relocation-masked local failure-path sequence
 
-#### `kernel-sandbox` — 46 records, 6 evidence sets
+#### `kernel-sandbox`: 46 records, 6 evidence sets
 
-**`kernel.sandbox.vnode-check-open.target`** @ `0x10cf898` — Retarget vnode_check_open to the scoped process-name shim
+**`kernel.sandbox.vnode-check-open.target`** @ `0x10cf898`: Retarget vnode_check_open to the scoped process-name shim
 
 Evidence:
 
 - mac_policy_conf -> mpc_ops[267]
 - low chained-pointer target only
 
-**`kernel.sandbox.vnode-check-open.metadata`** @ `0x10cf89c` — Assert and preserve vnode_check_open PAC metadata
+**`kernel.sandbox.vnode-check-open.metadata`** @ `0x10cf89c`: Assert and preserve vnode_check_open PAC metadata
 
 Evidence:
 
@@ -1271,16 +1269,16 @@ Evidence:
 
 **33 records**, `0x39fd480`–`0x39fd500`
 
-- `kernel.sandbox.vnode-check-open.shim.0` @ `0x39fd480` — Scoped vnode_check_open shim: PACIBSP - sign LR with the B key and SP
-- `kernel.sandbox.vnode-check-open.shim.1` @ `0x39fd484` — Scoped vnode_check_open shim: STP FP,LR,[SP,#-0x30]! - save frame and signed LR
-- `kernel.sandbox.vnode-check-open.shim.2` @ `0x39fd488` — Scoped vnode_check_open shim: MOV FP,SP - establish the frame pointer
+- `kernel.sandbox.vnode-check-open.shim.0` @ `0x39fd480`: Scoped vnode_check_open shim: PACIBSP - sign LR with the B key and SP
+- `kernel.sandbox.vnode-check-open.shim.1` @ `0x39fd484`: Scoped vnode_check_open shim: STP FP,LR,[SP,#-0x30]! - save frame and signed LR
+- `kernel.sandbox.vnode-check-open.shim.2` @ `0x39fd488`: Scoped vnode_check_open shim: MOV FP,SP - establish the frame pointer
 - … 30 further records in this group
 
 Evidence:
 
 - unique executable cave after reviewed function tail
 
-**`kernel.sandbox.vnode-check-exec.target`** @ `0x10cf850` — Retarget vnode_check_exec to the existing allow stub
+**`kernel.sandbox.vnode-check-exec.target`** @ `0x10cf850`: Retarget vnode_check_exec to the existing allow stub
 
 Evidence:
 
@@ -1289,9 +1287,9 @@ Evidence:
 
 **5 records**, `0x2f219fc`–`0x2f1a480`
 
-- `kernel.sandbox.file-check-mmap.result` @ `0x2f219fc` — Return success from file_check_mmap
-- `kernel.sandbox.mount-check-mount.result` @ `0x2f1f998` — Return success from mount_check_mount
-- `kernel.sandbox.mount-check-remount.result` @ `0x2f1f7c8` — Return success from mount_check_remount
+- `kernel.sandbox.file-check-mmap.result` @ `0x2f219fc`: Return success from file_check_mmap
+- `kernel.sandbox.mount-check-mount.result` @ `0x2f1f998`: Return success from mount_check_mount
+- `kernel.sandbox.mount-check-remount.result` @ `0x2f1f7c8`: Return success from mount_check_remount
 - … 2 further records in this group
 
 Evidence:
@@ -1300,22 +1298,22 @@ Evidence:
 
 **5 records**, `0x2f21a00`–`0x2f1a484`
 
-- `kernel.sandbox.file-check-mmap.return` @ `0x2f21a00` — Return the forced Seatbelt result
-- `kernel.sandbox.mount-check-mount.return` @ `0x2f1f99c` — Return the forced Seatbelt result
-- `kernel.sandbox.mount-check-remount.return` @ `0x2f1f7cc` — Return the forced Seatbelt result
+- `kernel.sandbox.file-check-mmap.return` @ `0x2f21a00`: Return the forced Seatbelt result
+- `kernel.sandbox.mount-check-mount.return` @ `0x2f1f99c`: Return the forced Seatbelt result
+- `kernel.sandbox.mount-check-remount.return` @ `0x2f1f7cc`: Return the forced Seatbelt result
 - … 2 further records in this group
 
 Evidence:
 
 - paired entry-point stub
 
-#### `kernel-credential-manager` — 52 records, 3 evidence sets
+#### `kernel-credential-manager`: 52 records, 3 evidence sets
 
 **22 records**, `0x20bfd50`–`0x20c5688`
 
-- `kernel.credential-manager.sepmanagermatchedthreadcallhandler.result` @ `0x20bfd50` — Return success from sepManagerMatchedThreadCallHandler
-- `kernel.credential-manager.callplatformfunction.result` @ `0x20c0434` — Return success from callPlatformFunction
-- `kernel.credential-manager.cmdcontextv2.result` @ `0x20c04bc` — Return success from cmdContextV2
+- `kernel.credential-manager.sepmanagermatchedthreadcallhandler.result` @ `0x20bfd50`: Return success from sepManagerMatchedThreadCallHandler
+- `kernel.credential-manager.callplatformfunction.result` @ `0x20c0434`: Return success from callPlatformFunction
+- `kernel.credential-manager.cmdcontextv2.result` @ `0x20c04bc`: Return success from cmdContextV2
 - … 19 further records in this group
 
 Evidence:
@@ -1325,9 +1323,9 @@ Evidence:
 
 **26 records**, `0x20bfd54`–`0x20d1b30`
 
-- `kernel.credential-manager.sepmanagermatchedthreadcallhandler.return` @ `0x20bfd54` — Return the forced AppleCredentialManager result
-- `kernel.credential-manager.callplatformfunction.return` @ `0x20c0438` — Return the forced AppleCredentialManager result
-- `kernel.credential-manager.cmdcontextv2.return` @ `0x20c04c0` — Return the forced AppleCredentialManager result
+- `kernel.credential-manager.sepmanagermatchedthreadcallhandler.return` @ `0x20bfd54`: Return the forced AppleCredentialManager result
+- `kernel.credential-manager.callplatformfunction.return` @ `0x20c0438`: Return the forced AppleCredentialManager result
+- `kernel.credential-manager.cmdcontextv2.return` @ `0x20c04c0`: Return the forced AppleCredentialManager result
 - … 23 further records in this group
 
 Evidence:
@@ -1336,9 +1334,9 @@ Evidence:
 
 **4 records**, `0x20c1c54`–`0x20d1b2c`
 
-- `kernel.credential-manager.updateanalytics.result` @ `0x20c1c54` — Return success from updateAnalytics
-- `kernel.credential-manager.sendsepcommand.result` @ `0x20c2084` — Return success from sendSEPCommand
-- `kernel.credential-manager.unlockitem.result` @ `0x20c36e8` — Return success from unlockItem
+- `kernel.credential-manager.updateanalytics.result` @ `0x20c1c54`: Return success from updateAnalytics
+- `kernel.credential-manager.sendsepcommand.result` @ `0x20c2084`: Return success from sendSEPCommand
+- `kernel.credential-manager.unlockitem.result` @ `0x20c36e8`: Return success from unlockItem
 - … 1 further records in this group
 
 Evidence:
@@ -1348,9 +1346,9 @@ Evidence:
 
 ### Userland
 
-#### `restored-external-fdr` — 1 records, 1 evidence set
+#### `restored-external-fdr`: 1 records, 1 evidence set
 
-**`restored-external.fdr-result`** @ `0x7e848` — Return success from RestoredFDRRecover
+**`restored-external.fdr-result`** @ `0x7e848`: Return success from RestoredFDRRecover
 
 Evidence:
 
@@ -1358,9 +1356,9 @@ Evidence:
 - unique ADRP+ADD reference at 0x7e514
 - MOV X0,status immediately precedes LDP X29,X30,[SP,#0x90]
 
-#### `asr-signature` — 1 records, 1 evidence set
+#### `asr-signature`: 1 records, 1 evidence set
 
-**`asr.signature-mismatch-branch`** @ `0x1f670` — Do not enter the image-signature failure block after memcmp
+**`asr.signature-mismatch-branch`** @ `0x1f670`: Do not enter the image-signature failure block after memcmp
 
 Evidence:
 
@@ -1369,9 +1367,9 @@ Evidence:
 - reporter callers: 0x1fc98
 - unique CBNZ W0 into caller block immediately follows a BL
 
-#### `coreauthd` — 1 records, 1 evidence set
+#### `coreauthd`: 1 records, 1 evidence set
 
-**`coreauthd.dto-ratchet.start-controller`** @ `0x95c0` — Skip the SEP-dependent DTO ratchet controller startup
+**`coreauthd.dto-ratchet.start-controller`** @ `0x95c0`: Skip the SEP-dependent DTO ratchet controller startup
 
 Evidence:
 
@@ -1379,12 +1377,12 @@ Evidence:
 - optimized objc_msgSend selector stub at 0x3da20
 - unique BL caller followed by LDR X0,[SP,#8] at crash return address
 
-#### `ctkd` — 2 records, 1 evidence set
+#### `ctkd`: 2 records, 1 evidence set
 
 **2 records**, `0x1b38`–`0x1b3c`
 
-- `ctkd.sep-key-server.return-nil` @ `0x1b38` — Return nil from serverAttributesOfKey:error:
-- `ctkd.sep-key-server.return` @ `0x1b3c` — Return before entering the SEP-backed method body
+- `ctkd.sep-key-server.return-nil` @ `0x1b38`: Return nil from serverAttributesOfKey:error:
+- `ctkd.sep-key-server.return` @ `0x1b3c`: Return before entering the SEP-backed method body
 
 Evidence:
 
@@ -1392,9 +1390,9 @@ Evidence:
 - relative method entry at 0x26710 resolves to 0x1b38
 - RETAB / PACIBSP / SUB SP,SP entry boundary
 
-#### `mobileactivationd` — 5 records, 2 evidence sets
+#### `mobileactivationd`: 5 records, 2 evidence sets
 
-**`mobileactivationd.should-hactivate`** @ `0x2ec368` — Make DeviceType report that hactivation is enabled
+**`mobileactivationd.should-hactivate`** @ `0x2ec368`: Make DeviceType report that hactivation is enabled
 
 Evidence:
 
@@ -1404,9 +1402,9 @@ Evidence:
 
 **4 records**, `0x329be8`–`0x329c50`
 
-- `mobileactivationd.activation-state.migration-gate` @ `0x329be8` — Do not skip activation-state reporting before migration completes
-- `mobileactivationd.activation-state.adrp` @ `0x329c48` — Load the page containing the Activated CFString
-- `mobileactivationd.activation-state.add` @ `0x329c4c` — Materialize the Activated CFString address in X0
+- `mobileactivationd.activation-state.migration-gate` @ `0x329be8`: Do not skip activation-state reporting before migration completes
+- `mobileactivationd.activation-state.adrp` @ `0x329c48`: Load the page containing the Activated CFString
+- `mobileactivationd.activation-state.add` @ `0x329c4c`: Materialize the Activated CFString address in X0
 - … 1 further records in this group
 
 Evidence:

@@ -1,6 +1,6 @@
 # Firmware and device support in Liter8
 
-This guide explains what Liter8 means by “supported” and how to add a firmware build or device without turning offsets into runtime configuration. It uses the iPhone 11 (`n104ap`) ports for iOS 27 beta 4 (`24A5390f`) and iOS 27 `24A435` as the worked example.
+This guide explains what Liter8 means by "supported" and how to add a firmware build or device without turning offsets into runtime configuration. It uses the iPhone 11 (`n104ap`) ports for iOS 27 beta 4 (`24A5390f`) and iOS 27 `24A435` as the worked example.
 
 ## The support model
 
@@ -44,7 +44,7 @@ Python receives component paths and reviewed boot policy from Swift. It does not
 > [!IMPORTANT]
 > A fixture is an oracle, not a lookup table. Runtime resolution must succeed without reading the fixture offset.
 
-## What “supported” means
+## What "supported" means
 
 Support has four stages:
 
@@ -91,11 +91,11 @@ Inspect the target binaries without editing resolver code. Run every existing re
 
 The output should include:
 
-- hashes and sizes for every clean input;
-- the exact command used for each resolver;
-- unresolved and ambiguous patch IDs;
-- evidence for each proposed semantic match;
-- a list of required userland images that have not been mounted or decrypted.
+- hashes and sizes for every clean input
+- the exact command used for each resolver
+- unresolved and ambiguous patch IDs
+- evidence for each proposed semantic match
+- a list of required userland images that have not been mounted or decrypted
 
 Do not create fixtures or change the workflow registry during this phase. Save the table under `docs/plans/` so work can resume without repeating discovery.
 
@@ -116,7 +116,7 @@ Require an evidence record for each non-trivial correction:
 | Reference comparison | Same operation in beta 4, after target resolution |
 | Failure test | Mutation or synthetic case that must be rejected |
 
-For a raw sequence such as `d503237f d10103ff`, the nearby comment should say which instructions they encode and why those words identify the function. A comment such as “RC signature” does not explain the evidence.
+For a raw sequence such as `d503237f d10103ff`, the nearby comment should say which instructions they encode and why those words identify the function. A comment such as "RC signature" does not explain the evidence.
 
 ### Phase C: independent review
 
@@ -146,12 +146,12 @@ Reject any support claim that lacks the named evidence:
 
 | Claim | Required evidence |
 | --- | --- |
-| “Resolver works” | Unique target result plus semantic analysis and guarded pre-image |
-| “Same patch” | Same operation and replacement behavior, not a nearby offset |
-| “Fixture passes” | Manifest reload, record comparison and output hash verification |
-| “Firmware supported” | Exact IPSW profile plus complete required artifact coverage |
-| “Device supported” | Restore, boot, provisioning, finalization and repeat-run logs |
-| “Safe to generalize” | At least two binary shapes and negative ambiguity tests |
+| "Resolver works" | Unique target result plus semantic analysis and guarded pre-image |
+| "Same patch" | Same operation and replacement behavior, not a nearby offset |
+| "Fixture passes" | Manifest reload, record comparison and output hash verification |
+| "Firmware supported" | Exact IPSW profile plus complete required artifact coverage |
+| "Device supported" | Restore, boot, provisioning, finalization and repeat-run logs |
+| "Safe to generalize" | At least two binary shapes and negative ambiguity tests |
 
 Require the command output, binary relation, test name, fixture path or device log behind each conclusion.
 
@@ -192,10 +192,10 @@ The existing device policy could be reused, but every binary result still had to
 
 Read `BuildManifest.plist` and record:
 
-- product version and build;
-- product type, device class, chip ID and board ID;
-- the selected non-research erase identity;
-- every component path used by CFW, SSHRD and normal boot.
+- product version and build
+- product type, device class, chip ID and board ID
+- the selected non-research erase identity
+- every component path used by CFW, SSHRD and normal boot
 
 Keep decompressed or mounted binaries outside the public repository. Do not rename them to resemble the old build.
 
@@ -203,10 +203,10 @@ Keep decompressed or mounted binaries outside the public repository. Do not rena
 
 For each required plan, run `liter8 resolve` against the clean new binary. A successful result must have:
 
-- one candidate for every required patch ID;
-- original bytes that match the supplied binary;
-- replacement bytes with the same intended behavior as the reviewed build;
-- no overlapping writes unless the resolver explicitly composes them.
+- one candidate for every required patch ID
+- original bytes that match the supplied binary
+- replacement bytes with the same intended behavior as the reviewed build
+- no overlapping writes unless the resolver explicitly composes them
 
 Classify each failure before editing code:
 
@@ -292,10 +292,10 @@ Review the generated records. Fixture generation proves that serialization and g
 
 Each fixture must contain:
 
-- clean input size and SHA-256;
-- patch ID and resolved file offset;
-- original and replacement bytes;
-- complete patched-output SHA-256.
+- clean input size and SHA-256
+- patch ID and resolved file offset
+- original and replacement bytes
+- complete patched-output SHA-256
 
 Compare the new and previous fixture patch-ID sets. Offset equality is neither required nor expected.
 
@@ -331,22 +331,7 @@ Both n104 builds select `skipDisplayInitialization`. Swift writes that choice to
 
 ### 7. Run tests in tiers
 
-```bash
-# Fast resolver, parser and workflow tests.
-make test
-
-# Real beta-4 and 24A435 binaries, compiled with optimization.
-make test-fixtures
-
-# All optimized tests except the deliberately uncached production composition.
-make test-full
-
-# Production composite resolver without the fixture cache.
-make test-e2e
-
-# Swift-to-Python context, ZIP safety and workflow handoff.
-make integration
-```
+Run `make test` while iterating, then `make check` before claiming anything. The tiers in between are described in [CODEBASE_GUIDE.md](../CODEBASE_GUIDE.md).
 
 A passing fixture suite proves exact output parity for the staged binaries. It does not prove restore or boot behavior.
 
@@ -377,12 +362,12 @@ A new device requires more than another `productType` in the existing profile. S
 
 The new BuildManifest identity may select different files for:
 
-- iBSS and iBEC;
-- DeviceTree;
-- restore and normal kernelcache;
-- restore and normal TXM;
-- SEP, SPTM and firmware payloads;
-- restore ramdisk and root filesystem.
+- iBSS and iBEC
+- DeviceTree
+- restore and normal kernelcache
+- restore and normal TXM
+- SEP, SPTM and firmware payloads
+- restore ramdisk and root filesystem
 
 Run every resolver against the files selected for that board. Shared code can be reused only when the semantic evidence and replacement behavior still hold.
 
@@ -412,15 +397,15 @@ Then follow the fixture, test and exact-device sequence from Case 1.
 
 Stop the port and keep it experimental when any of these remains true:
 
-- a resolver returns zero or several candidates;
-- the candidate is supported only by nearby strings or an old offset;
-- original bytes do not match the clean input;
-- a replacement crosses a function or landing-pad boundary without proof;
-- fixture patch IDs differ without an explained operation change;
-- a required userland binary has not been extracted and checked;
-- workflow guards were copied from another build or board;
-- Setup, launchd injection, service-cache handling or APTicket capture is untested;
-- the device booted once but repeat boot or finalization is unhealthy.
+- a resolver returns zero or several candidates
+- the candidate is supported only by nearby strings or an old offset
+- original bytes do not match the clean input
+- a replacement crosses a function or landing-pad boundary without proof
+- fixture patch IDs differ without an explained operation change
+- a required userland binary has not been extracted and checked
+- workflow guards were copied from another build or board
+- Setup, launchd injection, service-cache handling or APTicket capture is untested
+- the device booted once but repeat boot or finalization is unhealthy
 
 ## Files changed by a normal port
 

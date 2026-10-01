@@ -1,16 +1,17 @@
-Create the isolated Liter8 work directory used by every firmware phase.
+# iPhone 11 device run, iOS 27 beta 4 `24A5390f`
+
+The commands as they were actually run, in order, with what the phone did at each stage. Every timing-sensitive step was run under `time`. The four **Observed** notes are the point of this document. The commands reproduce; what the phone did does not.
+
+## Setup
 
 ```bash
 mkdir -p .liter8
-```
-
-Delete previous Swift build products and compile a fresh debug CLI.
-
-```bash
 make clean && make build
 ```
 
-Identify, validate, and extract the iPhone 11 iOS 27 beta 4 IPSW into the work directory.
+## Prepare and build the CFW
+
+Identify, validate, and extract the IPSW into the work directory.
 
 ```bash
 time .build/debug/liter8 fw prepare \
@@ -25,6 +26,8 @@ time .build/debug/liter8 fw make-cfw \
   --work-dir "$PWD/.liter8"
 ```
 
+## Restore
+
 Erase-restore the patched CFW through the RP2350 iBSS handoff and Liter8's managed TSS proxy.
 
 ```bash
@@ -38,6 +41,8 @@ Recover this successful restore's device-bound APTicket from its retained debug 
 .build/debug/liter8 fw capture-ticket --work-dir "$PWD/.liter8"
 ```
 
+## SSHRD
+
 Build the patched and ticket-signed SSH restore ramdisk boot set. Liter8 requests administrator authentication when it must preserve root ownership inside the image.
 
 ```bash
@@ -45,7 +50,7 @@ Build the patched and ticket-signed SSH restore ramdisk boot set. Liter8 request
   --work-dir "$PWD/.liter8"
 ```
 
-Boot the verified SSH restore ramdisk set on the pwn-DFU device. The raw iBSS uses the RP2350 transport; the remaining signed images use the selected project-compatible `irecovery`.
+Boot it on the pwn-DFU device. The raw iBSS uses the RP2350 transport; the remaining signed images use the selected project-compatible `irecovery`.
 
 ```bash
 .build/debug/liter8 fw boot-rd \
@@ -53,7 +58,9 @@ Boot the verified SSH restore ramdisk set on the pwn-DFU device. The raw iBSS us
   --irecovery /usr/local/bin/irecovery
 ```
 
-Observed display behavior: the SSHRD boot chain completed and the device was reachable, but the iPhone 11 panel remained black. Liter8 did send the sky-blue `bgcolor` command and `setpicture 0x1`, so this is an unresolved restore-ramdisk display/backlight handoff issue rather than evidence that SSHRD failed to boot.
+**Observed.** The SSHRD boot chain completed and the device was reachable, but the iPhone 11 panel remained black. Liter8 did send the sky-blue `bgcolor` command and `setpicture 0x1`, so this is an unresolved restore-ramdisk display/backlight handoff issue rather than evidence that SSHRD failed to boot.
+
+## Bootstrap and provision
 
 Confirm that SSHRD is running, mount the Data volume, and report bootstrap state without installing or changing anything on the device.
 
@@ -84,7 +91,7 @@ Build the reviewed jailbreak payloads and provision the mounted System and Data 
   --work-dir "$PWD/.liter8"
 ```
 
-Observed on the beta-4 iPhone 11: the command preserved pristine `.orig` copies, deployed and read back all three signed daemon fixes, installed the five ScreenTime overrides, and reported `OK` for every new and existing provisioning check.
+**Observed.** The command preserved pristine `.orig` copies, deployed and read back all three signed daemon fixes, installed the five ScreenTime overrides, and reported `OK` for every new and existing provisioning check.
 
 Detach the verified host rootfs after provisioning while retaining the decrypted image cache for future retries.
 
@@ -92,6 +99,8 @@ Detach the verified host rootfs after provisioning while retaining the decrypted
 .build/debug/liter8 fw unmount-rootfs \
   --work-dir "$PWD/.liter8"
 ```
+
+## Normal boot
 
 Build and verify the ticket-signed normal-boot set, including the n104 display handoff, normal DeviceTree, TXM and public kernel patch plans.
 
@@ -108,11 +117,13 @@ From pwn DFU, send the verified normal boot chain. The RP2350 transports raw iBS
   --irecovery /usr/local/bin/irecovery
 ```
 
-Observed early display behavior: normal boot showed the expected sky-blue background and Apple logo, followed by verbose output. The panel later went black and the device temporarily disappeared from USB. This proves the n104 iBEC display handoff worked, but it is not proof that userspace finished booting. The original beta-4 workflow records the same black/USB-absent window; wait about five minutes and test normal-boot SSH before declaring failure.
+**Observed.** Normal boot showed the expected sky-blue background and Apple logo, followed by verbose output. The panel later went black and the device temporarily disappeared from USB. This proves the n104 iBEC display handoff worked, but it is not proof that userspace finished booting. The original beta-4 workflow records the same black/USB-absent window; wait about five minutes and test normal-boot SSH before declaring failure.
 
-After repairing Setup.app's invalid CodeDirectory and restoring the missing System `/bin/sh`, the same `get-boot` and `boot` commands completed a confirmed normal boot to the iOS Setup screen. This is the first end-to-end successful normal boot recorded for the Liter8 rewrite on `iPhone12,1` build `24A5390f`.
+**Observed.** After repairing Setup.app's invalid CodeDirectory and restoring the missing System `/bin/sh`, the same `get-boot` and `boot` commands completed a confirmed normal boot to the iOS Setup screen. This is the first end-to-end successful normal boot recorded for the Liter8 rewrite on `iPhone12,1` build `24A5390f`.
 
-After completing the iOS Setup flow, inspect and then perform the guarded one-time Procursus, shell and System-application finalization:
+## Finalize
+
+After completing the iOS Setup flow, inspect and then perform the guarded one-time Procursus, shell and System-application finalization.
 
 ```bash
 .build/debug/liter8 fw finalize \

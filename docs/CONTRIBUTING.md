@@ -1,23 +1,22 @@
 # Contributing to Liter8
 
-Liter8 accepts changes that improve patch resolution, add reviewed firmware support, strengthen the workflow, or make the research easier to reproduce. Every supported byte must have a reason, and every supported build must have evidence.
+PRs welcome on patch resolution, new firmware support, workflow fixes, and anything that makes the research easier to reproduce. The bar is the same throughout: every supported byte needs a reason, every supported build needs evidence.
+
+> [!WARNING]
+> Never commit an IPSW, an extracted Apple binary, an SHSH blob, an APTicket, a device identifier, a private key, a generated work directory, or a device log with personal data in it.
 
 ## Before you start
 
-Read these in order:
+Read [README.md](../README.md), then [CODEBASE_GUIDE.md](../CODEBASE_GUIDE.md), then whichever of these matters for your change:
 
-1. [README.md](../README.md)
-2. [CODEBASE_GUIDE.md](../CODEBASE_GUIDE.md)
-3. [FIRMWARE_SUPPORT_GUIDE.md](FIRMWARE_SUPPORT_GUIDE.md)
-4. [ADDING_FIRMWARE_SUPPORT.md](ADDING_FIRMWARE_SUPPORT.md)
-5. The resolver and tests closest to your change
+- [FIRMWARE_SUPPORT_GUIDE.md](FIRMWARE_SUPPORT_GUIDE.md) for what "supported" means
+- [ADDING_FIRMWARE_SUPPORT.md](ADDING_FIRMWARE_SUPPORT.md) if you are porting a build
+- the latest note under `docs/runs/` if you are touching the device workflow
+- [the 24A435 note](plans/IOS_27_24A435_RC_PATCHES.md) for a worked multi-build resolver example
 
-For device workflow changes, also read the latest relevant run under `docs/runs/`. For a concrete multi-build resolver example, read the retained `24A435` research note under `docs/plans/`.
+Then read the resolver and the tests closest to what you are changing.
 
-> [!WARNING]
-> Do not commit IPSWs, extracted Apple binaries, SHSH blobs, APTickets, device identifiers, private keys, generated work directories, or device logs that contain personal data.
-
-## Set up a development checkout
+## Setting up
 
 ```sh
 git clone --recurse-submodules https://github.com/Xplo8E/liter8.git
@@ -27,163 +26,100 @@ make
 make test
 ```
 
-`make setup` builds the pinned `idevicerestore` and creates an isolated Python environment. It does not install Python packages globally.
+`make setup` builds the pinned `idevicerestore` and makes Liter8's own Python environment. Nothing goes in globally. Test targets are listed in [CODEBASE_GUIDE.md](../CODEBASE_GUIDE.md).
 
-Use the debug executable during development:
-
-```sh
-.build/debug/liter8 profiles
-.build/debug/liter8 fw actions
-```
-
-Use a release build for repeated kernelcache scans:
+Private Apple binaries live outside the repo. Point the suite at them rather than copying them in:
 
 ```sh
-make release
-.build/release/liter8 resolve kernel restore /path/to/kernelcache.raw
+LITER8_FIXTURE_ROOT=/path/to/private/research make test-fixtures
 ```
 
-### Resolver-level commands
+Tests that need a binary you do not have will skip. If one skips, say so in the PR and say which claim is therefore unverified.
 
-These never touch a device. `resolve` reports what a plan would do without
-changing the input; add `--json` for machine-readable records:
+## Working without a device
+
+You do not need a phone to work on a resolver.
+
+`survey <extracted-dir>` runs every plan over an extracted firmware at once. Start there on a new build.
+
+`resolve` reports what a plan would do and leaves the input alone. `--json` for records.
 
 ```sh
 .build/release/liter8 resolve iboot ibss-normal /path/to/iBSS.raw --json
 ```
 
-`apply` writes a separately patched output, leaving the input untouched:
+`apply` writes a patched copy somewhere else. `verify` checks a binary against a fixture.
 
 ```sh
-.build/release/liter8 apply \
-  kernel restore \
-  /path/to/kernelcache.raw \
-  /path/to/kernelcache.patched
+.build/release/liter8 apply kernel restore /path/to/kernelcache.raw /path/to/kernelcache.patched
+.build/release/liter8 verify fixtures/24A5390f/n104ap/kernel-restore-n104-24A5390f.json /path/to/kernelcache.raw
 ```
 
-`verify` checks a binary against an exact-build fixture:
+`inspect` gives you segments, strings, xrefs, disassembly and masked pattern search, which is what you want when a signature stops matching.
 
-```sh
-.build/release/liter8 verify \
-  fixtures/24A5390f/n104ap/kernel-restore-n104-24A5390f.json \
-  /path/to/kernelcache.raw
-```
-
-Fixture offsets are verification oracles only. Runtime resolution never falls
-back to them, and a plan fails rather than guessing when its evidence is
-missing, duplicated or inconsistent.
+Fixture offsets are oracles for `verify` and nothing else. Resolution never falls back to them. A plan fails rather than guessing when its evidence is missing, duplicated or inconsistent.
 
 ## Design rules
 
 ### Resolve from evidence
 
-Runtime resolvers locate a patch from structure, control flow, references, and instruction semantics. They must reject missing, duplicated, or inconsistent evidence.
+A resolver finds its site from structure, control flow, references and instruction semantics. If the evidence is missing, duplicated or inconsistent it must reject, not pick the nearest candidate.
 
 > [!IMPORTANT]
-> Never use a known offset as a runtime fallback. Known offsets belong only in exact-build fixtures that verify the resolver's output.
+> A known offset is never a runtime fallback. Known offsets belong in fixtures, which check the resolver's output.
 
-If compiler output changes, add a reviewed signature variant. If the target's ABI or replacement behavior changes, add a payload variant. Do not weaken a uniqueness check to make a new build pass.
+Compiler output changed? Add a signature variant. ABI or replacement behavior changed? Add a payload variant. Do not weaken a uniqueness check to make a new build pass. That is the one shortcut that will cost someone a phone.
 
-### Keep responsibilities separate
+### Keep the layers apart
 
-- Swift owns firmware identity, parsing, patch discovery, guarded writes, IMG4/IM4P handling, and verification.
-- Python owns generic macOS and device orchestration where Swift adds no useful safety or clarity.
-- Profiles select reviewed signature and payload variants.
-- Fixture manifests are independent exact-build oracles.
-- Workflow scripts must remain build-independent.
+Swift owns firmware identity, parsing, patch discovery, guarded writes, container handling and verification. Python owns the generic macOS and device orchestration, where Swift would add no safety and no clarity. Profiles pick which signature and payload variant applies. Fixtures are independent oracles. Workflow scripts stay build-independent.
 
 ### Explain raw bytes
 
-Every opcode, mask, replacement word, byte string, and magic constant needs a nearby comment that explains:
+Every opcode, mask, replacement word and magic constant needs a comment near it. Say what the instruction decodes to, why it identifies this target rather than a similar one, which operands are fixed and which come from the input, and what you are assuming about ABI, alignment, branch range or code caves.
 
-- the decoded instruction or represented data;
-- why it identifies the target or implements the patch;
-- which operands are fixed and which are derived from the input;
-- any ABI, alignment, branch-range, or code-cave assumption.
+Prefer a named constant or a small typed struct to an anonymous array of hex words. Signatures go under `Sources/Liter8Core/Profiles/`. Patch bytes that vary by firmware family go under `Profiles/Payloads/`.
 
-Prefer named constants and small typed structures over anonymous arrays of hex words. Keep signatures under `Sources/Liter8Core/Profiles/`; keep firmware-varying patch bytes under `Sources/Liter8Core/Profiles/Payloads/`.
+### Keep writes guarded
 
-### Preserve guarded writes
-
-A patch plan must resolve and validate every record before writing any output. Each record needs the exact expected pre-image. A mismatch must fail the whole operation without leaving a partially patched file.
+A plan resolves and validates every record before anything is written. Each record carries its exact expected pre-image. One mismatch fails the whole operation, and nothing is left half-patched.
 
 ## Adding a firmware build
 
-Use [ADDING_FIRMWARE_SUPPORT.md](ADDING_FIRMWARE_SUPPORT.md) as the full checklist. At minimum, a new build needs:
+[ADDING_FIRMWARE_SUPPORT.md](ADDING_FIRMWARE_SUPPORT.md) is the full checklist. The minimum is:
 
-1. Product version, build ID, product type, board, chip ID, board ID, and manifest-selected component paths.
-2. Clean input sizes, SHA-256 hashes, Mach-O UUIDs, and embedded fingerprints.
-3. A classification of every required resolver as unchanged, new signature variant, new payload variant, or new resolver.
-4. Exact-build manifests under `fixtures/<build>/<board>/`.
-5. Clean-input, wrong-input, missing-anchor, duplicate-candidate, pre-image, and complete-output parity tests.
-6. A run note under `docs/runs/` when physical-device validation begins.
+1. Product version, build ID, product type, board, chip ID, board ID, and the component paths the manifest selects.
+2. Clean input sizes, SHA-256 hashes, Mach-O UUIDs, embedded fingerprints.
+3. Every required resolver classified: unchanged, new signature variant, new payload variant, or new resolver.
+4. Manifests under `fixtures/<build>/<board>/`.
+5. Tests for the clean input, the wrong input, a missing anchor, duplicate candidates, a bad pre-image, and complete output parity.
+6. A run note under `docs/runs/` once you start on hardware.
 
-> [!NOTE]
-> Resolver coverage, artifact construction, restore success, SSHRD boot, normal boot, and post-boot health are separate claims. State exactly which level has been demonstrated.
-
-Do not add an `IPSWWorkflowProfile` until the manifest identity and component mapping have been checked against the actual IPSW. Do not mark a profile fully supported until the complete physical-device workflow has passed.
-
-## Tests
-
-Run the smallest relevant test while editing, then the broader suite before a pull request:
-
-```sh
-make test           # Fast unit suite; private binaries may skip
-make test-fixtures  # Optimized Beta 4 and 24A435 fixture verification
-make integration    # Host workflow and orchestration tests
-make test-full      # All optimized resolver tests except uncached E2E
-make test-e2e       # Uncached production-composition resolver test
-make check          # Full resolver, E2E, and integration tiers
-```
-
-Private Apple binaries may live outside the repository. Point the full suite at them without copying them into the checkout:
-
-```sh
-LITER8_FIXTURE_ROOT=/path/to/private/research make test-fixtures
-LITER8_FIXTURE_ROOT=/path/to/private/research make test-full
-```
-
-`test-fixtures` verifies exact offsets, original bytes, replacements, and complete patched-output hashes for the Beta 4 and `24A435` manifests. It also checks that `apply --records-out` publishes records from the same guarded apply operation. `test-e2e` deliberately repeats the uncached composite resolver and is kept separate because it is slower.
-
-If a required private fixture is unavailable, say which test skipped and which claim remains unverified.
+Do not add a `DeviceWorkflowProfile` before checking the manifest identity and component mapping against a real IPSW. Do not call a profile supported before the whole device workflow has passed on a phone.
 
 ## Device evidence
 
-A successful build is not device validation. For an end-to-end support claim, record:
+A build that compiles is not a validated device. For an end-to-end claim, record each of these separately, because they fail separately:
 
-- CFW construction and complete artifact verification;
-- restore completion and restore-bound APTicket capture;
-- SSHRD construction and boot;
-- System, Data, and Preboot provisioning checks;
-- normal boot and expected display behavior;
-- bootstrap finalization, Dropbear access, launchd jobs, and health checks;
-- any failure, retry, manual step, and device-visible symptom.
+CFW construction and artifact verification. Restore completion and APTicket capture. SSHRD construction and boot. System, Data and Preboot provisioning checks. Normal boot and what the screen actually did. Bootstrap finalization, Dropbear, launchd jobs, health checks.
 
-Keep observations separate from explanations. Include the exact command, build, board, input hashes, output hashes, and relevant logs. Remove ECIDs, serial numbers, tickets, keys, network credentials, and other private values.
+Then record every failure, retry, manual step and device-visible symptom. Those are the parts someone reproducing your work will actually need.
+
+Keep what you observed separate from what you think it means. Include the command, the build, the board, input and output hashes, and the relevant log. Strip ECIDs, serial numbers, tickets, keys and network credentials.
 
 ## Pull requests
 
-Keep a pull request focused on one resolver family, firmware build, workflow fix, or documentation change. Describe:
-
-- what changed and why;
-- the firmware build and board, when applicable;
-- the semantic anchors and expected failure behavior;
-- tests run and their results;
-- private-fixture tests that skipped;
-- physical-device evidence, or a clear statement that it was not performed;
-- remaining limitations.
+One resolver family, one build, one workflow fix, or one documentation change per PR. Say what changed and why. Name the build and board. Name the semantic anchors and what failure you expect on wrong input. List the tests you ran, and the private-fixture tests that skipped. Give the device evidence, or state plainly that you did not run it. Say what is still broken.
 
 > [!IMPORTANT]
-> Do not describe a hypothesis or resolver-only result as verified device support. The repository uses three useful states: pending research, resolver verified, and end-to-end verified.
+> Do not describe a hypothesis or a resolver-only result as device support. There are three states and they are not interchangeable: pending research, resolver verified, end-to-end verified.
 
-Do not add generated build products, `.liter8` work directories, setup caches, or copied firmware artifacts to a pull request. Third-party binaries and payloads also require documented source, version, hash, license, and redistribution permission.
+No build products, `.liter8` directories, setup caches or copied firmware in a PR. A third-party binary or payload needs a documented source, version, hash, license and redistribution permission before it goes in `tools/`.
 
-## Documentation style
+## Writing docs
 
-Write for the next researcher who must reproduce the work. Use exact paths, commands, functions, offsets, hashes, and failure messages. Explain why a patch exists and what would disprove it. Avoid vague claims such as "works on iOS 27" when only one build and board were tested.
+Write for whoever has to reproduce this. Exact paths, commands, functions, offsets, hashes, failure messages. Say why a patch exists and what would prove it wrong.
 
-Use GitHub callouts sparingly:
+Avoid a claim like "works on iOS 27" when you tested one build on one board.
 
-- `[!NOTE]` for useful context;
-- `[!IMPORTANT]` for invariants and required checks;
-- `[!WARNING]` for destructive actions or private artifacts.
+No em-dashes. Use callouts sparingly: `[!NOTE]` for context worth stopping at, `[!IMPORTANT]` for an invariant, `[!WARNING]` for something destructive or private. If a page has four of them, none of them is doing any work.

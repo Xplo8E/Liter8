@@ -11,8 +11,8 @@ For the complete support model and worked examples from iOS 27 beta 4 and
 Record the immutable build ID, product type, board, chip ID, board ID, and the
 component paths selected from `BuildManifest.plist`. Add a
 `DeviceWorkflowProfile` only after those values have been checked against the
-actual IPSW. New profiles should start with `validationState: .experimental`;
-the CLI will then require an explicit `--experimental` opt-in for every stage.
+actual IPSW. New profiles start with `validationState: .experimental`, which
+makes the CLI require an explicit `--experimental` opt-in for every stage.
 Promote the profile to `.reviewed` only after the device workflow in step 6.
 
 Keep build-specific pre-boot guards in the same profile. At minimum, pin the
@@ -31,12 +31,12 @@ Firmware selection must not depend on the archive filename.
 Run the resolver against clean binaries from the new build and classify the
 result:
 
-- **unchanged**: the existing semantic evidence still selects exactly one site;
+- **unchanged**: the existing semantic evidence still selects exactly one site
 - **new signature variant**: the operation is unchanged but compiler output or
-  surrounding control flow changed;
+  surrounding control flow changed
 - **new payload variant**: the resolved function is the same but its ABI or the
-  required replacement behavior changed;
-- **new resolver**: the old evidence no longer identifies the operation safely.
+  required replacement behavior changed
+- **new resolver**: the old evidence no longer identifies the operation safely
 
 Do not loosen uniqueness checks merely to make a new binary pass.
 
@@ -74,22 +74,15 @@ resolution or used as a fallback.
 
 Add focused tests for:
 
-- the clean supported binary;
-- a missing anchor;
-- duplicate or ambiguous candidates;
-- a wrong pre-image;
-- profile mismatch;
-- complete output parity with an independent implementation.
+- the clean supported binary
+- a missing anchor
+- duplicate or ambiguous candidates
+- a wrong pre-image
+- profile mismatch
+- complete output parity with an independent implementation
 
-Run the responsive suite while developing, then the full optimized suite:
-
-```sh
-make test
-make test-fixtures
-make test-full
-make test-e2e
-make integration
-```
+Run `make test` while developing and `make check` before you call the port
+done. The tiers are described in [CODEBASE_GUIDE.md](../CODEBASE_GUIDE.md).
 
 `test-fixtures` memoizes each resolver task only for that test process. It
 still recomputes every requested plan on the next run and checks the exact

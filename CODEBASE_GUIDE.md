@@ -1,199 +1,138 @@
-# TL;DR
+# Liter8 codebase guide
 
-Liter8 is a Swift 6 CLI with a small Python orchestration layer. Swift selects firmware profiles, parses binary formats, resolves patch locations, validates pre-images, and produces signed artifacts. Python coordinates macOS filesystem operations and device-facing tools.
+For someone about to change the code. [README.md](README.md) covers using it.
 
-Analyzed state: current public working tree, including the iOS 27 `24A435` port
+Swift decides, Python plumbs. Swift picks the firmware profile, parses the binary formats, works out where each patch goes, checks the bytes before writing, and signs the artifacts. Python mounts images, moves files, calls the external tools and walks the device through each stage. No offsets in the Python, no `device_class` branches either.
 
-Branch: `main`
+## What's where
 
-Generated at: 2026-09-14
-
-Confidence: High. Entry points, resolver composition, firmware workflows, fixtures, tests, and physical-device results for iPhone 11 on iOS 27 beta 4 and `24A435` were inspected directly.
-
-# What This Project Does
-
-- Identifies an IPSW using `BuildManifest.plist`.
-- Resolves patches from semantic binary evidence, not runtime offset tables.
-- Applies patches only after checking every expected original byte.
-- Builds CFW, SSHRD, and normal-boot artifacts.
-- Manages restore ticket capture, device provisioning, and finalization.
-
-# Who Uses It / Why It Exists
-
-Liter8 is for firmware researchers extending a reviewed device workflow across iOS builds. It replaces fixed-offset scripts with reusable resolvers while retaining exact-build manifests as independent verification oracles.
-
-# Reviewed Workflows
-
-| Firmware | Product / board | Evidence |
-| --- | --- | --- |
-| iOS 27 beta 4, `24A5390f` | `iPhone12,1` / `n104ap` | CFW restore, APTicket capture, SSHRD, provisioning, normal boot, finalization, and repeat boot |
-| iOS 27 RC/release, `24A435` | `iPhone12,1` / `n104ap` | CFW restore, APTicket capture, SSHRD, provisioning, normal boot, Procursus finalization, Dropbear, persona/icon services, wallpaper repair, and repeat boot |
-
-Both entries are `.reviewed` in `DeviceWorkflowRegistry` and run without `--experimental`. Resolver profiles for other artifacts do not imply that their complete device workflows are supported.
-
-# Tech Stack & Runtime
-
-- Swift 6 and Swift Package Manager.
-- Capstone for ARM64 decoding.
-- Vendored `libimg4-spm` for IM4P and IMG4 containers.
-- Python 3 in a Liter8-managed venv for host orchestration.
-- macOS `hdiutil` and `aea` for disk images and encrypted firmware.
-- 7-Zip for safe ZIP64 IPSW extraction.
-- Pinned `idevicerestore` plus reviewed device utilities.
-
-# Repo Layout (Human-Friendly)
-
-| Path | Responsibility |
+| Path | What it holds |
 | --- | --- |
-| `Sources/Liter8CLI` | Argument parsing and workflow dispatch |
-| `Sources/Liter8Core/Binary` | ARM64, Mach-O, Objective-C, byte primitives, and read-only inspection |
+| `Sources/Liter8CLI` | argument parsing, workflow dispatch |
+| `Sources/Liter8Core/Binary` | ARM64, Mach-O, ObjC, byte primitives, read-only inspection |
 | `Sources/Liter8Core/Firmware` | IPSW, profile context, IMG4/IM4P, resources, venv |
-| `Sources/Liter8Core/Patching` | Patch records, manifests, errors, guarded writes |
-| `Sources/Liter8Core/Profiles` | Firmware signature and payload variants |
-| `Sources/Liter8Core/Resolvers` | Component-specific patch discovery |
-| `Tests/Liter8CoreTests` | Tests grouped by the same domains |
-| `fixtures/<build>/<board>` | Exact-build resolver and output oracles |
-| `scripts` | Generic macOS and device workflow orchestration |
-| `device` | Reviewed provisioning resources |
-| `payloads` | Pinned SSHRD inputs |
-| `tools` | Reviewed or setup-built host tools |
-| `docs` | Contributor guidance, firmware-port procedure, retained research, and device evidence |
+| `Sources/Liter8Core/Patching` | patch records, manifests, guarded writes |
+| `Sources/Liter8Core/Profiles` | signature and payload variants |
+| `Sources/Liter8Core/Resolvers` | per-component patch discovery |
+| `Tests/Liter8CoreTests` | same split as Sources |
+| `fixtures/<build>/<board>` | exact-build oracles |
+| `scripts` | the Python: mounting, staging, signing, tool calls, device sequencing |
+| `device` | what gets installed on the phone from SSHRD, and the scripts that do it |
+| `payloads` | `ssh.tar.gz` and the sftp entitlements, both hash-pinned |
+| `tools` | imported host binaries (`img4`, `ldid`, `usbliter8ctl`, `gtar`), plus the `idevicerestore` `make setup` builds |
+| `docs` | porting procedure, design notes, device evidence |
 
-# Startup & Execution Flow
+## Where a command goes
 
-`Sources/Liter8CLI/main.swift` parses a top-level command. Resolver and inspection commands load a `BinaryImage` and dispatch directly into `Liter8Core`. Firmware commands use `FirmwareWorkflowRunner`, which writes a semantic context and then invokes the appropriate generic workflow helper.
+`Sources/Liter8CLI/main.swift` reads the first argument and branches. `resolve`, `apply`, `verify`, `survey` and `inspect` load a `BinaryImage` and go straight into `Liter8Core`. Anything under `fw` goes through `FirmwareWorkflowRunner`, which writes a semantic context file and then hands off to the matching Python helper.
 
-`fw prepare` is fully Swift-owned and does not invoke Python.
+`fw prepare` is the exception. It never touches Python.
 
-# Core Modules and Responsibilities
+## The pieces worth knowing
 
-- `BinaryImage`: bounded reads, pattern searches, and patch input storage.
-- `ARM64`: instruction decoding and control-flow helpers.
-- `BinaryInspector`: read-only segments, strings, xrefs, functions, calls, disassembly, Objective-C methods, and masked-pattern diagnostics used while developing resolvers.
-- `MachOLayout` / `ObjCMetadata`: structural userland resolution.
-- `IPSWManifest`: firmware identity and reviewed workflow selection.
-- `IPSWUnzip`: archive preflight, extraction, verification, and publication.
-- `FirmwareArtifact` / `IMG4Signing`: native container handling.
-- `KernelResolverProfileRegistry`: embedded kernel fingerprints and build-specific signature or payload variants. It never stores resolved offsets.
-- `DeviceWorkflowRegistry`: exact IPSW identity, component mapping guards, boot-plan additions, and reviewed versus experimental workflow status.
-- Component resolvers: produce guarded `PatchRecord` values.
-- `GuardedPatchApplier`: preflights the complete plan before writing output.
+`BinaryImage` does bounded reads, pattern searches and holds the patch input.
 
-# End-to-End Data / Request Flow
+`ARM64` decodes instructions and answers boundary questions. On a BTI build that matters more than it sounds: `functionEntry` and `functionStart` give you what a `BL` targets, `stubStart` gives you where a replacement stub can safely be written. They are the same address on a build without landing pads, which is why beta 4 never exercised the difference.
 
-For a firmware build:
+`BinaryInspector` is read-only. Segments, strings, xrefs, functions, calls, disassembly, ObjC methods, masked patterns. It exists for the hour you spend working out why a signature stopped matching.
 
-1. Inspect the IPSW manifest and select one exact workflow profile.
-2. Extract into staging and verify the resulting inventory.
-3. Map semantic component names to manifest-selected paths.
-4. Resolve and guard every patch site. When evidence is requested, `apply --records-out` emits records from this same operation instead of running the resolver a second time.
-5. Patch and sign artifacts into a staging set.
-6. Verify complete output hashes and atomically publish the set.
-7. Send the verified restore, SSHRD, or normal-boot sequence.
+`MachOLayout` and `ObjCMetadata` handle userland structure.
 
-# Key Configs, Flags, and Environments
+`IPSWManifest` holds firmware identity and `DeviceWorkflowRegistry`. `IPSWUnzip` does archive preflight, extraction and verification. `FirmwareArtifact` and `IMG4Signing` handle the containers natively.
 
-- `--file`, then `IPSW_FILE`: IPSW input.
-- `--work-dir`, then `WORK_DIR`, then cwd: mutable state root.
-- `--experimental`: explicitly opt into a workflow profile that has not completed device validation.
-- `--ticket`: explicit IM4M override.
-- `--irecovery`: reviewed custom recovery transport.
-- `--idevicerestore`: development-only executable override.
-- `--rootfs`: explicit mounted root filesystem for provisioning.
-- `--records-out`: write patch records produced by the same guarded `apply` operation.
-- `--resource-dir`: source/install resource override.
-- `--check`: inspect a provisioning or finalization phase without modifying it.
-- `LITER8_SELF`: exact CLI path exported to Python helpers.
+`KernelResolverProfileRegistry` maps an embedded XNU fingerprint to signature and payload variants. It stores no resolved offsets, and an unknown fingerprint returns nothing rather than a near miss.
 
-# External Dependencies & Integrations
+`GuardedPatchApplier` preflights the whole plan before it writes a byte, which is where the pre-image guards are enforced.
 
-- `vendor/libimg4-spm`: pinned source dependency.
-- `vendor/idevicerestore`: pinned source built by `make setup`.
-- Homebrew utilities: 7-Zip, `ipsw`, GNU tar/coreutils, zstd, and libimobiledevice tooling.
-- Apple firmware and local raw fixtures are external inputs and are not stored in the repository.
+## What a firmware run does
 
-# How To Run, Debug, and Test
+1. Read the IPSW manifest, select exactly one workflow profile.
+2. Extract to staging, verify the inventory.
+3. Map semantic component names onto the manifest's paths.
+4. Resolve and guard every site. `apply --records-out` emits records from that same pass rather than resolving twice.
+5. Patch and sign into a staging set.
+6. Verify the output hashes, publish the set atomically.
+7. Send the restore, SSHRD or normal-boot sequence.
+
+## Supported builds
+
+Five `DeviceWorkflowProfile` entries, all `.reviewed`, all iPhone 11 `n104ap`:
+
+| Build | Version |
+| --- | --- |
+| `24A5390f` | 27.0 beta 4 |
+| `24A435` | 27.0 |
+| `24A446` | 27.0.1 |
+| `24B5084k` | 27.2 beta 1 |
+| `24B5089g` | 27.2 beta 2 |
+
+`supports()` requires an exact build match, so anything else fails at `fw prepare`.
+
+Resolver profiles are a separate list and do not line up one to one. `ios27-24A435-n104ap` covers `24A435`, `24A437` and `24A446` because the kernels share an XNU fingerprint. `ios27-beta2-24A5370h-d421ap` exists only as a credential-manager signature reference for `d421ap`/`d431ap`, with no workflow behind it. A resolver profile existing says nothing about whether the device workflow is supported.
+
+Nothing is currently marked `.experimental`. The flag and the gate are wired up and waiting for the next port.
+
+## Flags and environment
+
+- `--file`, then `IPSW_FILE`: the input IPSW.
+- `--work-dir`, then `WORK_DIR`, then cwd: where mutable state lands.
+- `--experimental`: opt into a profile that has not finished device validation.
+- `--serial`: add `serial=3` to the artifact being built, moving the kernel console to UART. Per artifact, because the literal is baked in at build time.
+- `--ticket`: supply an IM4M instead of using the captured one.
+- `--irecovery`: the project's custom build, required for every boot command.
+- `--idevicerestore`: override the pinned binary. Development only.
+- `--rootfs`: a root filesystem you mounted yourself.
+- `--records-out`: write the records from this same guarded apply.
+- `--resource-dir`, `--check`: resource override, and inspect a phase without changing it.
+- `LITER8_SELF`: the CLI path, exported to the Python helpers.
+
+## Build and test
 
 ```sh
 make setup
 make
 .build/debug/liter8 profiles
 .build/debug/liter8 fw actions
-
-make test
-make test-fixtures
-make integration
-make test-full
-make test-e2e
-make check
 ```
 
-`make test` is the fast edit loop. `make test-fixtures` runs optimized exact-build fixture verification and the one-pass apply checks. `make test-full` runs the optimized suite except the deliberately uncached production composition. `make test-e2e` runs that composition, and `make check` combines the full resolver, E2E, and integration tiers. Set `LITER8_FIXTURE_ROOT` to the private research tree containing extracted Apple binaries when running fixture-backed tests.
+`make test` is the edit loop. `make test-fixtures` runs the optimized exact-build verification. `make test-full` is everything optimized except the deliberately uncached production composition, which is what `make test-e2e` runs on its own. `make integration` covers the Swift-to-Python handoff. `make check` runs the lot.
 
-Use the release executable for repeated full-image scans:
+Fixture-backed tests need real Apple binaries, which are not in this repo. Point `LITER8_FIXTURE_ROOT` at a private tree and they wake up; leave it unset and they skip.
+
+Use the release build for repeated full-image scans. Debug kernelcache work is slow enough to notice.
 
 ```sh
 make release
 .build/release/liter8 resolve kernel restore /path/to/kernelcache.raw
 ```
 
-# ASCII Diagrams
+External pieces: Capstone for ARM64 decoding, the vendored `libimg4-spm` for containers, a pinned `idevicerestore` built by `make setup`, macOS `hdiutil` and `aea` for disk images and encrypted firmware, 7-Zip for ZIP64 extraction, and Python 3 in a venv Liter8 manages itself.
 
-```text
-[liter8 CLI]
-      |
-      +-> [Binary + resolver + guarded patching]
-      |
-      +-> [Firmware profile + artifact handling]
-                         |
-                         +-> [generic Python orchestration]
-                                      |
-                                      +-> [macOS tools / device]
-```
+## Words used here
 
-```text
-fw prepare
-  -> inspect BuildManifest
-  -> select exact profile
-  -> preflight archive
-  -> extract to staging
-  -> verify inventory and identity
-  -> publish extracted tree
+- **Profile** is overloaded, so read which one. A *resolver profile* maps a kernel fingerprint to signature and payload variants. A *workflow profile* says this exact IPSW and board may run the full device workflow.
+- **Signature variant**: masked instructions that locate a target.
+- **Payload variant**: the bytes written once it is located.
+- **Fixture manifest**: an exact-build oracle holding input and output hashes plus the expected records. It is checked against, never read from.
+- **Plan**: a named group of related resolvers.
+- **SSHRD**: the SSH-capable restore ramdisk.
 
-fw get-boot / get-rd
-  -> select the exact firmware and device boot plan
-  -> resolve and patch guarded copies in one pass
-  -> retain patch records from that same apply operation
-  -> create ticket-bearing IMG4 files
-  -> hash and publish one mode-bound boot set
-```
+## Known gaps
 
-# Glossary (Important Files & Symbols)
+`fw get-boot` and `fw get-rd` rebuild far more than they need to.
 
-- **Profile**: reviewed firmware identity and resolver-variant selection.
-- **Signature variant**: masked instructions used to locate semantic targets.
-- **Payload variant**: bytes written after a site is resolved.
-- **Fixture manifest**: exact-build oracle containing input/output hashes and expected patch records.
-- **Reviewed workflow profile**: exact IPSW/device mapping that completed restore, SSHRD, provisioning, normal boot, finalization, and repeat-boot validation.
-- **Experimental workflow profile**: mapped firmware that remains gated behind `--experimental` until the same device evidence exists.
-- **Plan**: a named composition of related resolvers.
-- **SSHRD**: the SSH-capable restore ramdisk environment.
+Normal Apple pairing is still not lined up with the Wi-Fi and Dropbear SSH path.
 
-# Unknowns / Open Questions
+Redistribution terms for the third-party binaries under `tools/` have not been audited.
 
-- `fw get-boot` and `fw get-rd` need incremental caching.
-- Normal Apple pairing is not part of the verified Wi-Fi/Dropbear SSH path.
-- Third-party binary and payload redistribution terms still need auditing.
-
-# Suggested Next Reading Path
+## Reading order
 
 1. `README.md`
 2. `Sources/Liter8CLI/main.swift`
 3. `Sources/Liter8CLI/FirmwareWorkflowRunner.swift`
 4. `Sources/Liter8Core/Firmware/IPSWManifest.swift`
 5. `docs/FIRMWARE_SUPPORT_GUIDE.md`
-6. One folder under `Sources/Liter8Core/Resolvers`
+6. one folder under `Sources/Liter8Core/Resolvers`
 7. `Sources/Liter8Core/Patching/GuardedPatchApplier.swift`
 8. `docs/ADDING_FIRMWARE_SUPPORT.md`
 9. `docs/plans/IOS_27_24A435_RC_PATCHES.md`
-10. `docs/runs/IOS_27_BETA4_IPHONE11.md`

@@ -1,60 +1,58 @@
 # Liter8
 
-Patch, restore and boot custom iOS firmware on an iPhone 11 from macOS, using the usbliter8 exploit.
+Patch and boot custom iOS 27 on an iPhone 11, from a Mac. Built on the usbliter8 exploit.
 
-[![License](https://img.shields.io/github/license/Xplo8E/liter8?style=flat-square&color=blue)](LICENSE) ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey?style=flat-square) ![Swift](https://img.shields.io/badge/Swift-6-F05138?style=flat-square&logo=swift&logoColor=white) ![Firmware](https://img.shields.io/badge/iOS-27.0%20to%2027.2%20beta%202-2ea043?style=flat-square)
+![iOS](https://img.shields.io/badge/iOS-27.0%20to%2027.2%20beta%202-2ea043?style=flat-square)
 
 <img src="./docs/iphone11-sileo.jpg" alt="iPhone 11 running patched iOS 27 with Sileo" width="760">
 
-> [!WARNING]
-> Liter8 is under active development. Support is exact-build and exact-device scoped; an unlisted IPSW or board is not implicitly compatible.
-> This is a tethered jailbreak: the device boots only from pwn DFU with `fw boot`, so the host is needed every time.
+Two things before you go any further.
 
-## Tested on
+It's tethered. The phone only boots from pwn DFU with `fw boot`, so the Mac has to be there every single time. No Mac, no boot.
 
-| Firmware        | Build      | Device               |
-| --------------- | ---------- | -------------------- |
-| iOS 27.0 beta 4 | `24A5390f` | iPhone 11 · `n104ap` |
-| iOS 27.0 RC     | `24A435`   | iPhone 11 · `n104ap` |
-| iOS 27.0        | `24A437`   | iPhone 11 · `n104ap` |
-| iOS 27.0.1      | `24A446`   | iPhone 11 · `n104ap` |
-| iOS 27.2 beta 1 | `24B5084k` | iPhone 11 · `n104ap` |
-| iOS 27.2 beta 2 | `24B5089g` | iPhone 11 · `n104ap` |
+And it's iPhone 11 only, `n104ap`. I don't own another A13 device so that's all i'm willing to claim.
 
-Every build listed is **end-to-end verified**: an erase restore, a normal boot and a repeat boot all passed on hardware.
+## What works
 
-> [!IMPORTANT]
-> A build Apple no longer signs cannot be restored. `fw restore-cfw` captures a fresh APTicket from Apple's TSS during the restore, so once signing stops the build stays listed as tested but is no longer installable. Check signing status for your device before picking a build.
+Normal boot to the home screen, root SSH, apt and Sileo, TrollStore, apps launch.
 
-An unsupported IPSW fails before extraction. A recognized firmware profile never supplies patch offsets; offsets remain outputs of the resolvers.
+## What doesn't
 
-## TODO
+- SEP
+- passcode
+- cellular
+- Apple services
+- xTweak injection. It injects, but it's nowhere near as solid as vphone
+- 11 Pro and Pro Max. no device to test on
 
-Known gaps. These need more research, and contributions are welcome.
+PRs welcome on any of these, especially SEP. The Pro and Pro Max are open too, if you own one and want to take the port on, i'll help where i can. Or if you'd rather help on the hardware side, there's a [coffee link](https://buymeacoffee.com/xplo8e) and that's what it'd go towards. Either route is fine, and so is neither.
 
-- [ ] SEP
-- [ ] Passcode
-- [ ] Cellular
-- [ ] Apple services
-- [ ] Improve Tweak injection (works, but not as robust as vphone)
-- [ ] iPhone 11 Pro and Pro Max support (i don't have device to verify)
+## Builds i've actually run
 
-Everything else works: normal boot to the home screen, root SSH, apt and Sileo, TrollStore, and apps launching.
+| Firmware        | Build      |
+| --------------- | ---------- |
+| iOS 27.0 beta 4 | `24A5390f` |
+| iOS 27.0 RC     | `24A435`   |
+| iOS 27.0        | `24A437`   |
+| iOS 27.0.1      | `24A446`   |
+| iOS 27.2 beta 1 | `24B5084k` |
+| iOS 27.2 beta 2 | `24B5089g` |
 
-## Install and build
+All on the same iPhone 11. "Run" means i did an erase restore, booted it normally, then rebooted and it came back up. On the actual phone.
 
-Liter8 requires macOS 14 or newer, Xcode Command Line Tools with Swift 6, and Homebrew. Install the host dependencies:
+There's a catch with that table though. `fw restore-cfw` pulls a fresh APTicket from Apple while the restore is happening, so once Apple drops signing for a build you can't install it anymore. The row stays in the table because i did test it, but that doesn't mean you can still use it today. Check signing first.
+
+Anything not in the table fails before it even gets extracted. The profiles don't carry offsets either, so adding a build isn't a matter of pasting numbers in. The resolvers work them out at runtime.
+
+## Building it
+
+You need macOS 14 or newer, Xcode command line tools with Swift 6, and Homebrew.
 
 ```sh
 brew install \
   sevenzip blacktop/tap/ipsw gnu-tar coreutils zstd autoconf automake libtool pkg-config \
-  libimobiledevice libimobiledevice-glue libirecovery libusbmuxd libplist libtatsu libzip curl 
+  libimobiledevice libimobiledevice-glue libirecovery libusbmuxd libplist libtatsu libzip curl
 ```
-
-> [!NOTE]
-> IPSW extraction uses `7zz` from the `sevenzip` formula, and Liter8 looks for it at `/opt/homebrew/bin/7zz`. On Intel Homebrew it lands in `/usr/local/bin`, so set `LITER8_7ZZ` to its path.
-
-Clone, prepare the pinned tools, and build the release executable:
 
 ```sh
 git clone --recurse-submodules https://github.com/Xplo8E/liter8.git
@@ -63,17 +61,18 @@ make setup
 make release
 ```
 
-The executable is `.build/release/liter8`. Device boot also requires the reviewed project-specific `irecovery`; pass its path with `--irecovery`.
+Binary ends up at `.build/release/liter8`.
 
-## Usage
+One thing that will catch you out: booting needs this project's `irecovery`, not whatever brew gave you. You pass it with `--irecovery` on every boot command. Yes, every one.
 
-Keep every generated file under one work directory. `--work-dir` overrides `WORK_DIR`; without either, Liter8 uses the current directory.
+## Using it
 
-> [!TIP]
-> Run the steps in order, every time. Each one consumes the previous step's output, so a part-stale work directory is not a supported starting point. If you come back to a device later, start again from `fw make-cfw` rather than resuming halfway.
+Everything lands in one work directory. Set `WORK_DIR`, or pass `--work-dir`, or don't and it'll dump into whatever directory you're standing in.
+
+Run the steps in order, every time. Each one eats the output of the one before it. Coming back to a phone days later, restart from `fw make-cfw` rather than guessing where you left off.
 
 > [!CAUTION]
-> Step 3 erases the device. `fw restore-cfw` performs an erase restore and destroys everything on it. There is no undo. Check the selected IPSW, device, build, board and work directory before running it.
+> Step 3 wipes the phone. Erase restore, everything gone, no undo. Read the IPSW path, the device, the build, the board and the work dir twice before you hit enter.
 
 ### 1. Prepare the IPSW
 
@@ -83,7 +82,7 @@ export WORK_DIR="$PWD/.liter8"
 .build/release/liter8 fw prepare --file /path/to/firmware.ipsw
 ```
 
-`fw prepare` identifies the build from `BuildManifest.plist`; the IPSW filename is ignored. Set `IPSW_FILE` if you do not want to pass `--file`.
+It gets the build out of `BuildManifest.plist` and ignores what you named the file. `IPSW_FILE` does the same job as `--file` if you'd rather set it once.
 
 ### 2. Build the CFW
 
@@ -91,33 +90,32 @@ export WORK_DIR="$PWD/.liter8"
 .build/release/liter8 fw make-cfw
 ```
 
-> [!IMPORTANT]
-> `fw make-cfw`, `fw get-rd` and `fw get-boot` accept `--serial`, adding `serial=3` to the boot arguments of the artifact they build. Off by default: it moves the kernel console to the UART, and the device then shows no boot log on its own screen. The literal is fixed at build time, so pass it per artifact.
+There's a `--serial` flag here, and on `fw get-rd` and `fw get-boot`. It writes `serial=3` into the boot args, which moves the kernel console onto the UART. Useful when you're debugging a boot that dies early. The downside is the phone screen goes quiet, no boot log on the device anymore. It's off by default, and because the literal gets baked in at build time you have to pass it separately for each artifact you build.
 
-### 3. Restore the CFW
+### 3. Restore it
 
-Put the device in pwn DFU, then run:
+Phone in pwn DFU, then:
 
 ```sh
 .build/release/liter8 fw restore-cfw
 ```
 
-Liter8 verifies the CFW, manages the local TSS proxy, captures the restore-bound APTicket, and stops the proxy when `idevicerestore` exits.
+This checks the CFW over, starts a local TSS proxy, catches the restore ticket on its way through, and shuts the proxy down once `idevicerestore` exits.
 
-### 4. Boot the SSH restore ramdisk
+### 4. Boot the SSH ramdisk
 
-Return the device to pwn DFU:
+Back to pwn DFU.
 
 ```sh
 .build/release/liter8 fw get-rd
 .build/release/liter8 fw boot-rd --irecovery /path/to/custom/irecovery
 ```
 
-The ticket captured by step 3 is now at `$WORK_DIR/apticket.im4m`, so `--ticket` is not needed here.
+Step 3 already dropped the ticket at `$WORK_DIR/apticket.im4m`, so skip `--ticket` here.
 
-### 5. Provision the restored system
+### 5. Provision
 
-Run these while the device is in SSHRD:
+Phone is in SSHRD now. Run these:
 
 ```sh
 .build/release/liter8 fw bootstrap --check
@@ -130,16 +128,16 @@ Run these while the device is in SSHRD:
 
 ### 6. Boot iOS
 
-Return the device to pwn DFU:
+pwn DFU again.
 
 ```sh
 .build/release/liter8 fw get-boot
 .build/release/liter8 fw boot --irecovery /path/to/custom/irecovery
 ```
 
-### 7. Finalize the bootstrap
+### 7. Finish the bootstrap
 
-After normal-boot SSH becomes available:
+Wait until you can SSH into the booted OS, then:
 
 ```sh
 .build/release/liter8 fw finalize --check
@@ -147,80 +145,81 @@ After normal-boot SSH becomes available:
 .build/release/liter8 fw finalize --check
 ```
 
-## How Liter8 works
+The second `--check` is just so you can see it went through.
 
-- Swift identifies firmware, parses binaries, resolves patch locations, validates pre-images, and handles IMG4, IM4P, APTickets, and DeviceTrees.
-- Python coordinates macOS disk images, file staging, external tools, and device workflow steps. It contains no build-specific offset tables.
-- Every patch plan resolves and validates completely before Liter8 writes an output.
+## How it's put together
 
-```text
-IPSW
-  -> manifest and profile selection
-  -> component extraction
-  -> semantic resolution
-  -> guarded patching
-  -> IMG4/IM4P signing and verification
-  -> CFW, SSHRD, or normal-boot artifacts
-```
+Swift does the thinking. Works out which firmware you handed it, parses the binaries, finds the patch sites, checks the bytes are what it expected before writing over them, and deals with IMG4, IM4P, APTickets and DeviceTrees.
 
-## Repository layout
+Python does the plumbing. Disk images, moving files into place, calling the external tools, walking the device through each stage. There are no offsets anywhere in the Python and i'd like to keep it that way.
+
+Nothing gets written to disk until the whole patch plan has resolved and every pre-image has checked out. Half-applied patches are how you brick things.
 
 ```text
 Sources/
-  Liter8CLI/                 CLI parsing and workflow dispatch
+  Liter8CLI/        arg parsing, dispatch
   Liter8Core/
-    Binary/                  ARM64, Mach-O and Objective-C analysis
-    Firmware/                IPSW, IMG4/IM4P and runtime resources
-    Patching/                patch records, manifests and guarded writes
-    Profiles/                build-to-signature and payload selection
-      Payloads/              the patch bytes each plan writes
+    Binary/         ARM64, Mach-O, ObjC
+    Firmware/       IPSW, IMG4/IM4P
+    Patching/       patch records and guarded writes
+    Profiles/       build to signature mapping
+      Payloads/     the bytes each plan writes
     Resolvers/
-      iBoot/                 iBSS, iBEC, boot arguments and display
-      Kernel/                AMFI, AKS, SEP, sandbox and boot policy
-      TXM/                   TXM restore and normal-boot policy
-      Userland/              restore and post-boot binaries
-      DeviceTree/            structural DeviceTree plans
-Tests/Liter8CoreTests/       tests grouped by the same domains
-fixtures/<build>/<board>/    exact-build verification manifests
-scripts/                     generic host workflow orchestration
-device/                      reviewed device provisioning resources
-payloads/                    pinned SSHRD payload inputs
-tools/                       reviewed or setup-built host tools
-vendor/                      pinned source dependencies
-docs/                        design notes and exact-device run evidence
+      iBoot/        iBSS, iBEC, boot args, display
+      Kernel/       AMFI, AKS, SEP, sandbox, boot policy
+      TXM/          restore and normal boot policy
+      Userland/     restore and post-boot binaries
+      DeviceTree/
+Tests/              same split as above
+fixtures/<build>/<board>/
+scripts/            host side orchestration
+device/             provisioning resources
+payloads/           SSHRD payload inputs
+tools/              host tools, some built by setup
+vendor/             pinned deps
+docs/
 ```
 
-This remains one `Liter8Core` Swift target. The folders express ownership without adding artificial target boundaries or widening internal APIs.
+It's all one Swift target. The folders are there so i can find things, nothing more.
 
-## Contributing
+## Rough edges
 
-Read [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) first. Firmware ports also follow [docs/ADDING_FIRMWARE_SUPPORT.md](docs/ADDING_FIRMWARE_SUPPORT.md).
+`fw get-rd` and `fw get-boot` rebuild far more than they need to. It's slow and i know it, it's on the list.
 
-## Documentation
+Normal Apple pairing still isn't lined up with the Wi-Fi and Dropbear SSH path that actually works. Written up in the docs.
+
+## Docs
 
 - [Architecture and onboarding](CODEBASE_GUIDE.md)
 - [Firmware and device support guide](docs/FIRMWARE_SUPPORT_GUIDE.md)
 - [iOS 27 `24A435` resolver and device evidence](docs/plans/IOS_27_24A435_RC_PATCHES.md)
-- [iPhone 11 beta-4 device run](docs/runs/IOS_27_BETA4_IPHONE11.md)
+- [iPhone 11 beta 4 device run](docs/runs/IOS_27_BETA4_IPHONE11.md)
 - [Bootstrap and provisioning status](docs/design/BOOTSTRAP_JB_STATUS.md)
 - [Normal boot handoff](docs/design/NORMAL_BOOT_HANDOFF.md)
 - [Performance backlog](docs/BACKLOG.md)
 
-> [!NOTE]
-> `fw get-rd` and `fw get-boot` currently rebuild more artifacts than needed. Normal Apple pairing also remains separate from the verified Wi-Fi and Dropbear SSH path. Both items are tracked in the project documentation.
+## Contributing
 
-## Acknowledgements
+[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md). If you're porting a firmware, [docs/ADDING_FIRMWARE_SUPPORT.md](docs/ADDING_FIRMWARE_SUPPORT.md) too.
 
-Liter8 builds on research and tooling published by the following projects and contributors:
+## Thanks
 
-- [usbliter8-fun](https://github.com/wh1te4ever/usbliter8-fun) by [wh1te4ever](https://github.com/wh1te4ever), whose iOS 27 beta 2 and beta 3 CFW and ramdisk work formed the base of the iPhone 11 beta-4 port.
-- [34306](https://github.com/34306/usbliter8-fun) (Huy Nguyen) for the fork, tutorial, and original `patches/` scripts used by the public workflow.
-- [Procursus](https://github.com/ProcursusTeam) for the rootless bootstrap.
-- [khanhduytran0](https://github.com/khanhduytran0) for the DeviceTree and kernel USB-restriction ideas.
-- [tihmstar](https://github.com/tihmstar) for `img4` and `img4tool` and their APTicket-based IMG4 signing work.
-- [m1stadev](https://github.com/m1stadev) and [doronz88](https://github.com/doronz88) for `pyimg4` and `pymobiledevice3`, used by the earlier kernelcache and USB forwarding flows.
-- [Lakr233](https://github.com/Lakr233) for [vphone-cli](https://github.com/Lakr233/vphone-cli), whose Swift CLI, firmware workflow structure, and vendored IMG4 integration informed Liter8, and for `trollvnc` and USB device-control work.
+None of this starts without these people.
+
+[wh1te4ever](https://github.com/wh1te4ever) and [usbliter8-fun](https://github.com/wh1te4ever/usbliter8-fun). The beta 2 and beta 3 CFW and ramdisk work is what the beta 4 port was built on top of.
+
+[34306](https://github.com/34306/usbliter8-fun), Huy Nguyen, for the fork, the tutorial, and the original `patches/` scripts everyone was using.
+
+[Procursus](https://github.com/ProcursusTeam) for the rootless bootstrap.
+
+[khanhduytran0](https://github.com/khanhduytran0) for the DeviceTree and kernel USB restriction ideas.
+
+[tihmstar](https://github.com/tihmstar) for `img4`, `img4tool`, and the APTicket based IMG4 signing work.
+
+[m1stadev](https://github.com/m1stadev) and [doronz88](https://github.com/doronz88) for `pyimg4` and `pymobiledevice3`, which the older kernelcache and USB forwarding flows ran on.
+
+[Lakr233](https://github.com/Lakr233) for [vphone-cli](https://github.com/Lakr233/vphone-cli). The Swift CLI shape, the firmware workflow, and the vendored IMG4 integration all came from reading that. Also `trollvnc` and the USB device control work.
 
 ## License
 
-Liter8's original source is available under the [MIT License](LICENSE). Third-party submodules, tools, and payloads remain subject to their respective licenses and distribution terms.
+MIT, see [LICENSE](LICENSE). Submodules, tools and payloads keep their own licenses.

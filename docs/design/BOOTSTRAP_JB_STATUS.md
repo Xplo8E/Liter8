@@ -38,7 +38,7 @@ Liter8 materializes the reviewed inputs in a writable, resumable runtime under t
 | `Sileo.app`, `launchd.hooked`, `lhook.dylib`, `uicache` | Generated payloads | Do not commit the old build output; reproduce from pinned inputs and source. |
 | `photoforce/pfwatch`, `spawnprobe/personaalloc` | Core per-boot helpers | Import their source and build recipes with `jbboot.sh`; both are invoked by that script. |
 | Remaining `photodiag`, `photoforce`, `spawnprobe` files | Research/probe utilities | Keep outside the core firmware workflow. |
-| `aptproxy.py`, `tss_proxy_server.py` | Host services | TSS service is required for restore; APT proxy is an optional debugging aid. Both still need an explicit lifecycle owner. |
+| `aptproxy.py`, `tss_proxy_server.py` | Host services | TSS is required for restore and now has a lifecycle owner: `restore_cfw.py` runs `scripts/tss_proxy.py` through `managed_tss_proxy` for exactly the length of the restore. The APT proxy was never imported. |
 
 The reviewed SSH archive also contains reusable private host keys. They remain part of the existing SSHRD byte image, but `fw provision` installs only the Dropbear binaries. Its launchd job uses `dropbear -R`, so missing normal-boot host keys are generated on that phone.
 
@@ -48,4 +48,6 @@ The public tool bundle is imported under `tools/`, including `usbliter8ctl`, `ss
 
 ## Completion boundary
 
-Firmware artifact generation, restore/boot transport, bootstrap, provisioning, reproducible JB payload construction and normal-boot shell setup are now wired into the CLI. Exact-device restore, boot and read-back validation remain the completion boundary; these commands have not been run against the phone yet.
+Firmware artifact generation, restore/boot transport, bootstrap, provisioning, reproducible JB payload construction and normal-boot shell setup are all wired into the CLI, and the completion boundary has since been crossed. Erase restore, normal boot and repeat boot have run on an iPhone 11 across the builds the README lists.
+
+This document records the migration from the public beta-4 workflow. It is not the current support status, so read the README for that.
