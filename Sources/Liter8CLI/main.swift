@@ -8,7 +8,7 @@ private func usage() -> Never {
       liter8 resolve <component> <plan> <input> [options]
       liter8 apply <component> <plan> <input> <output> [options]
       liter8 fw <actions|prepare|prepare-rootfs|unmount-rootfs|make-cfw|capture-ticket|get-rd|get-boot|verify-cfw|restore-cfw|boot-rd|boot|bootstrap|provision|finalize|setup-shell> [options]
-      liter8 survey <extracted-firmware-directory>
+      liter8 survey <extracted-firmware-directory> [--guards]
       liter8 acm-probe <kernelcache> <signature-variant>
       liter8 preflight
       liter8 profile <binary>
@@ -660,10 +660,18 @@ do {
         try printRecords(records, json: options.json)
 
     case "survey":
-        guard arguments.count == 2 else { usage() }
-        let status = try Survey.run(
-            directory: URL(fileURLWithPath: arguments[1]).standardizedFileURL
-        )
+        let wantsGuards = arguments.contains("--guards")
+        let positional = arguments.dropFirst().filter { !$0.hasPrefix("--") }
+        guard positional.count == 1, arguments.count == (wantsGuards ? 3 : 2) else { usage() }
+        let surveyDirectory = URL(fileURLWithPath: positional[positional.startIndex])
+            .standardizedFileURL
+        let status = try Survey.run(directory: surveyDirectory)
+        // Resolution is a read of files already on disk. Measuring the guards
+        // decrypts and mounts an 8 GB root filesystem, so it stays opt-in
+        // rather than slowing down the command people run constantly.
+        if wantsGuards {
+            try Survey.measureGuards(directory: surveyDirectory, python: nil)
+        }
         exit(status)
 
     case "acm-probe":

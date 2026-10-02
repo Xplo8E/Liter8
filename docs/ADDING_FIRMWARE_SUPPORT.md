@@ -20,6 +20,17 @@ stock `/sbin/launchd` SHA-256, the stock launchd service-cache SHA-256 and
 LaunchDaemons count, and the class-owned Setup.app method count. These are
 identity and safety checks, not patch offsets.
 
+`survey --guards` measures all four and prints a profile to paste:
+
+```sh
+liter8 survey <extracted-firmware-directory> --guards
+```
+
+It decrypts and mounts the root filesystem to read them, so it takes a few
+minutes and needs about 9 GB free. No `sudo`. One IPSW ships one root
+filesystem even when it serves several boards, so the guards are measured once
+and printed for every board the manifest lists.
+
 Select the board's additional iBSS operations in `bootPlan`. Use explicit
 empty arrays when the board needs no additions. Do not put device-class checks
 in Python or copy a shared resolver under a board-specific name.

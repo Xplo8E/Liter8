@@ -19,6 +19,7 @@ from unittest.mock import patch
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 from liter8_workflow import Context, WorkflowError, run  # noqa: E402
+import measure_guards  # noqa: E402
 from boot_artifacts import (  # noqa: E402
     publish_directory,
     ticket_from_environment,
@@ -786,6 +787,128 @@ class ContextTests(unittest.TestCase):
         write_boot_manifest(fixture_context, staging, mode)
         publish_directory(staging, self.work / "Ramdisk")
         return fixture_context
+
+
+class MeasureGuardsTests(unittest.TestCase):
+    """`survey --guards` turns an extracted IPSW into a profile to paste.
+
+    The decrypt and mount are macOS tools on an 8 GB image, so these cover the
+    parts that decide what the printed profile says.
+    """
+
+    @staticmethod
+    def manifest(identities):
+        return {
+            "ProductVersion": "27.0",
+            "ProductBuildVersion": "24A437",
+            "SupportedProductTypes": ["iPhone12,3", "iPhone12,5"],
+            "BuildIdentities": identities,
+        }
+
+    @staticmethod
+    def identity(device_class, board, product, behavior="Erase", os_path="OS.dmg.aea"):
+        return {
+            "ApBoardID": board,
+            "ApChipID": "0x8030",
+            "Ap,ProductType": product,
+            "Info": {"DeviceClass": device_class, "RestoreBehavior": behavior},
+            "Manifest": {"OS": {"Info": {"Path": os_path}}},
+        }
+
+    def test_boards_deduplicates_each_board(self):
+        # Erase and Update are separate identities for the same hardware.
+        manifest = self.manifest([
+            self.identity("d421ap", "0x06", "iPhone12,3"),
+            self.identity("d421ap", "0x06", "iPhone12,3", behavior="Update"),
+            self.identity("d431ap", "0x02", "iPhone12,5"),
+        ])
+        found = measure_guards.boards(manifest)
+        self.assertEqual(
+            sorted(b["deviceClass"] for b in found), ["d421ap", "d431ap"]
+        )
+        self.assertEqual(sorted(b["boardID"] for b in found), ["0x02", "0x06"])
+
+    def test_boards_ignores_non_erase_identities(self):
+        manifest = self.manifest([
+            self.identity("d421ap", "0x06", "iPhone12,3", behavior="Update"),
+        ])
+        self.assertEqual(measure_guards.boards(manifest), [])
+
+    def test_product_type_comes_from_the_build_identity(self):
+        # SupportedProductTypes lists both, so only Ap,ProductType can say
+        # which board is which.
+        manifest = self.manifest([
+            self.identity("d421ap", "0x06", "iPhone12,3"),
+            self.identity("d431ap", "0x02", "iPhone12,5"),
+        ])
+        self.assertEqual(
+            measure_guards.product_type_for(manifest, "d421ap"), "iPhone12,3"
+        )
+        self.assertEqual(
+            measure_guards.product_type_for(manifest, "d431ap"), "iPhone12,5"
+        )
+
+    def test_product_type_refuses_an_unknown_board(self):
+        manifest = self.manifest([self.identity("d421ap", "0x06", "iPhone12,3")])
+        with self.assertRaises(WorkflowError):
+            measure_guards.product_type_for(manifest, "n104ap")
+
+    def test_emit_prints_one_profile_per_board_sharing_the_guards(self):
+        manifest = self.manifest([
+            self.identity("d421ap", "0x06", "iPhone12,3"),
+            self.identity("d431ap", "0x02", "iPhone12,5"),
+        ])
+        guards = {
+            "launchdSHA256": "a" * 64,
+            "launchdCacheSHA256": "b" * 64,
+            "launchdCacheDaemonCount": 729,
+            "setupControllerMethodCount": 66,
+        }
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            measure_guards.emit(manifest, Path("/x/iPhone12,3,iPhone12,5_27.0_24A437_Restore"), guards)
+        output = buffer.getvalue()
+
+        self.assertEqual(output.count("DeviceWorkflowProfile("), 2)
+        self.assertIn('id: "iphone12,3-d421ap-24A437"', output)
+        self.assertIn('id: "iphone12,5-d431ap-24A437"', output)
+        self.assertIn("boardID: 0x06", output)
+        self.assertIn("boardID: 0x02", output)
+        # One root filesystem serves both boards, so the guards repeat.
+        self.assertEqual(output.count(f'launchdCacheSHA256: "{"b" * 64}"'), 2)
+        self.assertEqual(output.count("launchdCacheDaemonCount: 729"), 2)
+        # Neither of these is measurable from the firmware files.
+        self.assertEqual(output.count("validationState: .experimental"), 2)
+        self.assertEqual(output.count("normalIBSSAdditionalPlans: []"), 2)
+        self.assertIn(
+            'extractedDirectoryName: "iPhone12,3,iPhone12,5_27.0_24A437_Restore"', output
+        )
+
+    def test_measure_reads_the_launchd_guards_off_a_mount(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            mount = Path(scratch)
+            (mount / "sbin").mkdir()
+            (mount / "System/Library/xpc").mkdir(parents=True)
+            (mount / "Applications/Setup.app").mkdir(parents=True)
+            (mount / "sbin/launchd").write_bytes(b"launchd")
+            cache = {"LaunchDaemons": {f"d{i}": {"Label": f"l{i}"} for i in range(3)}}
+            (mount / "System/Library/xpc/launchd.plist").write_bytes(plistlib.dumps(cache))
+            (mount / "Applications/Setup.app/Setup").write_bytes(b"setup")
+
+            with patch.object(measure_guards, "setup_controller_count", return_value=66):
+                guards = measure_guards.measure(mount)
+
+            self.assertEqual(
+                guards["launchdSHA256"], hashlib.sha256(b"launchd").hexdigest()
+            )
+            self.assertEqual(guards["launchdCacheDaemonCount"], 3)
+            self.assertEqual(guards["setupControllerMethodCount"], 66)
+
+    def test_measure_names_the_file_a_root_filesystem_is_missing(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            with self.assertRaises(WorkflowError) as raised:
+                measure_guards.measure(Path(scratch))
+            self.assertIn("sbin/launchd", str(raised.exception))
 
 
 if __name__ == "__main__":

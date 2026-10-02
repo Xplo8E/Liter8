@@ -108,7 +108,7 @@ Back to pwn DFU.
 
 ```sh
 .build/release/liter8 fw get-rd
-.build/release/liter8 fw boot-rd --irecovery /path/to/custom/irecovery
+.build/release/liter8 fw boot-rd --irecovery /path/to/irecovery
 ```
 
 Step 3 already dropped the ticket at `$WORK_DIR/apticket.im4m`, so skip `--ticket` here.
@@ -132,7 +132,7 @@ pwn DFU again.
 
 ```sh
 .build/release/liter8 fw get-boot
-.build/release/liter8 fw boot --irecovery /path/to/custom/irecovery
+.build/release/liter8 fw boot --irecovery /path/to/irecovery
 ```
 
 ### 7. Finish the bootstrap

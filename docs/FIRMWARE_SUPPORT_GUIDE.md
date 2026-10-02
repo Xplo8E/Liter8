@@ -134,6 +134,8 @@ If fixture generation exposes a resolver problem, return to Phase B. Do not edit
 
 Add an experimental `DeviceWorkflowProfile` using the BuildManifest identity, measured launchd, service-cache and Setup guards, and reviewed hardware boot policy. Add profile and context tests. Keep `validationState` set to `.experimental`.
 
+`liter8 survey <extracted-dir> --guards` prints that profile with the identity and the four guards already filled in. It leaves `bootPlan` empty and `validationState` experimental on purpose: neither is measurable from the firmware files.
+
 The device operator controls DFU transitions, destructive restore, sudo authorization and recovery. Record the exact command and output for each step.
 
 ### Phase F: device evidence
@@ -390,6 +392,8 @@ The current schema selects additional iBSS operations only. If the new device ne
 ### Collect device-specific guards
 
 Measure the new board's stock launchd hash, service-cache hash and daemon count, Setup method count, component paths and any hardware-specific pre-boot input. Do not reuse values merely because the iOS build is the same.
+
+`liter8 survey <extracted-dir> --guards` reads the four pre-boot guards off the root filesystem and prints a profile per board. That is measurement, not reuse: a dual-device IPSW ships one root filesystem, so its boards share these values by construction rather than by assumption.
 
 Then follow the fixture, test and exact-device sequence from Case 1.
 

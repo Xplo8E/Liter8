@@ -26,6 +26,8 @@ Swift decides, Python plumbs. Swift picks the firmware profile, parses the binar
 
 `Sources/Liter8CLI/main.swift` reads the first argument and branches. `resolve`, `apply`, `verify`, `survey` and `inspect` load a `BinaryImage` and go straight into `Liter8Core`. Anything under `fw` goes through `FirmwareWorkflowRunner`, which writes a semantic context file and then hands off to the matching Python helper.
 
+`survey --guards` is the one exception: it runs the sweep in Swift, then calls `scripts/measure_guards.py` to read the pre-boot guards off the root filesystem, because the decrypt and mount already live in `rootfs.py`.
+
 `fw prepare` is the exception. It never touches Python.
 
 ## The pieces worth knowing

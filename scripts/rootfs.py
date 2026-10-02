@@ -182,7 +182,7 @@ def readable_size(size: int) -> str:
     raise AssertionError("unreachable")
 
 
-def decrypt(context: Context, source: Path, image: Path) -> None:
+def decrypt(source: Path, image: Path) -> None:
     """Create the cached plaintext DMG atomically beside the work directory."""
     ipsw = executable("ipsw", "/opt/homebrew/bin/ipsw")
     aea = executable("aea", "/usr/bin/aea")
@@ -268,7 +268,7 @@ def prepare(context: Context) -> None:
             raise WorkflowError(f"cached rootfs image is incomplete or encrypted: {image}")
         print(f"[*] reusing cached decrypted root filesystem: {image}", flush=True)
     else:
-        decrypt(context, context.component("OS"), image)
+        decrypt(context.component("OS"), image)
 
     # imageinfo rejects truncated or non-DMG output before macOS tries to mount it.
     run([hdiutil, "imageinfo", image], capture=True)
