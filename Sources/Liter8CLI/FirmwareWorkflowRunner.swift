@@ -113,7 +113,7 @@ enum FirmwareWorkflowRunner {
         try fileManager.createDirectory(at: staging, withIntermediateDirectories: false)
         defer { try? fileManager.removeItem(at: staging) }
 
-        print("extracting with /opt/homebrew/bin/7zz ...")
+        print("extracting with \(try IPSWUnzip.sevenZipExecutable().path) ...")
         fflush(stdout)
         try IPSWUnzip.extract(file, to: staging)
         try verify(profile: profile, expecting: identity, in: staging)

@@ -46,6 +46,7 @@ require_command pkg-config
 require_command tar
 require_command ipsw
 require_command aea
+require_command 7zz
 mkdir -p "$CACHE_DIR" "$TOOLS_DIR"
 : > "$LOG_FILE"
 
