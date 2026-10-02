@@ -19,7 +19,7 @@ Swift decides, Python plumbs. Swift picks the firmware profile, parses the binar
 | `scripts` | the Python: mounting, staging, signing, tool calls, device sequencing |
 | `device` | what gets installed on the phone from SSHRD, and the scripts that do it |
 | `payloads` | `ssh.tar.gz` and the sftp entitlements, both hash-pinned |
-| `tools` | imported host binaries (`img4`, `ldid`, `usbliter8ctl`, `gtar`), plus the `idevicerestore` `make setup` builds |
+| `tools` | `usbliter8ctl`, plus `ldid`/`gtar`/`sshpass` fallbacks for hosts without them, plus the `idevicerestore` `make setup` builds |
 | `docs` | porting procedure, design notes, device evidence |
 
 ## Where a command goes
