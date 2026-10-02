@@ -29,10 +29,9 @@ TOOLS="$BASE/../tools"
 # Prefer a native sshpass. The bundled one is x86_64, so it needs Rosetta
 # on Apple Silicon. See https://github.com/Xplo8E/Liter8/issues/2.
 SSHPASS=$(command -v sshpass || echo "$TOOLS/sshpass")
-# Prefer native builds. The bundled ldid and img4tool are arm64 only and
-# cannot run on an Intel Mac. See https://github.com/Xplo8E/Liter8/issues/2.
+# Prefer a native ldid. The bundled one is arm64 only, so it cannot run on an
+# Intel Mac. See https://github.com/Xplo8E/Liter8/issues/2.
 LDID=$(command -v ldid || echo "$TOOLS/ldid_macosx_arm64")
-IMG4TOOL=$(command -v img4tool || echo "$TOOLS/img4tool")
 # The bundled gtar is x86_64, so it needs Rosetta on Apple Silicon.
 GTAR=$(command -v gtar || echo "$TOOLS/gtar")
 # Allow the device's ECDSA key and AES-CTR cipher without dropping SSH defaults.
@@ -132,8 +131,6 @@ say "preflight"
     || die "sshpass at $SSHPASS cannot run on this host; brew install sshpass"
 "$LDID" -v 2>&1 | grep -q "Link Identity Editor" \
     || die "ldid at $LDID cannot run on this host; brew install ldid"
-"$IMG4TOOL" --help >/dev/null 2>&1 \
-    || die "img4tool at $IMG4TOOL cannot run on this host; build tihmstar/img4tool"
 "$GTAR" --version >/dev/null 2>&1 \
     || die "gtar at $GTAR cannot run on this host; brew install gnu-tar"
 command -v timeout >/dev/null 2>&1 || die "timeout not found (brew install coreutils)"
@@ -190,8 +187,8 @@ if wants ticket && [ "$CHECK_ONLY" = 0 ]; then
     sh_dev "/bin/cat '$sep_path'" > "$sep_new" \
         || die "could not read $sep_path"
     [ -s "$sep_new" ] || die "downloaded sep-firmware.img4 is empty"
-    "$IMG4TOOL" -e -m "$ticket_new" "$sep_new" >/dev/null \
-        || die "img4tool could not extract the APTicket"
+    "$LITER8_SELF" img4 extract-manifest "$sep_new" "$ticket_new" >/dev/null \
+        || die "could not extract the APTicket from $sep_path"
     [ -s "$ticket_new" ] || die "extracted APTicket is empty"
 
     [ ! -f dev_sep.img4 ] \

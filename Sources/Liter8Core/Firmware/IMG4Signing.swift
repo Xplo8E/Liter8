@@ -37,4 +37,22 @@ public enum IMG4Signing {
         }
         return output.data
     }
+
+    /// Read the IM4M back out of a ticket-bearing IMG4.
+    ///
+    /// Recovering the restore-bound APTicket from the device's own
+    /// `sep-firmware.img4` used to run `img4tool -e -m`, which is an arm64-only
+    /// bundled binary and so could not run on an Intel Mac. The vendored
+    /// container code already parses this during `create`'s round-trip check.
+    public static func extractManifest(from img4Data: Data) throws -> Data {
+        // `im4m()` constructs an IM4M, so malformed manifest bytes throw there
+        // rather than reaching a device.
+        let manifest = try IMG4(img4Data).im4m().data
+        guard !manifest.isEmpty else {
+            throw PatchfinderError.invalidFirmwareContainer(
+                "IMG4 contains no IM4M manifest"
+            )
+        }
+        return manifest
+    }
 }

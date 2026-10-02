@@ -9,7 +9,10 @@ puts this directory before the host `PATH` for workflow helpers.
 unmanaged until its source and build are selected.
 
 Swift now owns IMG4/IM4P operations, so `img4` and `img4tool` are retained only
-for parity with the public tool bundle. New code should not depend on them.
+for parity with the public tool bundle. Nothing in the workflow runs either of
+them: the last caller was `img4tool -e -m`, now `liter8 img4 extract-manifest`.
+Both are arm64 only, so keeping them was also keeping an Intel Mac from
+provisioning. New code should not depend on them.
 
 ## Distribution status
 

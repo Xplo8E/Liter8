@@ -27,6 +27,7 @@ private func usage() -> Never {
       liter8 verify <manifest.json> <binary>
       liter8 im4p <info|extract|repack> ...
       liter8 img4 create <input.im4p> <ticket.im4m> <output.img4> [--fourcc <type>]
+      liter8 img4 extract-manifest <input.img4> <output.im4m>
       liter8 setup [--resource-dir <directory>]
 
     components and plans:
@@ -954,6 +955,16 @@ do {
         }
 
     case "img4":
+        if arguments.count == 4, arguments[1] == "extract-manifest" {
+            let container = URL(fileURLWithPath: arguments[2]).standardizedFileURL
+            let manifest = URL(fileURLWithPath: arguments[3]).standardizedFileURL
+            let im4m = try IMG4Signing.extractManifest(
+                from: Data(contentsOf: container)
+            )
+            try im4m.write(to: manifest, options: .atomic)
+            print("extracted IM4M (\(im4m.count) bytes): \(manifest.path)")
+            break
+        }
         guard arguments.count == 5 || arguments.count == 7,
               arguments[1] == "create" else { usage() }
         var fourcc: String?
