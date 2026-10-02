@@ -39,7 +39,8 @@ DEV="root@${LITER8_SSH_HOST:-localhost}"
 PW=alpine
 # Prefer a native sshpass. The bundled one is x86_64, so it needs Rosetta
 # on Apple Silicon. See https://github.com/Xplo8E/Liter8/issues/2.
-SSHPASS=$(command -v sshpass || echo ../tools/sshpass)
+SSHPASS=$(command -v sshpass || true)
+"$SSHPASS" -V >/dev/null 2>&1 || SSHPASS=../tools/sshpass
 
 CHECK_ONLY=0
 [[ "$1" == "--check" ]] && CHECK_ONLY=1

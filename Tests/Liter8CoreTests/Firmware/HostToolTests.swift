@@ -113,6 +113,21 @@ final class HostToolTests: XCTestCase {
         }
     }
 
+    /// A binary that exists and is executable but cannot be launched, which is
+    /// what a Homebrew copy becomes when an upgrade moves its dylibs, must be
+    /// skipped so resolution keeps looking.
+    func testLocateCanRequireThatTheToolActuallyRuns() throws {
+        let broken = try makeExecutable("liter8-broken-tool")
+        try Data("#!/nonexistent/interpreter\n".utf8).write(to: broken)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: broken.path
+        )
+        // Present on disk either way.
+        XCTAssertEqual(HostTool.locate("liter8-broken-tool")?.path, broken.path)
+        // But refused when the caller needs something it can launch.
+        XCTAssertNil(HostTool.locate("liter8-broken-tool", requiringRunnable: true))
+    }
+
     /// The scripts die on these by name, so the report has to cover them.
     func testPreflightCoversTheToolsTheDeviceScriptsRequire() {
         let covered = Set(Preflight.tools.flatMap(\.names))

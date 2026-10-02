@@ -22,9 +22,23 @@ public enum Preflight {
         public let purpose: String
         public let installHint: String
 
-        /// The first of `names` present on this host, or nil.
+        /// What to call this tool in a report. `names` is ordered by
+        /// resolution preference, which can put a packaging detail such as
+        /// `ldid_macosx_arm64` first, so the shortest name reads better and is
+        /// the one an operator would type.
+        public var displayName: String {
+            names.min { $0.count < $1.count } ?? names[0]
+        }
+
+        /// The first of `names` this host can actually run, or nil.
+        ///
+        /// Presence is not enough. A Homebrew copy can go stale against an
+        /// upgraded dependency, and the report has to agree with what the
+        /// workflow will pick rather than with what exists on disk.
         func resolve() -> URL? {
-            names.lazy.compactMap(HostTool.locate).first
+            names.lazy
+                .compactMap { HostTool.locate($0, requiringRunnable: true) }
+                .first
         }
     }
 
@@ -62,10 +76,12 @@ public enum Preflight {
             installHint: "brew install gnu-tar"
         ),
         Tool(
-            names: ["ldid", "ldid_macosx_arm64"],
+            // Bundled name first, because the scripts prefer that copy:
+            // it links only system libraries so Homebrew cannot break it.
+            names: ["ldid_macosx_arm64", "ldid"],
             stage: .build,
             purpose: "re-signing patched device binaries",
-            installHint: "bundled in tools/, or brew install ldid"
+            installHint: "bundled in tools/, or brew install ldid-procursus"
         ),
         Tool(
             names: ["aea"],

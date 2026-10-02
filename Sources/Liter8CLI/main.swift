@@ -383,7 +383,7 @@ do {
         // after the restore has already erased the phone.
         guard arguments.count == 1 else { usage() }
         let results = Preflight.run()
-        let width = results.map(\.tool.names[0].count).max() ?? 0
+        let width = results.map(\.tool.displayName.count).max() ?? 0
         // A tool shipped with Liter8 reads better as `tools/gtar` than as the
         // absolute path to wherever this checkout happens to live.
         let resourceRoot = (try? Liter8Resources.resolve().base.path).map { $0 + "/" }
@@ -396,7 +396,7 @@ do {
             guard !inStage.isEmpty else { continue }
             print("\(stage.rawValue):")
             for result in inStage {
-                let name = result.tool.names[0].padding(
+                let name = result.tool.displayName.padding(
                     toLength: width, withPad: " ", startingAt: 0
                 )
                 if let resolved = result.resolved {
@@ -412,7 +412,7 @@ do {
             // Flush first: stdout is buffered and stderr is not, so without
             // this the summary prints above the report it summarises.
             fflush(stdout)
-            let names = missing.map(\.tool.names[0]).joined(separator: ", ")
+            let names = missing.map(\.tool.displayName).joined(separator: ", ")
             FileHandle.standardError.write(
                 Data("\n\(missing.count) required tool(s) missing: \(names)\n".utf8)
             )

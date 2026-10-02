@@ -4,16 +4,19 @@
 set -eu
 BASE="$(cd "$(dirname "$0")" && pwd)"
 TOOLS="$BASE/../../tools"
-# Prefer a native ldid. The bundled one is arm64 only, so it cannot run
-# on an Intel Mac. See https://github.com/Xplo8E/Liter8/issues/2.
-LDID=$(command -v ldid || echo "$TOOLS/ldid_macosx_arm64")
+# The bundled ldid links only system libraries, so a Homebrew upgrade
+# cannot break it, and its output is byte-identical. It is arm64 only,
+# so fall back to PATH where it cannot run, such as an Intel Mac.
+# See https://github.com/Xplo8E/Liter8/issues/2.
+LDID="$TOOLS/ldid_macosx_arm64"
+"$LDID" -v 2>&1 | grep -q "Link Identity Editor" || LDID=$(command -v ldid || true)
 SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 OUT="$BASE/lhook.dylib"
 
 # -x passes for an arm64 binary on an Intel Mac, so check that it runs and
 # identifies itself. ldid -v exits non-zero even when it works.
 "$LDID" -v 2>&1 | grep -q "Link Identity Editor" \
-    || { echo "[!] ldid at $LDID cannot run here; brew install ldid" >&2; exit 1; }
+    || { echo "[!] ldid at $LDID cannot run here; brew install ldid-procursus" >&2; exit 1; }
 
 # Name the slice. Without -arch, an Intel host matches neither arm64 nor
 # arm64e, so otool prints both with a header each and the second header reads

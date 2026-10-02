@@ -28,12 +28,15 @@ TOOLS="$BASE/../tools"
 
 # Prefer a native sshpass. The bundled one is x86_64, so it needs Rosetta
 # on Apple Silicon. See https://github.com/Xplo8E/Liter8/issues/2.
-SSHPASS=$(command -v sshpass || echo "$TOOLS/sshpass")
+SSHPASS=$(command -v sshpass || true)
+"$SSHPASS" -V >/dev/null 2>&1 || SSHPASS="$TOOLS/sshpass"
 # Prefer a native ldid. The bundled one is arm64 only, so it cannot run on an
 # Intel Mac. See https://github.com/Xplo8E/Liter8/issues/2.
-LDID=$(command -v ldid || echo "$TOOLS/ldid_macosx_arm64")
+LDID="$TOOLS/ldid_macosx_arm64"
+"$LDID" -v 2>&1 | grep -q "Link Identity Editor" || LDID=$(command -v ldid || true)
 # The bundled gtar is x86_64, so it needs Rosetta on Apple Silicon.
-GTAR=$(command -v gtar || echo "$TOOLS/gtar")
+GTAR=$(command -v gtar || true)
+"$GTAR" --version >/dev/null 2>&1 || GTAR="$TOOLS/gtar"
 # Allow the device's ECDSA key and AES-CTR cipher without dropping SSH defaults.
 SSHOPT="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=25 -o HostKeyAlgorithms=+ecdsa-sha2-nistp521 -o Ciphers=+aes128-ctr -p 2222"
 DEV="root@localhost"
@@ -130,7 +133,7 @@ say "preflight"
 "$SSHPASS" -V >/dev/null 2>&1 \
     || die "sshpass at $SSHPASS cannot run on this host; brew install sshpass"
 "$LDID" -v 2>&1 | grep -q "Link Identity Editor" \
-    || die "ldid at $LDID cannot run on this host; brew install ldid"
+    || die "ldid at $LDID cannot run on this host; brew install ldid-procursus"
 "$GTAR" --version >/dev/null 2>&1 \
     || die "gtar at $GTAR cannot run on this host; brew install gnu-tar"
 command -v timeout >/dev/null 2>&1 || die "timeout not found (brew install coreutils)"

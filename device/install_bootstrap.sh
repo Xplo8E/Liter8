@@ -43,7 +43,8 @@ STAGE=${TMPDIR:-/tmp}/bootstrap-stage-$$
 TGZ=$STAGE/bootstrap.tar.gz
 # Prefer a native sshpass. The bundled one is x86_64, so it needs Rosetta
 # on Apple Silicon. See https://github.com/Xplo8E/Liter8/issues/2.
-SSHPASS=$(command -v sshpass || echo ../tools/sshpass)
+SSHPASS=$(command -v sshpass || true)
+"$SSHPASS" -V >/dev/null 2>&1 || SSHPASS=../tools/sshpass
 
 DEV_TGZ=/mnt2/_bootstrap.tar.gz     # transferred archive, removed on success
 DEV_STAGE=/mnt2/_bsstage            # unpack target, removed on success

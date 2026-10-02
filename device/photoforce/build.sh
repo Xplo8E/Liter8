@@ -3,9 +3,12 @@ set -eu
 
 cd "$(dirname "$0")"
 
-# Prefer a native ldid. The bundled one is arm64 only, so it cannot run
-# on an Intel Mac. See https://github.com/Xplo8E/Liter8/issues/2.
-LDID=$(command -v ldid || echo ../../tools/ldid_macosx_arm64)
+# The bundled ldid links only system libraries, so a Homebrew upgrade
+# cannot break it, and its output is byte-identical. It is arm64 only,
+# so fall back to PATH where it cannot run, such as an Intel Mac.
+# See https://github.com/Xplo8E/Liter8/issues/2.
+LDID=../../tools/ldid_macosx_arm64
+"$LDID" -v 2>&1 | grep -q "Link Identity Editor" || LDID=$(command -v ldid || true)
 
 xcrun -sdk iphoneos clang \
     -arch arm64 -arch arm64e -miphoneos-version-min=26.0 -O2 -Wall \
