@@ -334,6 +334,28 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
             )
         ),
+        // Same IPSW as the D431 entry below, so the guards are shared: one root
+        // filesystem for both boards. They are copied, not measured here, and
+        // the cache hash fails closed if that ever stops being true.
+        DeviceWorkflowProfile(
+            id: "iphone12,3-d421ap-24A446",
+            productVersion: "27.0.1",
+            build: "24A446",
+            productType: "iPhone12,3",
+            deviceClass: "d421ap",
+            chipID: 0x8030,
+            boardID: 0x06,
+            extractedDirectoryName: "iPhone12,3,iPhone12,5_27.0.1_24A446_Restore",
+            validationState: .experimental,
+            launchdSHA256: "c640246d38aaeb2d2372aff1e5aa0de59dec267f53c0dfc155f7837e717af68b",
+            launchdCacheSHA256: "d207fd6fc7ab9bfb77455aa9e8e7da2c0db94519243862154e63b1839aaf7762",
+            launchdCacheDaemonCount: 729,
+            setupControllerMethodCount: 66,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
         // D431 booted on hardware; SEP and repeat-boot stability remain unresolved.
         DeviceWorkflowProfile(
             id: "iphone12,5-d431ap-24A446",

@@ -34,7 +34,7 @@ PRs welcome on any of these, especially SEP. The Pro and Pro Max are open too, i
 | iOS 27.0 beta 4 | `24A5390f` | run       | -            | -            |
 | iOS 27.0 RC     | `24A435`   | run       | -            | -            |
 | iOS 27.0        | `24A437`   | run       | experimental | experimental |
-| iOS 27.0.1      | `24A446`   | run       | -            | experimental |
+| iOS 27.0.1      | `24A446`   | run       | experimental | experimental |
 | iOS 27.2 beta 1 | `24B5084k` | run       | -            | -            |
 | iOS 27.2 beta 2 | `24B5089g` | run       | -            | -            |
 

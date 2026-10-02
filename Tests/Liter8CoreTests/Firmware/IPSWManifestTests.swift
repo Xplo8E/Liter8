@@ -199,12 +199,17 @@ struct IPSWManifestTests {
 
     /// Both Pro boards read their guards from the one root filesystem the
     /// 24A437 IPSW ships, so a change to either entry alone is a mistake.
-    @Test func proBoardsShareTheirMeasuredGuards() {
-        let pro = DeviceWorkflowRegistry.profiles.filter { $0.build == "24A437" }
+    @Test(arguments: ["24A437", "24A446"])
+    func proBoardsShareTheirMeasuredGuards(build: String) {
+        let pro = DeviceWorkflowRegistry.profiles.filter {
+            $0.build == build && $0.deviceClass.hasPrefix("d4")
+        }
         #expect(pro.count == 2)
+        #expect(Set(pro.map(\.launchdSHA256)).count == 1)
         #expect(Set(pro.map(\.launchdCacheSHA256)).count == 1)
         #expect(Set(pro.map(\.launchdCacheDaemonCount)).count == 1)
         #expect(Set(pro.map(\.setupControllerMethodCount)).count == 1)
+        #expect(Set(pro.map(\.extractedDirectoryName)).count == 1)
         #expect(Set(pro.map(\.boardID)) == [0x06, 0x02])
     }
 }
