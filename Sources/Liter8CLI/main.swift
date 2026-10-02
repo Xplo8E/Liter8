@@ -10,6 +10,7 @@ private func usage() -> Never {
       liter8 fw <actions|prepare|prepare-rootfs|unmount-rootfs|make-cfw|capture-ticket|get-rd|get-boot|verify-cfw|restore-cfw|boot-rd|boot|bootstrap|provision|finalize|setup-shell> [options]
       liter8 survey <extracted-firmware-directory>
       liter8 acm-probe <kernelcache> <signature-variant>
+      liter8 preflight
       liter8 profile <binary>
       liter8 profiles
       liter8 fixture <component> <plan> <input> <manifest.json>
@@ -373,6 +374,49 @@ do {
     guard let command = arguments.first else { usage() }
 
     switch command {
+    case "preflight":
+        // Report every missing tool at once. Resolving them one at a time as
+        // the workflow reaches them means a missing SSHRD tool is discovered
+        // after the restore has already erased the phone.
+        guard arguments.count == 1 else { usage() }
+        let results = Preflight.run()
+        let width = results.map(\.tool.names[0].count).max() ?? 0
+        // A tool shipped with Liter8 reads better as `tools/gtar` than as the
+        // absolute path to wherever this checkout happens to live.
+        let resourceRoot = (try? Liter8Resources.resolve().base.path).map { $0 + "/" }
+        let display: (URL) -> String = { url in
+            guard let resourceRoot, url.path.hasPrefix(resourceRoot) else { return url.path }
+            return String(url.path.dropFirst(resourceRoot.count))
+        }
+        for stage in Preflight.Stage.allCases {
+            let inStage = results.filter { $0.tool.stage == stage }
+            guard !inStage.isEmpty else { continue }
+            print("\(stage.rawValue):")
+            for result in inStage {
+                let name = result.tool.names[0].padding(
+                    toLength: width, withPad: " ", startingAt: 0
+                )
+                if let resolved = result.resolved {
+                    print("  ok      \(name)  \(display(resolved))")
+                } else {
+                    print("  MISSING \(name)  \(result.tool.purpose)")
+                    print("          \(String(repeating: " ", count: width))  \(result.tool.installHint)")
+                }
+            }
+        }
+        let missing = results.filter { !$0.isSatisfied }
+        guard missing.isEmpty else {
+            // Flush first: stdout is buffered and stderr is not, so without
+            // this the summary prints above the report it summarises.
+            fflush(stdout)
+            let names = missing.map(\.tool.names[0]).joined(separator: ", ")
+            FileHandle.standardError.write(
+                Data("\n\(missing.count) required tool(s) missing: \(names)\n".utf8)
+            )
+            exit(1)
+        }
+        print("\nall required host tools resolved")
+
     case "setup":
         var resourceDirectory: URL?
         if arguments.count == 3, arguments[1] == "--resource-dir" {
