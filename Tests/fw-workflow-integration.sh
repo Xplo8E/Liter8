@@ -12,13 +12,16 @@ WORK_DIR="$TEST_ROOT/work"
 IPSW_FILE="$TEST_ROOT/renamed.ipsw"
 RC_IPSW_FILE="$TEST_ROOT/release-candidate.ipsw"
 RC_WORK_DIR="$TEST_ROOT/rc-work"
+D431_IPSW_FILE="$TEST_ROOT/d431.ipsw"
+D431_WORK_DIR="$TEST_ROOT/d431-work"
 BAD_WORK_DIR="$TEST_ROOT/bad-work"
 BAD_IPSW_FILE="$TEST_ROOT/traversal.ipsw"
 RESOURCE_DIR="$TEST_ROOT/resources"
 RUN_DIR="$TEST_ROOT/unrelated-current-directory"
-mkdir -p "$WORK_DIR" "$RC_WORK_DIR" "$BAD_WORK_DIR" "$RESOURCE_DIR/scripts" "$RUN_DIR"
+mkdir -p "$WORK_DIR" "$RC_WORK_DIR" "$D431_WORK_DIR" "$BAD_WORK_DIR" "$RESOURCE_DIR/scripts" "$RUN_DIR"
 
-/usr/bin/python3 - "$IPSW_FILE" "$RC_IPSW_FILE" "$BAD_IPSW_FILE" "$WORK_DIR" <<'PY'
+/usr/bin/python3 - "$IPSW_FILE" "$RC_IPSW_FILE" "$D431_IPSW_FILE" "$BAD_IPSW_FILE" "$WORK_DIR" <<'PY'
+import copy
 import plistlib
 import sys
 import zipfile
@@ -26,8 +29,9 @@ from pathlib import Path
 
 ipsw = Path(sys.argv[1])
 rc_ipsw = Path(sys.argv[2])
-bad_ipsw = Path(sys.argv[3])
-work = Path(sys.argv[4])
+d431_ipsw = Path(sys.argv[3])
+bad_ipsw = Path(sys.argv[4])
+work = Path(sys.argv[5])
 manifest = {
     "ProductVersion": "27.0",
     "ProductBuildVersion": "24A5390f",
@@ -57,6 +61,15 @@ rc_manifest = dict(manifest)
 rc_manifest["ProductBuildVersion"] = "24A435"
 with zipfile.ZipFile(rc_ipsw, "w") as archive:
     archive.writestr("BuildManifest.plist", plistlib.dumps(rc_manifest))
+
+d431_manifest = copy.deepcopy(manifest)
+d431_manifest["ProductVersion"] = "27.0.1"
+d431_manifest["ProductBuildVersion"] = "24A446"
+d431_manifest["SupportedProductTypes"] = ["iPhone12,3", "iPhone12,5"]
+d431_manifest["BuildIdentities"][0]["ApBoardID"] = "0x02"
+d431_manifest["BuildIdentities"][0]["Info"]["DeviceClass"] = "d431ap"
+with zipfile.ZipFile(d431_ipsw, "w") as archive:
+    archive.writestr("BuildManifest.plist", plistlib.dumps(d431_manifest))
 
 # The manifest is valid, but extraction must reject the parent traversal before
 # it can write outside Liter8's staging directory.
@@ -95,6 +108,14 @@ test -f "$WORK_DIR/iPhone12,1_27.0_24A5390f_Restore/.extract-complete"
 
 WORK_DIR="$RC_WORK_DIR" "$PATCHER" fw prepare --file "$RC_IPSW_FILE"
 test -f "$RC_WORK_DIR/iPhone12,1_27.0_24A435_Restore/.extract-complete"
+
+if "$PATCHER" fw prepare --file "$D431_IPSW_FILE" --work-dir "$D431_WORK_DIR" > "$TEST_ROOT/d431-refusal.log" 2>&1; then
+    echo "D431 unexpectedly accepted without --experimental" >&2
+    exit 1
+fi
+grep -q 'is experimental; rerun with --experimental' "$TEST_ROOT/d431-refusal.log"
+"$PATCHER" fw prepare --file "$D431_IPSW_FILE" --work-dir "$D431_WORK_DIR" --experimental > "$TEST_ROOT/d431-opt-in.log"
+grep -q 'firmware profile: iphone12,5-d431ap-24A446' "$TEST_ROOT/d431-opt-in.log"
 
 if WORK_DIR="$BAD_WORK_DIR" "$PATCHER" fw prepare --file "$BAD_IPSW_FILE"; then
     echo "unsafe IPSW member unexpectedly extracted" >&2

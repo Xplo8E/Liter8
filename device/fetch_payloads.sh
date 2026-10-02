@@ -114,8 +114,14 @@ blob = path.read_bytes()
 count = blob.count(old)
 if count != 1:
     raise SystemExit(f"expected exactly one Sileo marker pre-image, found {count}")
-path.write_bytes(blob.replace(old, new))
+group_old = b"mobile:mobile"
+# DependencyResolverAccelerator.init chowns sileolists via CommandPath.group; 000501 is decimal 501 padded to match mobile:mobile.
+group_new = b"000501:000501"
+if len(group_old) != len(group_new) or blob.count(group_old) != 1:
+    raise SystemExit("expected exactly one Sileo ownership pre-image")
+path.write_bytes(blob.replace(old, new).replace(group_old, group_new))
 print("        Sileo marker: .installed_xina15 -> .installed_usbl8r")
+print("        Sileo chown: mobile:mobile -> 000501:000501")
 PY
 
     # Sileo needs sandbox exemption to load dylibs out of /var/jb. Its own
@@ -171,8 +177,21 @@ plistlib.dump(d, open(cr, "wb"))
 print(f"        resealed {fixed} CodeResources entr{'y' if fixed==1 else 'ies'} for giveMeRoot")
 PY
 
+    codesign --force --sign - --entitlements "$WORK/sileo.ent" "$APP"
+    codesign -v "$APP" || die "Sileo bundle signature verification failed"
+    python3 - "$LDID" "$APP/Sileo" "$WORK/sileo.ent" <<'PY'
+import pathlib, plistlib, subprocess, sys
+
+ldid, binary, source = sys.argv[1:]
+signed = plistlib.loads(subprocess.check_output([ldid, "-e", binary]))
+expected = plistlib.loads(pathlib.Path(source).read_bytes())
+if signed != expected:
+    raise SystemExit("Sileo entitlements changed while signing the bundle")
+PY
+
     rm -rf "$OUT/Sileo.app" && cp -R "$APP" "$OUT/Sileo.app"
     chmod 4755 "$OUT/Sileo.app/giveMeRoot"
+    codesign -v "$OUT/Sileo.app" || die "copied Sileo bundle signature verification failed"
     ok "payload/Sileo.app ready ($(codesign -dv "$OUT/Sileo.app/Sileo" 2>&1 | grep -o 'flags=0x[0-9a-f]*([a-z]*)'))"
 fi
 

@@ -83,9 +83,7 @@ else
     echo "personaalloc not found at $PERSONAALLOC" >> "$LOG"
 fi
 
-# Sileo's sileolists directory is deliberately NOT recreated here. It lives on
-# the Data volume and persists across reboots, and creating it would need mkdir,
-# chown and chmod, none of which exist on the System volume.
+# Sileo's Data-backed sileolists directory is prepared by install_bootstrap.sh.
 
 # Keep this launchd job alive as the PosterBoard repair watcher. pfwatch is a native,
 # single-instance binary; it applies the exact asserted repair once per new PID and then

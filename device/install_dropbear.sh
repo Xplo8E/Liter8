@@ -5,7 +5,7 @@
 #
 #   ./install_dropbear.sh            install
 #   ./install_dropbear.sh --check    verify only, change nothing
-# Reuses `iproxy 2222 22` when running, or starts its own fallback.
+# Reuses `iproxy 2222:22` when running, or starts its own fallback.
 #
 # Source is ssh.tar.gz here, byte-identical to upstream's work-27.0b3/ssh.tar.gz.
 # The server, key generator and the three minimal System utilities proven by the
@@ -39,8 +39,10 @@ SSHPASS=../tools/sshpass
 # obvious trap: `-p 2222` inside one array is TWO elements, so trying to rewrite it with a
 # string substitution silently does nothing and scp ends up with -p (preserve times) and
 # no port at all, connecting to localhost:22.
+# Allow the device's ECDSA key and AES-CTR cipher without dropping SSH defaults.
 COMMON=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
-        -o LogLevel=ERROR -o ConnectTimeout=8)
+        -o LogLevel=ERROR -o ConnectTimeout=8
+        -o HostKeyAlgorithms=+ecdsa-sha2-nistp521 -o Ciphers=+aes128-ctr)
 SSH_OPTS=("${COMMON[@]}" -p 2222)
 SCP_OPTS=("${COMMON[@]}" -P 2222)
 
@@ -81,7 +83,7 @@ stop_owned_iproxy() {
 
 if ! sshdev true 2>/dev/null; then
     command -v iproxy >/dev/null || { print -u2 "[!] iproxy not installed (brew install libimobiledevice)"; exit 1; }
-    iproxy 2222 22 >/dev/null 2>&1 &
+    iproxy 2222:22 >/dev/null 2>&1 &
     IPROXY_PID=$!
     trap stop_owned_iproxy EXIT
     sleep 2

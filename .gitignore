@@ -7,6 +7,9 @@
 # firmware that must never be committed.
 .ios27/
 .setup-cache/
+.irecovery
+__pycache__/
+*.pyc
 tools/idevicerestore
 tools/.idevicerestore-commit
 tools/*.setup-new

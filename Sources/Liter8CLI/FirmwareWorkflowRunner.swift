@@ -65,7 +65,7 @@ enum FirmwareWorkflowRunner {
         if let profile {
             print("firmware profile: \(profile.id)")
             if profile.validationState == .experimental {
-                print("  validation: EXPERIMENTAL, device restore and repeat boot are not proven")
+                print("  validation: EXPERIMENTAL, not promoted to reviewed")
             }
             print("  device/board: \(profile.productType) / \(profile.deviceClass)")
         } else {
@@ -192,14 +192,17 @@ enum FirmwareWorkflowRunner {
             let reason = matches.isEmpty
                 ? "no supported extracted IPSW was found"
                 : "more than one supported extracted IPSW was found"
+            let guidance = matches.isEmpty
+                ? "prepare a supported IPSW or add an exact device workflow profile"
+                : "use a work directory with one supported IPSW"
             throw PatchfinderError.invalidFixture(
-                "\(reason) in \(workDirectory.path); run fw prepare in this work directory first"
+                "\(reason) in \(workDirectory.path); \(guidance)"
             )
         }
 
         print("firmware profile: \(profile.id)")
         if profile.validationState == .experimental {
-            print("  validation: EXPERIMENTAL, device restore and repeat boot are not proven")
+            print("  validation: EXPERIMENTAL, not promoted to reviewed")
         }
         print("  iOS/build: \(profile.productVersion) (\(profile.build))")
         print("  device/board: \(profile.productType) / \(profile.deviceClass)")

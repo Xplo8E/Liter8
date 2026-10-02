@@ -30,9 +30,12 @@
 set -e
 cd "${0:A:h}"
 
+# Allow the device's ECDSA key and AES-CTR cipher without dropping SSH defaults.
 SSHOPT=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
-        -o LogLevel=ERROR -o ConnectTimeout=25 -p 2222)
-DEV=root@localhost
+        -o LogLevel=ERROR -o ConnectTimeout=25
+        -o HostKeyAlgorithms=+ecdsa-sha2-nistp521 -o Ciphers=+aes128-ctr
+        -p "${LITER8_SSH_PORT:-2222}")
+DEV="root@${LITER8_SSH_HOST:-localhost}"
 PW=alpine
 SSHPASS=../tools/sshpass
 
@@ -58,8 +61,11 @@ say "checking the device"
 # Try an existing forward first, then create a temporary one when Liter8 owns
 # the session. The trap closes only the process started here.
 if ! sh_dev 'exit 0' >/dev/null 2>&1; then
+    [[ "$DEV" == root@localhost && "${LITER8_SSH_PORT:-2222}" == 2222 ]] \
+        || die "cannot reach $DEV on port ${LITER8_SSH_PORT:-2222}"
     command -v iproxy >/dev/null 2>&1 || die "iproxy not found (brew install libimobiledevice)"
-    iproxy 2222 22 >/dev/null 2>&1 &
+    # Older iproxy 2222 22 syntax fails with the installed version; use 2222:22.
+    iproxy 2222:22 >/dev/null 2>&1 &
     IPROXY_PID=$!
     trap 'kill "$IPROXY_PID" 2>/dev/null' EXIT
     sleep 2

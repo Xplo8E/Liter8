@@ -59,4 +59,30 @@ struct IPSWManifestTests {
         #expect(profile?.launchdCacheDaemonCount == 729)
         #expect(profile?.setupControllerMethodCount == 66)
     }
+
+    @Test func d431SelectsExperimentalWorkflow() throws {
+        let manifest: [String: Any] = [
+            "ProductVersion": "27.0.1",
+            "ProductBuildVersion": "24A446",
+            "SupportedProductTypes": ["iPhone12,3", "iPhone12,5"],
+            "BuildIdentities": [[
+                "ApBoardID": "0x02",
+                "ApChipID": "0x8030",
+                "Info": ["DeviceClass": "d431ap"],
+            ]],
+        ]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: manifest,
+            format: .binary,
+            options: 0
+        )
+
+        let identity = try IPSWManifestInspector.parse(data)
+        #expect(identity.buildIdentities == [
+            .init(deviceClass: "d431ap", chipID: 0x8030, boardID: 0x02),
+        ])
+        let profile = DeviceWorkflowRegistry.profile(for: identity, includeExperimental: true)
+        #expect(profile?.id == "iphone12,5-d431ap-24A446")
+        #expect(profile?.validationState == .experimental)
+    }
 }
