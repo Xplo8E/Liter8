@@ -50,7 +50,7 @@ You need macOS 14 or newer, Xcode command line tools with Swift 6, and Homebrew.
 
 ```sh
 brew install \
-  sevenzip blacktop/tap/ipsw gnu-tar coreutils zstd autoconf automake libtool pkg-config \
+  sevenzip blacktop/tap/ipsw gnu-tar coreutils zstd ldid sshpass autoconf automake libtool pkg-config \
   libimobiledevice libimobiledevice-glue libirecovery libusbmuxd libplist libtatsu libzip curl
 ```
 

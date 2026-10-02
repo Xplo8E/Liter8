@@ -26,7 +26,15 @@ cd "$BASE"
 # it is resolved once here rather than spelled out at each call site.
 TOOLS="$BASE/../tools"
 
-SSHPASS="$TOOLS/sshpass"
+# Prefer a native sshpass. The bundled one is x86_64, so it needs Rosetta
+# on Apple Silicon. See https://github.com/Xplo8E/Liter8/issues/2.
+SSHPASS=$(command -v sshpass || echo "$TOOLS/sshpass")
+# Prefer native builds. The bundled ldid and img4tool are arm64 only and
+# cannot run on an Intel Mac. See https://github.com/Xplo8E/Liter8/issues/2.
+LDID=$(command -v ldid || echo "$TOOLS/ldid_macosx_arm64")
+IMG4TOOL=$(command -v img4tool || echo "$TOOLS/img4tool")
+# The bundled gtar is x86_64, so it needs Rosetta on Apple Silicon.
+GTAR=$(command -v gtar || echo "$TOOLS/gtar")
 # Allow the device's ECDSA key and AES-CTR cipher without dropping SSH defaults.
 SSHOPT="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=25 -o HostKeyAlgorithms=+ecdsa-sha2-nistp521 -o Ciphers=+aes128-ctr -p 2222"
 DEV="root@localhost"
@@ -118,7 +126,16 @@ stop_owned_iproxy() {
 
 # ---------------------------------------------------------------- preflight
 say "preflight"
-[ -x "$SSHPASS" ] || die "sshpass not found at $SSHPASS"
+# -x passes for an arm64 binary on an Intel Mac, so run each one instead. These
+# fail far into provisioning otherwise, with only "Bad CPU type in executable".
+"$SSHPASS" -V >/dev/null 2>&1 \
+    || die "sshpass at $SSHPASS cannot run on this host; brew install sshpass"
+"$LDID" -v 2>&1 | grep -q "Link Identity Editor" \
+    || die "ldid at $LDID cannot run on this host; brew install ldid"
+"$IMG4TOOL" --help >/dev/null 2>&1 \
+    || die "img4tool at $IMG4TOOL cannot run on this host; build tihmstar/img4tool"
+"$GTAR" --version >/dev/null 2>&1 \
+    || die "gtar at $GTAR cannot run on this host; brew install gnu-tar"
 command -v timeout >/dev/null 2>&1 || die "timeout not found (brew install coreutils)"
 if ! sh_dev 'exit 0' >/dev/null 2>&1; then
     command -v iproxy >/dev/null 2>&1 || die "iproxy not found (brew install libimobiledevice)"
@@ -173,7 +190,7 @@ if wants ticket && [ "$CHECK_ONLY" = 0 ]; then
     sh_dev "/bin/cat '$sep_path'" > "$sep_new" \
         || die "could not read $sep_path"
     [ -s "$sep_new" ] || die "downloaded sep-firmware.img4 is empty"
-    "$TOOLS/img4tool" -e -m "$ticket_new" "$sep_new" >/dev/null \
+    "$IMG4TOOL" -e -m "$ticket_new" "$sep_new" >/dev/null \
         || die "img4tool could not extract the APTicket"
     [ -s "$ticket_new" ] || die "extracted APTicket is empty"
 
@@ -213,21 +230,21 @@ if wants setup && [ "$CHECK_ONLY" = 0 ]; then
     # launchd as BADEXEC (0x55), then SpringBoard aborts until launchd reboots the
     # phone. Preserve Apple's complete entitlement set and bundle identifier while
     # replacing the stale signature, exactly as the successful beta-4 research did.
-    "$TOOLS/ldid_macosx_arm64" -e "$setup_local" > "$setup_entitlements" \
+    "$LDID" -e "$setup_local" > "$setup_entitlements" \
         || die "could not read Setup entitlements"
     [ -s "$setup_entitlements" ] || die "Setup entitlement plist is empty"
     setup_identifier=$(codesign -d --verbose=4 "$setup_local" 2>&1 \
         | sed -n 's/^Identifier=//p' | sed -n '1p')
     [ "$setup_identifier" = com.apple.purplebuddy ] \
         || die "unexpected Setup signing identifier: ${setup_identifier:-missing}"
-    "$TOOLS/ldid_macosx_arm64" -I"$setup_identifier" \
+    "$LDID" -I"$setup_identifier" \
         -S"$setup_entitlements" -Cadhoc "$setup_patched" \
         || die "could not re-sign patched Setup"
     codesign -v "$setup_patched" \
         || die "patched Setup has an invalid CodeDirectory"
     [ "$(codesign -d --verbose=4 "$setup_patched" 2>&1 | sed -n 's/^Identifier=//p' | sed -n '1p')" = "$setup_identifier" ] \
         || die "patched Setup signing identifier changed"
-    [ "$("$TOOLS/ldid_macosx_arm64" -e "$setup_patched")" = "$(cat "$setup_entitlements")" ] \
+    [ "$("$LDID" -e "$setup_patched")" = "$(cat "$setup_entitlements")" ] \
         || die "patched Setup entitlements changed"
 
     setup_sha=$(shasum -a 256 "$setup_patched" | awk '{print $1}')
@@ -267,7 +284,7 @@ build_userland_patch() {
     [ -s "$U_PRISTINE" ] || die "pristine $U_NAME is empty"
 
     python3 userland_fixups.py binary "$U_NAME" "$U_PRISTINE" "$U_PATCHED" "$U_RECORDS" \
-        --liter8 "$LITER8_SELF" --ldid "$TOOLS/ldid_macosx_arm64" \
+        --liter8 "$LITER8_SELF" --ldid "$LDID" \
         || die "could not build the $U_NAME fix"
 }
 
@@ -374,7 +391,7 @@ if wants injection && [ "$CHECK_ONLY" = 0 ]; then
         || die "launchd payload code-slot verification failed"
     for binary in payload/lhook.dylib payload/systemhook.dylib payload/sbextissue; do
         codesign -v "$binary" || die "$binary signature verification failed"
-        [ -z "$("$TOOLS/ldid_macosx_arm64" -e "$binary")" ] \
+        [ -z "$("$LDID" -e "$binary")" ] \
             || die "$binary unexpectedly carries entitlements"
         archs=$(lipo -archs "$binary")
         case " $archs " in *" arm64 "*)  ;; *) die "$binary is missing arm64"  ;; esac
@@ -601,7 +618,7 @@ for pair in "Sileo.app:sileo"; do
     fi
     TARB="payload/.work/$bundle.tar.gz"
     mkdir -p payload/.work
-    "$TOOLS/gtar" czf "$TARB" --owner=0 --group=80 --numeric-owner --no-xattrs \
+    "$GTAR" czf "$TARB" --owner=0 --group=80 --numeric-owner --no-xattrs \
         -C payload "$bundle"
     timeout 900 "$SSHPASS" -p "$PW" ssh $SSHOPT "$DEV" \
         "cd /mnt1/Applications && tar xzf - --numeric-owner" < "$TARB" \
@@ -679,7 +696,7 @@ echo $n' | tr -d ' \r')
             # -C "$SRC" . rather than a word-split $(ls): archives the whole
             # directory without relying on app names being space-free.
             # Entries come out as ./Calculator.app/..., which extracts correctly.
-            "$TOOLS/gtar" czf "$TAR" --owner=0 --group=80 --numeric-owner \
+            "$GTAR" czf "$TAR" --owner=0 --group=80 --numeric-owner \
                 --no-xattrs --mode='g+w' -C "$SRC" .
         fi
         ok "streaming $(du -h "$TAR" | cut -f1) to /Applications"
@@ -722,8 +739,8 @@ if [ -s payload/.work/verify.Setup ] && \
    [ -s payload/.work/verify.Setup.orig ] && \
    codesign -v payload/.work/verify.Setup >/dev/null 2>&1 && \
    [ "$(codesign -d --verbose=4 payload/.work/verify.Setup 2>&1 | sed -n 's/^Identifier=//p' | sed -n '1p')" = com.apple.purplebuddy ] && \
-   [ "$("$TOOLS/ldid_macosx_arm64" -e payload/.work/verify.Setup)" = \
-     "$("$TOOLS/ldid_macosx_arm64" -e payload/.work/verify.Setup.orig)" ]; then
+   [ "$("$LDID" -e payload/.work/verify.Setup)" = \
+     "$("$LDID" -e payload/.work/verify.Setup.orig)" ]; then
     setup_signing_state=OK
 else
     setup_signing_state=MISMATCH
@@ -760,7 +777,7 @@ verify_userland_patch() {
     fi
 
     if python3 userland_fixups.py binary "$V_NAME" "$V_PRISTINE" "$V_EXPECTED" "$V_RECORDS" \
-            --liter8 "$LITER8_SELF" --ldid "$TOOLS/ldid_macosx_arm64" \
+            --liter8 "$LITER8_SELF" --ldid "$LDID" \
             >/dev/null 2>&1 && cmp -s "$V_EXPECTED" "$V_ACTIVE"; then
         note "$V_NAME patch" "OK"
     else

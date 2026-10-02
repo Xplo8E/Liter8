@@ -41,7 +41,9 @@ LAUNCHCTL=launchctl/launchctl
 LAUNCHCTL_SHA=c46e143151f4d56fd9e3c088d74e231f4b6f4ff7477aad080359454821ec0125
 STAGE=${TMPDIR:-/tmp}/bootstrap-stage-$$
 TGZ=$STAGE/bootstrap.tar.gz
-SSHPASS=../tools/sshpass
+# Prefer a native sshpass. The bundled one is x86_64, so it needs Rosetta
+# on Apple Silicon. See https://github.com/Xplo8E/Liter8/issues/2.
+SSHPASS=$(command -v sshpass || echo ../tools/sshpass)
 
 DEV_TGZ=/mnt2/_bootstrap.tar.gz     # transferred archive, removed on success
 DEV_STAGE=/mnt2/_bsstage            # unpack target, removed on success

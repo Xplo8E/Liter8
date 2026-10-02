@@ -33,7 +33,9 @@ cd "${0:A:h}"
 
 PKG=ssh.tar.gz
 STAGE=${TMPDIR:-/tmp}/dropbear-stage-$$
-SSHPASS=../tools/sshpass
+# Prefer a native sshpass. The bundled one is x86_64, so it needs Rosetta
+# on Apple Silicon. See https://github.com/Xplo8E/Liter8/issues/2.
+SSHPASS=$(command -v sshpass || echo ../tools/sshpass)
 
 # ssh takes -p <port>, scp takes -P <port>. Keeping them as separate arrays avoids the
 # obvious trap: `-p 2222` inside one array is TWO elements, so trying to rewrite it with a

@@ -23,3 +23,7 @@ device/photoforce/pfwatch
 
 # macOS Finder metadata. Not content, and it churns on every directory view.
 .DS_Store
+# Built by device/launchdhook/build.sh, reproduced from source each run.
+device/launchdhook/lhook.dylib
+device/launchdhook/systemhook.dylib
+device/launchdhook/sbextissue

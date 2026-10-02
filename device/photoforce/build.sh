@@ -3,7 +3,9 @@ set -eu
 
 cd "$(dirname "$0")"
 
-LDID=../../tools/ldid_macosx_arm64
+# Prefer a native ldid. The bundled one is arm64 only, so it cannot run
+# on an Intel Mac. See https://github.com/Xplo8E/Liter8/issues/2.
+LDID=$(command -v ldid || echo ../../tools/ldid_macosx_arm64)
 
 xcrun -sdk iphoneos clang \
     -arch arm64 -arch arm64e -miphoneos-version-min=26.0 -O2 -Wall \

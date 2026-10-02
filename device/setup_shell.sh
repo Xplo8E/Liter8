@@ -37,7 +37,9 @@ SSHOPT=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
         -p "${LITER8_SSH_PORT:-2222}")
 DEV="root@${LITER8_SSH_HOST:-localhost}"
 PW=alpine
-SSHPASS=../tools/sshpass
+# Prefer a native sshpass. The bundled one is x86_64, so it needs Rosetta
+# on Apple Silicon. See https://github.com/Xplo8E/Liter8/issues/2.
+SSHPASS=$(command -v sshpass || echo ../tools/sshpass)
 
 CHECK_ONLY=0
 [[ "$1" == "--check" ]] && CHECK_ONLY=1

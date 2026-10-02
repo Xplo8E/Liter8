@@ -4,7 +4,9 @@
 # Sileo's full 34-entitlement set is NOT, AMFI SIGKILLs a binary claiming it.
 set -e
 cd "$(dirname "$0")"
-LDID=../../tools/ldid_macosx_arm64
+# Prefer a native ldid. The bundled one is arm64 only, so it cannot run
+# on an Intel Mac. See https://github.com/Xplo8E/Liter8/issues/2.
+LDID=$(command -v ldid || echo ../../tools/ldid_macosx_arm64)
 for src in spawnprobe.c personaprobe.c personaalloc.c; do
     [ -f "$src" ] || continue
     out="${src%.c}"

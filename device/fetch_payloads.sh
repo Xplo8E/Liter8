@@ -42,7 +42,9 @@ cd "$BASE"
 # between the repo and research copies, so it is resolved once here.
 TOOLS="$BASE/../tools"
 
-LDID="$TOOLS/ldid_macosx_arm64"
+# Prefer a native ldid. The bundled one is arm64 only, so it cannot run
+# on an Intel Mac. See https://github.com/Xplo8E/Liter8/issues/2.
+LDID=$(command -v ldid || echo "$TOOLS/ldid_macosx_arm64")
 IPSW_ROOT=${IPSW_ROOT:-/tmp/ios27-rootfs} # decrypted root filesystem, mounted
 OUT="$BASE/payload"
 WORK="$BASE/payload/.work"
@@ -68,7 +70,10 @@ ok()   { printf '    [+] %s\n' "$1"; }
 skip() { printf '    [=] %s\n' "$1"; }
 die()  { printf '    [!] %s\n' "$1"; exit 1; }
 
-[ -x "$LDID" ] || die "ldid not found at $LDID"
+# -x passes for an arm64 binary on an Intel Mac, so check that it runs and
+# identifies itself. ldid -v exits non-zero even when it works.
+"$LDID" -v 2>&1 | grep -q "Link Identity Editor" \
+    || die "ldid at $LDID cannot run on this host; brew install ldid"
 mkdir -p "$OUT" "$WORK"
 
 WANT="${*:-sileo helpers cache injection}"
