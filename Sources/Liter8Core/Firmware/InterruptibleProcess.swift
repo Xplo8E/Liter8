@@ -43,10 +43,36 @@ public enum InterruptibleProcess: Sendable {
     ///
     /// Restores the previous signal disposition before returning, so a caller
     /// that runs several children in sequence is unaffected by this one.
-    public static func run(_ process: Process) throws {
+    public static func run(_ process: Process, foregroundTerminal: Bool = false) throws {
         try supervising(process) {
             try process.run()
+            let restoreTerminal = foregroundTerminal
+                ? foregroundTerminalForChild(process)
+                : nil
+            defer { restoreTerminal?() }
             process.waitUntilExit()
+        }
+    }
+
+    private static func foregroundTerminalForChild(_ process: Process) -> (() -> Void)? {
+        let descriptor = STDIN_FILENO
+        guard isatty(descriptor) != 0 else { return nil }
+        let originalGroup = tcgetpgrp(descriptor)
+        let childGroup = process.processIdentifier
+        guard originalGroup > 0,
+              originalGroup == getpgrp(),
+              childGroup > 0,
+              getpgid(childGroup) == childGroup else { return nil }
+
+        let previousTTOU = signal(SIGTTOU, SIG_IGN)
+        let foregrounded = tcsetpgrp(descriptor, childGroup) == 0
+        signal(SIGTTOU, previousTTOU)
+        guard foregrounded else { return nil }
+
+        return {
+            let previousTTOU = signal(SIGTTOU, SIG_IGN)
+            _ = tcsetpgrp(descriptor, originalGroup)
+            signal(SIGTTOU, previousTTOU)
         }
     }
 

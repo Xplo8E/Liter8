@@ -16,8 +16,10 @@ set -e
 cd "${0:A:h}"
 
 SSHOPT=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
-        -o LogLevel=ERROR -o ConnectTimeout=25 -p 2222)
-DEV=root@localhost
+        -o LogLevel=ERROR -o ConnectTimeout=25
+        -o HostKeyAlgorithms=ecdsa-sha2-nistp521 -o Ciphers=aes128-ctr
+        -p "${LITER8_SSH_PORT:-2222}")
+DEV="root@${LITER8_SSH_HOST:-localhost}"
 PW=alpine
 SSHPASS=../tools/sshpass
 CHECK_ONLY=0
@@ -41,16 +43,18 @@ say "normal-boot connection"
 # Reuse an operator-owned forward when one exists. Otherwise Liter8 owns this
 # temporary process and reliably stops it on every exit path.
 if ! sh_dev 'exit 0' >/dev/null 2>&1; then
+    [[ "$DEV" == root@localhost && "${LITER8_SSH_PORT:-2222}" == 2222 ]] \
+        || die "cannot reach $DEV on port ${LITER8_SSH_PORT:-2222}"
     command -v iproxy >/dev/null 2>&1 \
         || die "iproxy not found (brew install libimobiledevice)"
-    iproxy 2222 22 >/dev/null 2>&1 &
+    iproxy 2222:22 >/dev/null 2>&1 &
     IPROXY_PID=$!
     trap 'kill "$IPROXY_PID" 2>/dev/null' EXIT
     sleep 2
 fi
 
 if ! MOUNTS=$(sh_dev '/sbin/mount' 2>/dev/null); then
-    die "SSH handshake on port 2222 failed; if Dropbear sends a banner but closes during key exchange, rerun fw provision from SSHRD to generate its host keys"
+    die "SSH handshake with $DEV failed; if Dropbear sends a banner but closes during key exchange, rerun fw provision from SSHRD to generate its host keys"
 fi
 if print -r -- "$MOUNTS" | grep -q 'md0 on /'; then
     die "device is in SSHRD; finalize requires a normal boot"

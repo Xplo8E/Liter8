@@ -41,7 +41,11 @@ def attach(image: Path, *, readonly: bool) -> tuple[str, Path]:
                   for line in result.stdout.splitlines() if "/Volumes/" in line), None)
     if not device or not mount:
         raise WorkflowError("could not parse hdiutil attach output")
-    return device, Path(mount.strip())
+    mounted = Path(mount.strip())
+    if not readonly and os.statvfs(mounted).f_flag & os.ST_RDONLY:
+        detach(device)
+        raise WorkflowError(f"SSHRD image mounted read-only: {mounted}")
+    return device, mounted
 
 
 def detach(device: str) -> None:
@@ -112,6 +116,7 @@ def build_sshrd(context: Context, ticket: Path, output: Path) -> None:
         finally:
             detach(source_device)
 
+        privileged(["/usr/sbin/chown", f"{os.getuid()}:{os.getgid()}", expanded_dmg])
         device, mount = attach(expanded_dmg, readonly=False)
         try:
             privileged([gtar, "-x", "--no-overwrite-dir", "-f", payload, "-C", mount])

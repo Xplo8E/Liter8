@@ -27,7 +27,7 @@ cd "$BASE"
 TOOLS="$BASE/../tools"
 
 SSHPASS="$TOOLS/sshpass"
-SSHOPT="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=25 -p 2222"
+SSHOPT="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=25 -o HostKeyAlgorithms=ecdsa-sha2-nistp521 -o Ciphers=aes128-ctr -p 2222"
 DEV="root@localhost"
 PW=alpine
 
@@ -121,7 +121,7 @@ say "preflight"
 command -v timeout >/dev/null 2>&1 || die "timeout not found (brew install coreutils)"
 if ! sh_dev 'exit 0' >/dev/null 2>&1; then
     command -v iproxy >/dev/null 2>&1 || die "iproxy not found (brew install libimobiledevice)"
-    iproxy 2222 22 >/dev/null 2>&1 &
+    iproxy 2222:22 >/dev/null 2>&1 &
     IPROXY_PID=$!
     trap stop_owned_iproxy EXIT
     sleep 2
