@@ -10,6 +10,23 @@ OUT="$BASE/lhook.dylib"
 
 [ -x "$LDID" ] || { echo "[!] ldid missing at $LDID" >&2; exit 1; }
 
+# Name the slice. Without -arch, an Intel host matches neither arm64 nor
+# arm64e, so otool prints both with a header each and the second header reads
+# as a dependency. See https://github.com/Xplo8E/Liter8/issues/2.
+verify_deps() {
+    binary=$1
+    label=$2
+    expected=$3
+    for slice in arm64 arm64e; do
+        actual=$(otool -arch "$slice" -L "$binary" | awk 'NR > 1 {print $1}')
+        [ "$actual" = "$expected" ] || {
+            printf '[!] %s (%s) has unexpected dependencies:\n%s\n' \
+                "$label" "$slice" "$actual" >&2
+            exit 1
+        }
+    done
+}
+
 for arch in arm64 arm64e; do
     xcrun -sdk iphoneos clang -arch "$arch" -miphoneos-version-min=15.0 \
         -isysroot "$SDK" -dynamiclib -O2 -Wall -Wextra \
@@ -31,10 +48,8 @@ strings -a "$OUT" | grep -q '^/var/jb/usr/lib/TweakLoader.dylib$' \
     || { echo "[!] TweakLoader payload path missing" >&2; exit 1; }
 [ -z "$("$LDID" -e "$OUT")" ] \
     || { echo "[!] lhook unexpectedly carries entitlements" >&2; exit 1; }
-deps=$(otool -L "$OUT" | awk 'NR > 1 {print $1}')
-[ "$deps" = "/usr/lib/lhook.dylib
-/usr/lib/libSystem.B.dylib" ] \
-    || { printf '[!] lhook has unexpected dependencies:\n%s\n' "$deps" >&2; exit 1; }
+verify_deps "$OUT" lhook "/usr/lib/lhook.dylib
+/usr/lib/libSystem.B.dylib"
 
 echo "[+] $OUT ($archs, $interpose interpose section)"
 
@@ -65,11 +80,7 @@ build_universal() {
 build_universal systemhook.dylib systemhook_icon.c dylib
 build_universal sbextissue sbextissue.c executable
 
-system_deps=$(otool -L "$BASE/systemhook.dylib" | awk 'NR > 1 {print $1}')
-[ "$system_deps" = "/usr/lib/systemhook.dylib
-/usr/lib/libSystem.B.dylib" ] \
-    || { printf '[!] systemhook has unexpected dependencies:\n%s\n' "$system_deps" >&2; exit 1; }
+verify_deps "$BASE/systemhook.dylib" systemhook "/usr/lib/systemhook.dylib
+/usr/lib/libSystem.B.dylib"
 
-issuer_deps=$(otool -L "$BASE/sbextissue" | awk 'NR > 1 {print $1}')
-[ "$issuer_deps" = "/usr/lib/libSystem.B.dylib" ] \
-    || { printf '[!] sbextissue has unexpected dependencies:\n%s\n' "$issuer_deps" >&2; exit 1; }
+verify_deps "$BASE/sbextissue" sbextissue "/usr/lib/libSystem.B.dylib"
