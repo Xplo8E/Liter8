@@ -1,26 +1,7 @@
 import Dispatch
 import Foundation
 
-/// Runs a child process so that interrupting Liter8 also stops what Liter8
-/// started.
-///
-/// Foundation spawns with `POSIX_SPAWN_SETPGROUP`, so every child becomes a
-/// process-group leader in a group of its own. Ctrl-C signals only the
-/// terminal's foreground process group, which contains Liter8 and not the
-/// child. The observed result is that Liter8 exits immediately while the Python
-/// helper, and whatever it had spawned in turn, keep running with no owner:
-///
-///     parent (liter8)  pid 72221  pgid 72044   <- foreground group, gets SIGINT
-///     child  (python)  pid 72222  pgid 72222   <- never sees it
-///
-/// That is how an aborted restore left `idevicerestore` still streaming to a
-/// device in DFU with nothing left to stop it.
-///
-/// The signal is forwarded to the child's whole group rather than its pid,
-/// because the tools that matter are grandchildren: Python spawns
-/// `idevicerestore`, `irecovery` and `7zz`, and they inherit its group. Killing
-/// only the Python process would orphan those in turn, which is the same bug
-/// one level down.
+/// Forwards interrupts to a child group unless an interactive child owns the terminal and receives Ctrl-C directly.
 public enum InterruptibleProcess: Sendable {
     /// How long a child gets to exit on SIGTERM before it is killed.
     ///

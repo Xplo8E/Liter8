@@ -27,7 +27,8 @@ cd "$BASE"
 TOOLS="$BASE/../tools"
 
 SSHPASS="$TOOLS/sshpass"
-SSHOPT="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=25 -o HostKeyAlgorithms=ecdsa-sha2-nistp521 -o Ciphers=aes128-ctr -p 2222"
+# Allow the device's ECDSA key and AES-CTR cipher without dropping SSH defaults.
+SSHOPT="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=25 -o HostKeyAlgorithms=+ecdsa-sha2-nistp521 -o Ciphers=+aes128-ctr -p 2222"
 DEV="root@localhost"
 PW=alpine
 

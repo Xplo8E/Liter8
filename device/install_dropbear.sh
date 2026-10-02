@@ -39,9 +39,10 @@ SSHPASS=../tools/sshpass
 # obvious trap: `-p 2222` inside one array is TWO elements, so trying to rewrite it with a
 # string substitution silently does nothing and scp ends up with -p (preserve times) and
 # no port at all, connecting to localhost:22.
+# Allow the device's ECDSA key and AES-CTR cipher without dropping SSH defaults.
 COMMON=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
         -o LogLevel=ERROR -o ConnectTimeout=8
-        -o HostKeyAlgorithms=ecdsa-sha2-nistp521 -o Ciphers=aes128-ctr)
+        -o HostKeyAlgorithms=+ecdsa-sha2-nistp521 -o Ciphers=+aes128-ctr)
 SSH_OPTS=("${COMMON[@]}" -p 2222)
 SCP_OPTS=("${COMMON[@]}" -P 2222)
 

@@ -47,9 +47,10 @@ DEV_TGZ=/mnt2/_bootstrap.tar.gz     # transferred archive, removed on success
 DEV_STAGE=/mnt2/_bsstage            # unpack target, removed on success
 DEV_JB=/mnt2/jb                     # final location == /var/jb on the device
 
+# Allow the device's ECDSA key and AES-CTR cipher without dropping SSH defaults.
 COMMON=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
         -o LogLevel=ERROR -o ConnectTimeout=10
-        -o HostKeyAlgorithms=ecdsa-sha2-nistp521 -o Ciphers=aes128-ctr)
+        -o HostKeyAlgorithms=+ecdsa-sha2-nistp521 -o Ciphers=+aes128-ctr)
 SSH_OPTS=("${COMMON[@]}" -p 2222)
 SCP_OPTS=("${COMMON[@]}" -P 2222)
 

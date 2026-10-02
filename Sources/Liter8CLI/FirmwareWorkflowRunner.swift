@@ -65,7 +65,7 @@ enum FirmwareWorkflowRunner {
         if let profile {
             print("firmware profile: \(profile.id)")
             if profile.validationState == .experimental {
-                print("  validation: EXPERIMENTAL, full device validation is incomplete")
+                print("  validation: EXPERIMENTAL, not promoted to reviewed")
             }
             print("  device/board: \(profile.productType) / \(profile.deviceClass)")
         } else {
@@ -202,7 +202,7 @@ enum FirmwareWorkflowRunner {
 
         print("firmware profile: \(profile.id)")
         if profile.validationState == .experimental {
-            print("  validation: EXPERIMENTAL, full device validation is incomplete")
+            print("  validation: EXPERIMENTAL, not promoted to reviewed")
         }
         print("  iOS/build: \(profile.productVersion) (\(profile.build))")
         print("  device/board: \(profile.productType) / \(profile.deviceClass)")

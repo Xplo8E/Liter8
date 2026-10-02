@@ -132,7 +132,7 @@ public enum KernelResolverProfileRegistry {
             // by the ten kernel plans match 24A437 on id, offset, original bytes
             // and replacement bytes.
             builds: ["24A435", "24A437", "24A446"],
-            boards: ["n104ap"],
+            boards: ["n104ap", "d431ap"],
             component: "kernelcache.release.iphone12b",
             embeddedFingerprint: "xnu-13432.2.10~2/RELEASE_ARM64_T8030",
             resolverVariants: [
