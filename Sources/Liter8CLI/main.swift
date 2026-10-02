@@ -379,13 +379,15 @@ do {
         // the workflow reaches them means a missing SSHRD tool is discovered
         // after the restore has already erased the phone.
         guard arguments.count == 1 else { usage() }
-        // Search the bundled tools/ as well, because that is what the workflow
-        // puts on PATH for its Python helpers. Leaving it out would report
-        // usbliter8ctl missing on a perfectly good checkout.
-        let bundledTools = (try? Liter8Resources.resolve(override: nil).toolsDirectory.path)
-            .map { [$0] } ?? []
-        let results = Preflight.run(extraDirectories: bundledTools)
+        let results = Preflight.run()
         let width = results.map(\.tool.names[0].count).max() ?? 0
+        // A tool shipped with Liter8 reads better as `tools/gtar` than as the
+        // absolute path to wherever this checkout happens to live.
+        let resourceRoot = (try? Liter8Resources.resolve().base.path).map { $0 + "/" }
+        let display: (URL) -> String = { url in
+            guard let resourceRoot, url.path.hasPrefix(resourceRoot) else { return url.path }
+            return String(url.path.dropFirst(resourceRoot.count))
+        }
         for stage in Preflight.Stage.allCases {
             let inStage = results.filter { $0.tool.stage == stage }
             guard !inStage.isEmpty else { continue }
@@ -395,7 +397,7 @@ do {
                     toLength: width, withPad: " ", startingAt: 0
                 )
                 if let resolved = result.resolved {
-                    print("  ok      \(name)  \(resolved.path)")
+                    print("  ok      \(name)  \(display(resolved))")
                 } else {
                     print("  MISSING \(name)  \(result.tool.purpose)")
                     print("          \(String(repeating: " ", count: width))  \(result.tool.installHint)")
