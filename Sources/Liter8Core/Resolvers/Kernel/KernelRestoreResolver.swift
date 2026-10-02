@@ -1,6 +1,6 @@
 import Foundation
 
-/// Complete 20-record kernel plan used by the restore environment.
+/// Kernel plan used by the restore environment, including profile-selected PPL policy.
 ///
 /// Keeping composition here prevents the CLI and fixture verifier from
 /// accidentally drifting into different patch sets. Normal-boot-only persona,
@@ -14,5 +14,6 @@ public struct KernelRestoreResolver: Sendable {
         try KernelIdentityResolver().resolve(in: image)
             + KernelPanicResolver().resolve(in: image)
             + KernelAMFIResolver().resolve(in: image)
+            + KernelPPLTrustCacheResolver.requiredRecords(in: image)
     }
 }

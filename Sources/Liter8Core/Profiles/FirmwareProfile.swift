@@ -186,6 +186,43 @@ public enum KernelResolverProfileRegistry {
                 ),
             ]
         ),
+        KernelResolverProfile(
+            // iPad 8 (iPad11,6 / iPad11,7, j171aap / j172aap, A12 / T8020)
+            // iPadOS 26.7.1. This is a new SoC family (T8020, not T8030) and a
+            // new XNU major (Darwin 25.6.0) for Liter8. It is registered so the
+            // artifact is identified rather than labelled "unidentified", but
+            // The credential-manager family is an exact-build 25-entry roster.
+            // Other kernel patch families still need device validation.
+            //
+            // Discovery status (resolve against the clean kernelcache):
+            //   boot-policy, aks, sep, sep-silence  -> candidates produced
+            //   restore, boot, boot-public, diagnostic -> now reach past the
+            //       SoC-string anchor; downstream anchors still need review
+            //   credential-manager -> 25 unique entries, fixture-bound
+            //   sandbox-public -> 11 records, fixture-bound
+            //   sandbox scoped shim -> no cave found
+            // See docs/plans/IPAD8_26_7_1_PORT.md for the full Phase A table.
+            id: "ios26-23H30-j171aap",
+            productVersion: "26.7.1",
+            builds: ["23H30"],
+            boards: ["j171aap", "j172aap"],
+            component: "kernelcache.release.ipad11b",
+            embeddedFingerprint: "xnu-12377.162.13.700.38~2/RELEASE_ARM64_T8020",
+            resolverVariants: [
+                "kernel-ppl-trust-cache": ResolverVariantProfile(
+                    signature: "t8020-loaded-trust-cache-v1",
+                    payload: "loaded-trust-cache-true-v1"
+                ),
+                // 23H30 has 25 distinct entries in this patch roster. The
+                // previous updateAnalytics locator collides with unlockItem;
+                // no second entry is patched. The workflow profile remains
+                // experimental pending a complete device boot.
+                "kernel-credential-manager": ResolverVariantProfile(
+                    signature: "ios26-23H30-acm-v1",
+                    payload: "acm-return-success-v1"
+                ),
+            ]
+        ),
     ]
 
     /// Detect a profile using evidence embedded in the artifact itself.

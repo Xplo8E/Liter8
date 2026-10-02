@@ -334,6 +334,49 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
             )
         ),
+        // iPad 8 Wi-Fi (iPad11,6 / j171aap / A12 T8020) iPadOS 26.7.1.
+        //
+        // EXPERIMENTAL and intentionally not usable end to end yet. The four
+        // pre-boot guards below are measured from this exact build's mounted
+        // System volume (141-38001-023.dmg, ProductBuildVersion 23H30), so
+        // provisioning's identity checks are real, not placeholders:
+        //   launchd            sha256(/sbin/launchd)
+        //   launchd cache      sha256(/System/Library/xpc/launchd.plist)
+        //   daemon count       |LaunchDaemons| in that plist
+        //   Setup controllers  device/patch_setup.py count on /Applications/
+        //                      Setup.app/Setup (parsed cleanly on iOS 26 arm64e)
+        //
+        // What is NOT proven, and why nothing here may be promoted to
+        // .reviewed yet (see docs/plans/IPAD8_26_7_1_PORT.md):
+        //   - kernel credential-manager and sandbox resolvers are unresolved;
+        //     the iBoot bootargs/restore/pinot resolvers produce no candidate,
+        //     so make-cfw cannot complete.
+        //   - bootPlan is unvalidated. The ibss-skip-display-init resolver
+        //     produces no candidate on this iBSS, so the n104 workaround is not
+        //     carried over. Empty arrays are an explicit "no additions until a
+        //     device proves otherwise", not a reviewed boot policy.
+        //   - This is A12/T8020 with no SPTM/TXM and Cryptex1 volumes, so the
+        //     boot firmware sequence and provisioning still need porting.
+        // The transport stays usbliter8ctl; yoloDFU is only an offset reference.
+        DeviceWorkflowProfile(
+            id: "ipad11,6-j171aap-23H30",
+            productVersion: "26.7.1",
+            build: "23H30",
+            productType: "iPad11,6",
+            deviceClass: "j171aap",
+            chipID: 0x8020,
+            boardID: 0x24,
+            extractedDirectoryName: "iPad11,6_26.7.1_23H30_Restore",
+            validationState: .experimental,
+            launchdSHA256: "1b37dae048542729a622a1a3f4b77ec8829d32e918f0d6a0c0c037f32d9e84b1",
+            launchdCacheSHA256: "af9183685525a0833fea7a16c7a81b3f85e14372ea33d49f3e1ec6ab1a90ca4f",
+            launchdCacheDaemonCount: 672,
+            setupControllerMethodCount: 58,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
     ]
 
     public static func profile(

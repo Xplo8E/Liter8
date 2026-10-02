@@ -5,15 +5,16 @@ set -eu
 BASE="$(cd "$(dirname "$0")" && pwd)"
 TOOLS="$BASE/../../tools"
 LDID="$TOOLS/ldid_macosx_arm64"
-SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+SDK="${LITER8_IOS_SDK:-$(xcrun --sdk iphoneos --show-sdk-path)}"
+[ -d "$SDK" ] || { echo "[!] iOS SDK missing: $SDK" >&2; exit 1; }
 OUT="$BASE/lhook.dylib"
 
 [ -x "$LDID" ] || { echo "[!] ldid missing at $LDID" >&2; exit 1; }
 
 for arch in arm64 arm64e; do
-    xcrun -sdk iphoneos clang -arch "$arch" -miphoneos-version-min=15.0 \
+    xcrun clang -arch "$arch" -miphoneos-version-min=15.0 \
         -isysroot "$SDK" -dynamiclib -O2 -Wall -Wextra \
-        -Wl,-not_for_dyld_shared_cache -install_name /usr/lib/lhook.dylib \
+        -Wl,-not_for_dyld_shared_cache -install_name /usr/lib/lhook \
         -o "$BASE/lhook_$arch.dylib" "$BASE/lhook.c"
 done
 
@@ -32,7 +33,7 @@ strings -a "$OUT" | grep -q '^/var/jb/usr/lib/TweakLoader.dylib$' \
 [ -z "$("$LDID" -e "$OUT")" ] \
     || { echo "[!] lhook unexpectedly carries entitlements" >&2; exit 1; }
 deps=$(otool -L "$OUT" | awk 'NR > 1 {print $1}')
-[ "$deps" = "/usr/lib/lhook.dylib
+[ "$deps" = "/usr/lib/lhook
 /usr/lib/libSystem.B.dylib" ] \
     || { printf '[!] lhook has unexpected dependencies:\n%s\n' "$deps" >&2; exit 1; }
 
@@ -47,7 +48,7 @@ build_universal() {
         [ "$kind" = dylib ] && extra="-dynamiclib -Wl,-not_for_dyld_shared_cache -install_name /usr/lib/systemhook.dylib"
         # extra is intentionally word-split: it is a fixed, source-controlled linker option set.
         # shellcheck disable=SC2086
-        xcrun -sdk iphoneos clang -arch "$arch" -miphoneos-version-min=15.0 \
+        xcrun clang -arch "$arch" -miphoneos-version-min=15.0 \
             -isysroot "$SDK" -O2 -Wall -Wextra $extra \
             -o "$BASE/${name}_$arch" "$BASE/$source"
     done

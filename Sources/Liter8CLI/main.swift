@@ -32,8 +32,8 @@ private func usage() -> Never {
       iboot       ibss-validate, ibss-bootargs, ibss-normal, ibss-restore, ibec-restore,
                   ibss-ramdisk, ibss-skip-display-init,
                   ibec-ignore-pinot-failure, ibec-force-pinot-id
-      kernel      restore, boot-policy, aks, sep-silence, sep,
-                  credential-manager, sandbox, boot, boot-public, diagnostic
+      kernel      restore, ppl-trust-cache, boot-policy, aks, sep-silence, sep,
+              credential-manager, sandbox, sandbox-public, boot, boot-public, diagnostic
       txm         restore, boot
       userland    restored-fdr, asr, coreauthd, ctkd, mobileactivationd
       devicetree  restore, normal
@@ -80,12 +80,14 @@ let resolverGroups: [String: [String: String]] = [
     ],
     "kernel": [
         "restore": KernelRestoreResolver.name,
+        "ppl-trust-cache": KernelPPLTrustCacheResolver.name,
         "boot-policy": KernelBootPolicyResolver.name,
         "aks": KernelAKSResolver.name,
         "sep-silence": KernelSEPSilenceResolver.name,
         "sep": KernelSEPResolver.name,
         "credential-manager": KernelCredentialManagerResolver.name,
         "sandbox": KernelSandboxResolver.name,
+        "sandbox-public": KernelSandboxCompatibilityResolver.name,
         "boot": KernelBootResolver.name,
         // Keep the public CLI spelling stable while the Swift type describes
         // the plan's real cross-build compatibility contract.
@@ -220,6 +222,8 @@ func resolveRecords(
     case KernelRestoreResolver.name:
         guard options.bootArguments == nil, options.panelID == nil else { usage() }
         return try KernelRestoreResolver().resolve(in: image)
+    case KernelPPLTrustCacheResolver.name:
+        return try KernelPPLTrustCacheResolver().resolve(in: image)
     case KernelBootPolicyResolver.name:
         guard options.bootArguments == nil, options.panelID == nil else { usage() }
         return try KernelBootPolicyResolver().resolve(in: image)
@@ -238,6 +242,9 @@ func resolveRecords(
     case KernelSandboxResolver.name:
         guard options.bootArguments == nil, options.panelID == nil else { usage() }
         return try KernelSandboxResolver().resolve(in: image)
+    case KernelSandboxCompatibilityResolver.name:
+        guard options.bootArguments == nil, options.panelID == nil else { usage() }
+        return try KernelSandboxCompatibilityResolver().resolve(in: image)
     case KernelBootResolver.name:
         guard options.bootArguments == nil, options.panelID == nil else { usage() }
         return try KernelBootResolver().resolve(in: image)
@@ -622,7 +629,12 @@ do {
             image: BinaryImage(data: artifact.payload),
             variant: arguments[2]
         )
-        let exact = reports.filter(\.isExact).count
+        let exactReports = reports.filter(\.isExact)
+        let exact = exactReports.count
+        let distinct = Set(exactReports.compactMap { $0.offsets.first }).count
+        let ordered = zip(exactReports, exactReports.dropFirst()).allSatisfy {
+            $0.0.offsets[0] < $0.1.offsets[0]
+        }
         print("FUNCTION                                     WORDS  RESULT")
         print("-------------------------------------------------------------------")
         for report in reports {
@@ -642,7 +654,10 @@ do {
                 + "\(String(report.recordedWords).padding(toLength: 7, withPad: " ", startingAt: 0))\(result)")
         }
         print("-------------------------------------------------------------------")
-        print("\(exact)/\(reports.count) usable as recorded")
+        print("\(exact)/\(reports.count) exact shapes; \(distinct) distinct exact entries")
+        if distinct != exact || !ordered {
+            print("not resolver-ready: repeated or reordered entries require semantic review")
+        }
 
     case "profile":
         guard arguments.count == 2 else { usage() }
@@ -879,7 +894,6 @@ do {
             }
             let payload = try Data(contentsOf: payloadURL, options: [.mappedIfSafe])
             let output = try artifact.encoded(replacingPayloadWith: payload)
-            try output.write(to: outputURL, options: .atomic)
 
             // Re-open our own result and compare the extracted payload. This
             // catches DER-length or PAYP mistakes before reporting success.
@@ -887,6 +901,7 @@ do {
             guard roundTrip.kind == .im4p, roundTrip.payload == payload else {
                 throw PatchfinderError.invalidFirmwareContainer("repacked payload failed round-trip verification")
             }
+            try output.write(to: outputURL, options: .atomic)
             print("repacked \(artifact.fourcc ?? "IM4P") and verified \(payload.count)-byte payload")
             print("wrote \(outputURL.path)")
 

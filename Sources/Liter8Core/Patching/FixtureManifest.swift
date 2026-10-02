@@ -165,6 +165,8 @@ public struct FixtureManifest: Codable, Sendable {
             return try IBECPinotIgnoreFailureResolver().resolve(in: image)
         case KernelRestoreResolver.name:
             return try KernelRestoreResolver().resolve(in: image)
+        case KernelPPLTrustCacheResolver.name:
+            return try KernelPPLTrustCacheResolver().resolve(in: image)
         case KernelBootPolicyResolver.name:
             return try KernelBootPolicyResolver().resolve(in: image)
         case KernelAKSResolver.name:
@@ -177,6 +179,8 @@ public struct FixtureManifest: Codable, Sendable {
             return try KernelCredentialManagerResolver().resolve(in: image)
         case KernelSandboxResolver.name:
             return try KernelSandboxResolver().resolve(in: image)
+        case KernelSandboxCompatibilityResolver.name:
+            return try KernelSandboxCompatibilityResolver().resolve(in: image)
         case KernelBootResolver.name:
             return try KernelBootResolver().resolve(in: image)
         case KernelBootCompatibilityResolver.name:

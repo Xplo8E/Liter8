@@ -38,19 +38,35 @@ public struct IBECRestoreResolver: Sendable {
         var candidates: [(offset: UInt64, target: UInt64)] = []
         var cursor: UInt64 = 0
         while cursor + 0x3C <= UInt64(image.count) {
-            // MOV/MOVK/MOVK materializes the nonce-cache MMIO address, followed
-            // by LDR W8,[X19] and TBNZ W8,#1,cached. The uncached path starts
-            // with MOV W0,#0; BL generator and stores the two nonce halves.
-            guard try image.readUInt32(at: cursor) == 0xD290_0013,
-                  try image.readUInt32(at: cursor + 4) == 0xF2A7_6173,
-                  try image.readUInt32(at: cursor + 8) == 0xF2C0_0053,
-                  try image.readUInt32(at: cursor + 12) == 0xB940_0268
-            else {
+            // The original build materializes the nonce-cache MMIO address
+            // inline. On 23H30 the same three instructions moved into a leaf
+            // reached by BL, immediately before the same LDR/TBNZ flow.
+            let first = try image.readUInt32(at: cursor)
+            var inlineAddress = false
+            if first == 0xD290_0013,
+               try image.readUInt32(at: cursor + 4) == 0xF2A7_6173,
+               try image.readUInt32(at: cursor + 8) == 0xF2C0_0053,
+               try image.readUInt32(at: cursor + 12) == 0xB940_0268 {
+                inlineAddress = true
+            }
+            var branchOffset: UInt64?
+            if inlineAddress {
+                branchOffset = cursor + 16
+            } else if first & 0xFC00_0000 == 0x9400_0000,
+                      let helper = ARM64.directBranchTarget(instruction: first, at: cursor),
+                      helper + 16 <= UInt64(image.count),
+                      (try image.readUInt32(at: helper)) == 0xD290_0013,
+                      (try image.readUInt32(at: helper + 4)) == 0xF2A7_6173,
+                      (try image.readUInt32(at: helper + 8)) == 0xF2C0_0053,
+                      (try image.readUInt32(at: helper + 12)) == ARM64.ret,
+                      (try image.readUInt32(at: cursor + 4)) == 0xB940_0268 {
+                branchOffset = cursor + 8
+            }
+            guard let branchOffset else {
                 cursor += 4
                 continue
             }
 
-            let branchOffset = cursor + 16
             let branch = try image.readUInt32(at: branchOffset)
             guard branch & 0x7F08_001F == 0x3708_0008,
                   try image.readUInt32(at: branchOffset + 4) == ARM64.movW0Zero,

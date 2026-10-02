@@ -1,0 +1,44 @@
+{
+  "expectedOutputSHA256" : "f3012ef43783ef0e13abab0d58905de245bc804890f458c458772f9c56063ead",
+  "expectedPatches" : [
+    {
+      "id" : "mobileactivationd.should-hactivate",
+      "offset" : 2887148,
+      "originalBytes" : "00504039",
+      "replacementBytes" : "20008052"
+    },
+    {
+      "id" : "mobileactivationd.activation-state.migration-gate",
+      "offset" : 7532,
+      "originalBytes" : "76050036",
+      "replacementBytes" : "2b000014"
+    },
+    {
+      "id" : "mobileactivationd.activation-state.adrp",
+      "offset" : 7720,
+      "originalBytes" : "081d00b0",
+      "replacementBytes" : "081e00d0"
+    },
+    {
+      "id" : "mobileactivationd.activation-state.add",
+      "offset" : 7724,
+      "originalBytes" : "08810091",
+      "replacementBytes" : "08611a91"
+    },
+    {
+      "id" : "mobileactivationd.activation-state.dereference",
+      "offset" : 7728,
+      "originalBytes" : "080140f9",
+      "replacementBytes" : "1f2003d5"
+    }
+  ],
+  "expectedSize" : 4463712,
+  "resolver" : "mobileactivationd",
+  "sha256" : "08821139269d594a89f6703fd51668bba9889f8ef76e6f99135f819a5abf1f6f",
+  "target" : {
+    "board" : "j171aap",
+    "build" : "23H30",
+    "component" : "mobileactivationd",
+    "device" : "iPad 8 (Wi-Fi)"
+  }
+}

@@ -42,6 +42,20 @@ struct KernelFunctionSignatureDescriptor: Sendable {
 struct KernelCredentialManagerSignatureVariant: Sendable {
     let id: String
     let functions: [KernelFunctionSignatureDescriptor]
+    let requiresReferenceOrder: Bool
+    let preserveBareBTI: Bool
+
+    init(
+        id: String,
+        functions: [KernelFunctionSignatureDescriptor],
+        requiresReferenceOrder: Bool = true,
+        preserveBareBTI: Bool = false
+    ) {
+        self.id = id
+        self.functions = functions
+        self.requiresReferenceOrder = requiresReferenceOrder
+        self.preserveBareBTI = preserveBareBTI
+    }
 }
 
 /// Build-family-specific locator data for AppleCredentialManager.
@@ -423,12 +437,104 @@ enum KernelCredentialManagerSignatures {
         ]
     )
 
+    /// iPad 8 (A12 / T8020) iPadOS 26.7.1 `23H30` — WORK IN PROGRESS.
+    ///
+    /// Registered as `.pendingResearch` in the T8020 kernel resolver profile,
+    /// so `kernel-credential-manager` still refuses rather than patching on
+    /// partial evidence. It exists so `liter8 acm-probe <kc> ios26-23H30-acm-v1`
+    /// runs in-repo and the port can be finished as a diff.
+    ///
+    /// Probing the 24A435 shapes against the 23H30 AppleCredentialManager
+    /// (same class, `AppleCredentialManager.cpp`) matched **18 of 26 outright**,
+    /// so this variant starts from those shapes by reference. Remaining work,
+    /// recorded against the measured ACM `__text` map (see
+    /// docs/plans/IPAD8_26_7_1_PORT.md):
+    ///
+    ///   exact anchors already matching on 23H30 (offsets):
+    ///     sepManagerMatchedThreadCallHandler 0x1b1ff20, _performKernelControl
+    ///     0x1b21244, _performCommand 0x1b215f8, processSCRDResponsePayload
+    ///     0x1b21820, scheduleDblClickDeferredAck 0x1b21a8c, _setPropertiesGated
+    ///     0x1b226e8, performDoubleClickQueryGated 0x1b22b70,
+    ///     performLoggingLevelQueryGated 0x1b22c60, lockItem 0x1b22e2c,
+    ///     unlockItem 0x1b23058, handleSEPMessage 0x1b2350c, readFromSEPBuffer
+    ///     0x1b237f4, writeToSEPBuffer 0x1b23954, clearSEPBuffer 0x1b23f34,
+    ///     getSEPEndpoint 0x1b240d0, powerOffActionGated 0x1b24d10,
+    ///     sepManagerMatchedGated 0x1b24fc4.
+    ///
+    ///   Direct-call analysis in the 23H30 kernel identified the four formerly
+    ///   drifted entries. callPlatformFunction (0x1b203a8) dispatches by command
+    ///   type to cmdContextV2 (0x1b20584) or cmdContextV3 (0x1b2066c). Both
+    ///   pass 0x1b20880 as the gated callback; that entry accepts five arguments
+    ///   and calls _performKernelControl. The words below come from kc.raw.
+    ///
+    ///   performSCRDInitialization (0x1b21bac) takes only self, then calls
+    ///   sendSEPCommand (0x1b21db0), which preserves eight incoming arguments
+    ///   and calls writeToSEPBuffer and sendSEPMessage. sendSEPMessage
+    ///   (0x1b23cfc) sits between writeToSEPBuffer and clearSEPBuffer and is
+    ///   called by that command path. These three also have 23H30 words below.
+    ///
+    ///   setPowerStateGated is at 0x1b311f4: its body takes self and the power
+    ///   state, and directly references its own "setPowerStateGated" log string
+    ///   at 0x56a23b. This lies after the old roster's final entry, so the
+    ///   ios27 strict-order assumption is invalid for this build.
+    ///
+    ///   The old updateAnalytics shape collides with unlockItem. There is no
+    ///   distinct entry between its former neighbors on 23H30, and no unique
+    ///   updateAnalytics entry was recovered. This build's patch roster omits
+    ///   that method instead of writing twice to unlockItem. It therefore has
+    ///   25 independently resolved entry points; setPowerStateGated is checked
+    ///   for uniqueness without imposing the iOS 27 address ordering.
+    static let research23H30V1 = KernelCredentialManagerSignatureVariant(
+        id: "ios26-23H30-acm-v1",
+        functions: release24A435V1.functions.filter { $0.name != "updateAnalytics" }.map { descriptor in
+            switch descriptor.name {
+            // PACIBSP; 0x60-byte frame; preserve x0...x6 before checking the
+            // command type and tail-calling one of the context handlers.
+            case "callPlatformFunction":
+                return .init("callPlatformFunction", words: "d503237f d10183ff a90167fa a9025ff8 a90357f6 a9044ff4 a9057bfd 910143fd aa0603f3 aa0503f4 aa0403f5 aa0303f6 aa0203f7 aa0103f9 aa0003f8 d000dd88")
+            // PACIBSP; x4 points to a V2 context: 32-bit command at +0,
+            // pointer at +8, and a cleared byte in the stack copy at +12.
+            case "cmdContextV2":
+                return .init("cmdContextV2", words: "d503237f d101c3ff a90457f6 a9054ff4 a9067bfd 910183fd b4000484 aa0303f3 aa0203f4 aa0103f5 aa0003f6 b9400088 b90033e8 f9400488 f80343e8 3900f3ff")
+            // PACIBSP; x4 points to a V3 context. Its byte at +12 is passed
+            // to the common context helper before scheduling the same callback.
+            case "cmdContextV3":
+                return .init("cmdContextV3", words: "d503237f d101c3ff a9035ff8 a90457f6 a9054ff4 a9067bfd 910183fd b40004a4 aa0403f3 aa0303f4 aa0203f5 aa0103f6 aa0003f7 39403081 94000033 f9404ee0")
+            // PACIBSP; 0xd0-byte frame, save x0...x4; the large gated body
+            // directly calls _performKernelControl at 0x1b21244.
+            case "performCommandGated":
+                return .init("performCommandGated", words: "d503237f d10343ff a9076ffc a90867fa a9095ff8 a90a57f6 a90b4ff4 a90c7bfd 910303fd aa0403f4 aa0303f5 aa0203f8 aa0103f6 aa0003f3 b9006bff f90033ff")
+            // PACIBSP; self-only entry checks the ACM state, then calls the
+            // eight-argument command implementation below.
+            case "performSCRDInitialization":
+                return .init("performSCRDInitialization", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd aa0003f3 b000dd95 394022a8 b0ff5254 91017a94 7100291f 540002a8 39423268 360001a8 f9400270")
+            // PACIBSP; 0x110-byte frame saves x0...x7 and calls both the SEP
+            // buffer writer and the message sender later in the body.
+            case "sendSEPCommand":
+                return .init("sendSEPCommand", words: "d503237f d10443ff 6d0a23e9 a90b6ffc a90c67fa a90d5ff8 a90e57f6 a90f4ff4 a9107bfd 910403fd aa0703fc aa0603f9 aa0503f6 aa0403f5 aa0303f8 f90043e2 aa0103f4 aa0003f3 f81903a4 b000dd88 39402108 7100291f 540002e8 39423268 360001a8 f9400270 aa1303f1 f2f9b431 dac11a30 d2803d11 8b110210 f9400208")
+            // PACIBSP; five-argument message path uses getSEPEndpoint and
+            // follows writeToSEPBuffer in this class's code layout.
+            case "sendSEPMessage":
+                return .init("sendSEPMessage", words: "d503237f d10203ff a90367fa a9045ff8 a90557f6 a9064ff4 a9077bfd 9101c3fd aa0403f7 aa0303f5 aa0203f6 aa0103f4 aa0003f3 f90017ff f000dd79 39402328")
+            // PACIBSP; preserves self and x1 power state. Later in this body,
+            // ADRP/ADD names the setPowerStateGated diagnostic string.
+            case "setPowerStateGated":
+                return .init("setPowerStateGated", words: "d503237f d101c3ff a9035ff8 a90457f6 a9054ff4 a9067bfd 910183fd aa0103f4 aa0003f3 b000dd18 39402308 b0ff51d7 9108eef7 7100a11f 540001c8 39423268 360003a8 97ffd0f1 f2f9b431 dac11a30 d2803d11 8b110210 f9400208 aa1303e0 d2800001 f2e19390 d73f0910 14000013 b5000334 5280ce68 90ff51c9 9130fd29")
+            default:
+                return descriptor
+            }
+        },
+        requiresReferenceOrder: false,
+        preserveBareBTI: true
+    )
+
     static func variant(named id: String) -> KernelCredentialManagerSignatureVariant? {
         switch id {
         case earlyBetaV1.id: return earlyBetaV1
         case release24A435V1.id: return release24A435V1
         case release24B5084kV1.id: return release24B5084kV1
         case release24B5089gV1.id: return release24B5089gV1
+        case research23H30V1.id: return research23H30V1
         default: return nil
         }
     }

@@ -66,7 +66,7 @@
  * trip per iteration, and the whole point of the guards is that they are verified before
  * they ever run in launchd. The production build takes the default. */
 #ifndef LHOOK_SELF_PATH
-#define LHOOK_SELF_PATH "/usr/lib/lhook.dylib"
+#define LHOOK_SELF_PATH "/usr/lib/lhook"
 #endif
 static const char *kSelf       = LHOOK_SELF_PATH;
 

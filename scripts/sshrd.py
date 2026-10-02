@@ -31,8 +31,7 @@ def hdiutil(arguments: list[object], *, capture: bool = False):
 
 def attach(image: Path, *, readonly: bool) -> tuple[str, Path]:
     arguments: list[object] = ["attach", "-nobrowse", "-owners", "off"]
-    if readonly:
-        arguments.append("-readonly")
+    arguments.append("-readonly" if readonly else "-readwrite")
     arguments.append(image)
     result = hdiutil(arguments, capture=True)
     device = next((line.split()[0] for line in result.stdout.splitlines()
@@ -41,7 +40,11 @@ def attach(image: Path, *, readonly: bool) -> tuple[str, Path]:
                   for line in result.stdout.splitlines() if "/Volumes/" in line), None)
     if not device or not mount:
         raise WorkflowError("could not parse hdiutil attach output")
-    return device, Path(mount.strip())
+    mount_path = Path(mount.strip())
+    if not readonly and os.statvfs(mount_path).f_flag & os.ST_RDONLY:
+        detach(device)
+        raise WorkflowError(f"SSHRD image mounted read-only: {mount_path}")
+    return device, mount_path
 
 
 def detach(device: str) -> None:
@@ -103,8 +106,12 @@ def build_sshrd(context: Context, ticket: Path, output: Path) -> None:
         try:
             # Recreate the image with enough space for the SSH payload instead
             # of resizing Apple's original in place.
-            privileged([
-                "/usr/bin/hdiutil", "create", "-size", "254m",
+            # The image file must belong to the caller that attaches it below.
+            # sudo creates a root-owned image that hdiutil may silently mount
+            # read-only for a normal user. -copyuid controls ownership inside
+            # the filesystem and does not require a root-owned image file.
+            hdiutil([
+                "create", "-size", "254m",
                 "-imagekey", "diskimage-class=CRawDiskImage",
                 "-format", "UDRW", "-fs", "APFS", "-layout", "NONE",
                 "-srcfolder", source_mount, "-copyuid", "root", expanded_dmg,
@@ -132,7 +139,7 @@ def build_sshrd(context: Context, ticket: Path, output: Path) -> None:
         finally:
             detach(device)
 
-        privileged(["/usr/bin/hdiutil", "resize", "-sectors", "min", expanded_dmg])
+        hdiutil(["resize", "-sectors", "min", expanded_dmg])
         context.repack_im4p(source, expanded_dmg, expanded_im4p)
         from boot_artifacts import create_img4
         create_img4(context, expanded_im4p, ticket, output)

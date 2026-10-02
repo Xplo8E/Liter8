@@ -5,10 +5,12 @@
 set -e
 cd "$(dirname "$0")"
 LDID=../../tools/ldid_macosx_arm64
+SDK="${LITER8_IOS_SDK:-$(xcrun --sdk iphoneos --show-sdk-path)}"
+[ -d "$SDK" ] || { echo "[!] iOS SDK missing: $SDK" >&2; exit 1; }
 for src in spawnprobe.c personaprobe.c personaalloc.c; do
     [ -f "$src" ] || continue
     out="${src%.c}"
-    xcrun -sdk iphoneos clang -arch arm64 -miphoneos-version-min=15.0 -O2 -Wall "$src" -o "$out"
+    xcrun clang -isysroot "$SDK" -arch arm64 -miphoneos-version-min=15.0 -O2 -Wall "$src" -o "$out"
     "$LDID" -Icom.apple."$out" -Se_both.plist -Cadhoc "$out"
     codesign -d --entitlements :- "$out" 2>/dev/null | grep -q get-task-allow \
         && { echo "[!] $out carries get-task-allow, AMFI will kill it"; exit 1; }

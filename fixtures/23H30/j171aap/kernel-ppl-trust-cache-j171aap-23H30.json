@@ -1,0 +1,20 @@
+{
+  "expectedOutputSHA256" : "afae445d1f7345fe87d99bfd361ffb05dc00ee0299bbb9829d4797ca63e5cf77",
+  "expectedPatches" : [
+    {
+      "id" : "kernel.ppl.loaded-trust-cache-result",
+      "offset" : 52746852,
+      "originalBytes" : "e0179f1a",
+      "replacementBytes" : "20008052"
+    }
+  ],
+  "expectedSize" : 59031552,
+  "resolver" : "kernel-ppl-trust-cache",
+  "sha256" : "eee662eba10dc9302a8999677361adf12ce86a61078ed387181ab9a183c334be",
+  "target" : {
+    "board" : "j171aap",
+    "build" : "23H30",
+    "component" : "kernelcache",
+    "device" : "iPad 8 (Wi-Fi)"
+  }
+}

@@ -43,9 +43,38 @@ public enum InterruptibleProcess: Sendable {
     ///
     /// Restores the previous signal disposition before returning, so a caller
     /// that runs several children in sequence is unaffected by this one.
-    public static func run(_ process: Process) throws {
+    public static func run(_ process: Process, foregroundTerminal: Bool = false) throws {
         try supervising(process) {
+            // A workflow may prompt through /dev/tty (sudo, ssh), even when
+            // stdin is redirected. Only lend a terminal that we currently own.
+            let terminal = foregroundTerminal ? open("/dev/tty", O_RDWR | O_NOCTTY) : -1
+            defer { if terminal >= 0 { close(terminal) } }
+            let parentGroup = getpgrp()
+            let ownsTerminal = terminal >= 0 && tcgetpgrp(terminal) == parentGroup
             try process.run()
+            if ownsTerminal {
+                let childGroup = process.processIdentifier
+                let previousTTOU = signal(SIGTTOU, SIG_IGN)
+                let result = tcsetpgrp(terminal, childGroup)
+                let failure = errno
+                signal(SIGTTOU, previousTTOU)
+                if result != 0 && process.isRunning {
+                    kill(-childGroup, SIGKILL)
+                    process.waitUntilExit()
+                    throw POSIXError(POSIXErrorCode(rawValue: failure) ?? .EIO)
+                }
+                // A fast tty read can stop the group before tcsetpgrp runs.
+                if result == 0 { kill(-childGroup, SIGCONT) }
+            }
+            defer {
+                if ownsTerminal {
+                    // Liter8 is now in the background; restoring the terminal
+                    // without suppressing SIGTTOU would stop Liter8 itself.
+                    let previousTTOU = signal(SIGTTOU, SIG_IGN)
+                    tcsetpgrp(terminal, parentGroup)
+                    signal(SIGTTOU, previousTTOU)
+                }
+            }
             process.waitUntilExit()
         }
     }

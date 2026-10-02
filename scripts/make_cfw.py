@@ -4,19 +4,19 @@
 import sys
 from pathlib import Path
 
+from boot_artifacts import has_txm
 from liter8_workflow import Context, WorkflowError, main_guard, run
 
 
 def build() -> None:
     context = Context.load()
+    patch_txm = has_txm(context.components, "restore")
     context.prepare_cfw()
-    ramdisk = context.work / "Ramdisk"
-    ramdisk.mkdir(exist_ok=True)
-
-    # iBSS is consumed as a raw payload by usbliter8ctl, rather than from CFW.
+    # Keep the erase-restore transport payload separate from get-boot/get-rd,
+    # which replace the Ramdisk directory with their own iBSS.raw.
     print("[*] CFW component 1/6: restore iBSS", flush=True)
     ibss_container = context.backup(context.component("iBSS", in_cfw=True))
-    ibss_raw = ramdisk / "iBSS.raw"
+    ibss_raw = context.work / "CFW-iBSS.raw"
     context.extract_im4p(ibss_container, ibss_raw)
     context.apply("iboot", "ibss-restore", ibss_raw, record_name="ibss-restore")
 
@@ -35,10 +35,11 @@ def build() -> None:
         record_name="devicetree-restore", capture_records=False,
     )
 
-    print("[*] CFW component 4/6: restore TXM", flush=True)
-    txm = context.component("Ap,RestoreTrustedExecutionMonitor", in_cfw=True)
-    context.reset_to_pristine(txm)
-    context.apply("txm", "restore", txm, record_name="txm-restore")
+    if patch_txm:
+        print("[*] CFW component 4/6: restore TXM", flush=True)
+        txm = context.component("Ap,RestoreTrustedExecutionMonitor", in_cfw=True)
+        context.reset_to_pristine(txm)
+        context.apply("txm", "restore", txm, record_name="txm-restore")
 
     print("[*] CFW component 5/6: restore kernelcache", flush=True)
     kernel = context.component("RestoreKernelCache", in_cfw=True)

@@ -119,7 +119,7 @@ def managed_tss_proxy(context: Context):
 
 def restore() -> None:
     context = Context.load()
-    ibss = context.work / "Ramdisk/iBSS.raw"
+    ibss = context.work / "CFW-iBSS.raw"
     if not ibss.is_file():
         raise WorkflowError("restore iBSS is missing; run fw make-cfw first")
     if not context.cfw.is_dir():
