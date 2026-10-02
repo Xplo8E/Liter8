@@ -14,13 +14,15 @@ RC_IPSW_FILE="$TEST_ROOT/release-candidate.ipsw"
 RC_WORK_DIR="$TEST_ROOT/rc-work"
 D431_IPSW_FILE="$TEST_ROOT/d431.ipsw"
 D431_WORK_DIR="$TEST_ROOT/d431-work"
+DUAL_IPSW_FILE="$TEST_ROOT/dual-board.ipsw"
+DUAL_WORK_DIR="$TEST_ROOT/dual-board-work"
 BAD_WORK_DIR="$TEST_ROOT/bad-work"
 BAD_IPSW_FILE="$TEST_ROOT/traversal.ipsw"
 RESOURCE_DIR="$TEST_ROOT/resources"
 RUN_DIR="$TEST_ROOT/unrelated-current-directory"
-mkdir -p "$WORK_DIR" "$RC_WORK_DIR" "$D431_WORK_DIR" "$BAD_WORK_DIR" "$RESOURCE_DIR/scripts" "$RUN_DIR"
+mkdir -p "$WORK_DIR" "$RC_WORK_DIR" "$D431_WORK_DIR" "$DUAL_WORK_DIR" "$BAD_WORK_DIR" "$RESOURCE_DIR/scripts" "$RUN_DIR"
 
-/usr/bin/python3 - "$IPSW_FILE" "$RC_IPSW_FILE" "$D431_IPSW_FILE" "$BAD_IPSW_FILE" "$WORK_DIR" <<'PY'
+/usr/bin/python3 - "$IPSW_FILE" "$RC_IPSW_FILE" "$D431_IPSW_FILE" "$DUAL_IPSW_FILE" "$BAD_IPSW_FILE" "$WORK_DIR" <<'PY'
 import copy
 import plistlib
 import sys
@@ -30,8 +32,9 @@ from pathlib import Path
 ipsw = Path(sys.argv[1])
 rc_ipsw = Path(sys.argv[2])
 d431_ipsw = Path(sys.argv[3])
-bad_ipsw = Path(sys.argv[4])
-work = Path(sys.argv[5])
+dual_ipsw = Path(sys.argv[4])
+bad_ipsw = Path(sys.argv[5])
+work = Path(sys.argv[6])
 manifest = {
     "ProductVersion": "27.0",
     "ProductBuildVersion": "24A5390f",
@@ -70,6 +73,23 @@ d431_manifest["BuildIdentities"][0]["ApBoardID"] = "0x02"
 d431_manifest["BuildIdentities"][0]["Info"]["DeviceClass"] = "d431ap"
 with zipfile.ZipFile(d431_ipsw, "w") as archive:
     archive.writestr("BuildManifest.plist", plistlib.dumps(d431_manifest))
+
+# 24A437 ships one IPSW for both Pro boards, so its manifest carries two build
+# identities and two profiles match it. Liter8 cannot tell which phone is
+# attached from the archive, so it has to ask rather than pick.
+dual_manifest = copy.deepcopy(manifest)
+dual_manifest["ProductVersion"] = "27.0"
+dual_manifest["ProductBuildVersion"] = "24A437"
+dual_manifest["SupportedProductTypes"] = ["iPhone12,3", "iPhone12,5"]
+d421_identity = copy.deepcopy(dual_manifest["BuildIdentities"][0])
+d421_identity["ApBoardID"] = "0x06"
+d421_identity["Info"]["DeviceClass"] = "d421ap"
+d431_identity = copy.deepcopy(dual_manifest["BuildIdentities"][0])
+d431_identity["ApBoardID"] = "0x02"
+d431_identity["Info"]["DeviceClass"] = "d431ap"
+dual_manifest["BuildIdentities"] = [d421_identity, d431_identity]
+with zipfile.ZipFile(dual_ipsw, "w") as archive:
+    archive.writestr("BuildManifest.plist", plistlib.dumps(dual_manifest))
 
 # The manifest is valid, but extraction must reject the parent traversal before
 # it can write outside Liter8's staging directory.
@@ -115,6 +135,37 @@ if "$PATCHER" fw prepare --file "$D431_IPSW_FILE" --work-dir "$D431_WORK_DIR" > 
 fi
 grep -q 'is experimental; rerun with --experimental' "$TEST_ROOT/d431-refusal.log"
 "$PATCHER" fw prepare --file "$D431_IPSW_FILE" --work-dir "$D431_WORK_DIR" --experimental > "$TEST_ROOT/d431-opt-in.log"
+grep -q 'firmware profile: iphone12,5-d431ap-24A446' "$TEST_ROOT/d431-opt-in.log"
+
+# A dual-board IPSW matches two profiles. Picking one silently would hand a
+# phone the other board's boot plan and iBSS, so this must refuse and say how.
+if "$PATCHER" fw prepare --file "$DUAL_IPSW_FILE" --work-dir "$DUAL_WORK_DIR" --experimental \
+    > "$TEST_ROOT/dual-refusal.log" 2>&1; then
+    echo "dual-board IPSW unexpectedly accepted without --board" >&2
+    exit 1
+fi
+grep -q 'several boards' "$TEST_ROOT/dual-refusal.log"
+grep -q 'd421ap, d431ap' "$TEST_ROOT/dual-refusal.log"
+grep -q -- '--board' "$TEST_ROOT/dual-refusal.log"
+
+# Each board selects its own profile, never the other's.
+for board_case in "d421ap:iphone12,3-d421ap-24A437" "d431ap:iphone12,5-d431ap-24A437"; do
+    board="${board_case%%:*}"
+    expected="${board_case##*:}"
+    rm -rf "$DUAL_WORK_DIR" && mkdir -p "$DUAL_WORK_DIR"
+    "$PATCHER" fw prepare --file "$DUAL_IPSW_FILE" --work-dir "$DUAL_WORK_DIR" \
+        --experimental --board "$board" > "$TEST_ROOT/dual-$board.log"
+    grep -q "firmware profile: $expected" "$TEST_ROOT/dual-$board.log"
+done
+
+# A board this IPSW does not carry is a typo, so name the ones it does.
+if "$PATCHER" fw prepare --file "$DUAL_IPSW_FILE" --work-dir "$DUAL_WORK_DIR" \
+    --experimental --board n104ap > "$TEST_ROOT/dual-wrong-board.log" 2>&1; then
+    echo "unknown --board unexpectedly accepted" >&2
+    exit 1
+fi
+
+# A single-board IPSW must still work with no --board at all.
 grep -q 'firmware profile: iphone12,5-d431ap-24A446' "$TEST_ROOT/d431-opt-in.log"
 
 if WORK_DIR="$BAD_WORK_DIR" "$PATCHER" fw prepare --file "$BAD_IPSW_FILE"; then

@@ -354,15 +354,102 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: []
             )
         ),
+        // iPhone 11 Pro and Pro Max on 27.0, resolver-verified, no device run
+        // on either board. The guards are identical because the IPSW ships one
+        // root filesystem for both; they were measured from it, not carried
+        // over from n104. Empty boot plans follow the d431 24A446 entry above
+        // rather than any 24A437 measurement.
+        DeviceWorkflowProfile(
+            id: "iphone12,3-d421ap-24A437",
+            productVersion: "27.0",
+            build: "24A437",
+            productType: "iPhone12,3",
+            deviceClass: "d421ap",
+            chipID: 0x8030,
+            boardID: 0x06,
+            extractedDirectoryName: "iPhone12,3,iPhone12,5_27.0_24A437_Restore",
+            validationState: .experimental,
+            launchdSHA256: "c640246d38aaeb2d2372aff1e5aa0de59dec267f53c0dfc155f7837e717af68b",
+            launchdCacheSHA256: "d763c9c0a7c6581cce5296cfa8e2ad7e1d5e9e389aca4b3343021dcc86c57c98",
+            launchdCacheDaemonCount: 729,
+            setupControllerMethodCount: 66,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
+        DeviceWorkflowProfile(
+            id: "iphone12,5-d431ap-24A437",
+            productVersion: "27.0",
+            build: "24A437",
+            productType: "iPhone12,5",
+            deviceClass: "d431ap",
+            chipID: 0x8030,
+            boardID: 0x02,
+            extractedDirectoryName: "iPhone12,3,iPhone12,5_27.0_24A437_Restore",
+            validationState: .experimental,
+            launchdSHA256: "c640246d38aaeb2d2372aff1e5aa0de59dec267f53c0dfc155f7837e717af68b",
+            launchdCacheSHA256: "d763c9c0a7c6581cce5296cfa8e2ad7e1d5e9e389aca4b3343021dcc86c57c98",
+            launchdCacheDaemonCount: 729,
+            setupControllerMethodCount: 66,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
     ]
 
-    public static func profile(
+    /// Every profile this IPSW could be restored with.
+    ///
+    /// A dual-device IPSW lists both boards, so several profiles match and the
+    /// archive cannot say which phone is attached. `board` is how the operator
+    /// resolves that.
+    public static func matchingProfiles(
         for identity: IPSWIdentity,
-        includeExperimental: Bool = false
-    ) -> DeviceWorkflowProfile? {
-        profiles.first {
+        includeExperimental: Bool = false,
+        board: String? = nil
+    ) -> [DeviceWorkflowProfile] {
+        profiles.filter {
             $0.supports(identity)
                 && ($0.validationState == .reviewed || includeExperimental)
+                && (board == nil || $0.deviceClass == board)
         }
+    }
+
+    /// The single profile for this IPSW, or nil when none or several match.
+    /// Use `matchingProfiles` to tell those two cases apart.
+    public static func profile(
+        for identity: IPSWIdentity,
+        includeExperimental: Bool = false,
+        board: String? = nil
+    ) -> DeviceWorkflowProfile? {
+        let matches = matchingProfiles(
+            for: identity,
+            includeExperimental: includeExperimental,
+            board: board
+        )
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    /// Shared so `prepare` and the device stages word this the same way.
+    public static func ambiguityMessage(
+        _ matches: [DeviceWorkflowProfile]
+    ) -> String {
+        """
+        this IPSW supports several boards and Liter8 cannot tell which \
+        phone you are using: \(boardList(matches)). Rerun with --board <device-class>
+        """
+    }
+
+    /// For a `--board` that matched nothing while the IPSW itself is known.
+    public static func unknownBoardMessage(
+        _ board: String,
+        offered: [DeviceWorkflowProfile]
+    ) -> String {
+        "no profile for --board \(board); this IPSW supports \(boardList(offered))"
+    }
+
+    private static func boardList(_ profiles: [DeviceWorkflowProfile]) -> String {
+        Set(profiles.map(\.deviceClass)).sorted().joined(separator: ", ")
     }
 }

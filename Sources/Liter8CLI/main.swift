@@ -43,6 +43,8 @@ private func usage() -> Never {
       --json  --boot-args <literal>  --pinot-id <value>
       --file <firmware.ipsw>  --work-dir <directory>  --python <executable>
       --experimental  opt in to a firmware workflow that still needs device validation
+      --board <device-class>  pick the board when one IPSW supports several,
+                for example d421ap or d431ap on an iPhone 11 Pro/Pro Max IPSW
       --resource-dir <directory>  --ticket <apticket.im4m>
       --sshrd-payload <ssh.tar.gz>
       --irecovery <custom-irecovery>  --idevicerestore <executable>
@@ -454,6 +456,7 @@ do {
         var irecoveryArgument: String?
         var idevicerestoreArgument: String?
         var rootfsArgument: String?
+        var boardArgument: String?
         var checkOnly = false
         var includeExperimental = false
         var serialConsole = false
@@ -494,6 +497,8 @@ do {
                 idevicerestoreArgument = arguments[index + 1]
             case "--rootfs":
                 rootfsArgument = arguments[index + 1]
+            case "--board":
+                boardArgument = arguments[index + 1]
             default:
                 usage()
             }
@@ -532,7 +537,8 @@ do {
             try FirmwareWorkflowRunner.run(
                 file: URL(fileURLWithPath: file).standardizedFileURL,
                 workDirectory: workDirectoryURL,
-                includeExperimental: includeExperimental
+                includeExperimental: includeExperimental,
+                board: boardArgument
             )
         } else {
             guard fileArgument == nil else { usage() }
@@ -628,6 +634,7 @@ do {
                     URL(fileURLWithPath: $0).standardizedFileURL
                 },
                 includeExperimental: includeExperimental,
+                board: boardArgument,
                 workflowEnvironment: workflowEnvironment
             )
         }

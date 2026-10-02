@@ -23,22 +23,22 @@ Normal boot to the home screen, root SSH, apt and Sileo, TrollStore, apps launch
 - cellular
 - Apple services
 - xTweak injection. It injects, but it's nowhere near as solid as vphone
-- 11 Pro and Pro Max. no device to test on
+- 11 Pro and Pro Max. profiles exist but no device to test on
 
 PRs welcome on any of these, especially SEP. The Pro and Pro Max are open too, if you own one and want to take the port on, i'll help where i can. Or if you'd rather help on the hardware side, there's a [coffee link](https://buymeacoffee.com/xplo8e) and that's what it'd go towards. Either route is fine, and so is neither.
 
-## Builds i've actually run
+## Builds and devices
 
-| Firmware        | Build      |
-| --------------- | ---------- |
-| iOS 27.0 beta 4 | `24A5390f` |
-| iOS 27.0 RC     | `24A435`   |
-| iOS 27.0        | `24A437`   |
-| iOS 27.0.1      | `24A446`   |
-| iOS 27.2 beta 1 | `24B5084k` |
-| iOS 27.2 beta 2 | `24B5089g` |
+| Firmware        | Build      | iPhone 11 | 11 Pro       | 11 Pro Max   |
+| --------------- | ---------- | --------- | ------------ | ------------ |
+| iOS 27.0 beta 4 | `24A5390f` | run       | -            | -            |
+| iOS 27.0 RC     | `24A435`   | run       | -            | -            |
+| iOS 27.0        | `24A437`   | run       | experimental | experimental |
+| iOS 27.0.1      | `24A446`   | run       | -            | experimental |
+| iOS 27.2 beta 1 | `24B5084k` | run       | -            | -            |
+| iOS 27.2 beta 2 | `24B5089g` | run       | -            | -            |
 
-All on the same iPhone 11. "Run" means i did an erase restore, booted it normally, then rebooted and it came back up. On the actual phone.
+"Run" means i did an erase restore, booted it normally, then rebooted and it came back up. "Experimental" means unverified. It resolves and you can use it with `--experimental`, but nobody has confirmed it on that phone. If you own one and are willing to try, share what happens and i'll change the tag.
 
 There's a catch with that table though. `fw restore-cfw` pulls a fresh APTicket from Apple while the restore is happening, so once Apple drops signing for a build you can't install it anymore. The row stays in the table because i did test it, but that doesn't mean you can still use it today. Check signing first.
 

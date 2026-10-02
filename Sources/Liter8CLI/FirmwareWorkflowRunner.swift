@@ -14,12 +14,37 @@ enum FirmwareWorkflowRunner {
     static func run(
         file: URL,
         workDirectory: URL,
-        includeExperimental: Bool
+        includeExperimental: Bool,
+        board: String?
     ) throws {
         let identity = try IPSWManifestInspector.inspect(ipsw: file)
+        // Refuse an ambiguous IPSW even here, where extraction itself is safe.
+        // The directory it would create is named after whichever profile won,
+        // and a later device stage reading that name has no way to know the
+        // choice was arbitrary.
+        let anyBoard = DeviceWorkflowRegistry.matchingProfiles(
+            for: identity,
+            includeExperimental: true
+        )
+        let forThisBoard = board.map { named in
+            anyBoard.filter { $0.deviceClass == named }
+        } ?? anyBoard
+        if forThisBoard.count > 1 {
+            throw PatchfinderError.invalidFixture(
+                DeviceWorkflowRegistry.ambiguityMessage(forThisBoard)
+            )
+        }
+        // A --board that matched nothing on an IPSW Liter8 does know is a typo.
+        // Extracting anyway would look like success.
+        if let board, forThisBoard.isEmpty, !anyBoard.isEmpty {
+            throw PatchfinderError.invalidFixture(
+                DeviceWorkflowRegistry.unknownBoardMessage(board, offered: anyBoard)
+            )
+        }
         let profile = DeviceWorkflowRegistry.profile(
             for: identity,
-            includeExperimental: includeExperimental
+            includeExperimental: includeExperimental,
+            board: board
         )
 
         // Extraction is a local unzip: it never contacts a device, so having a
@@ -40,7 +65,8 @@ enum FirmwareWorkflowRunner {
         if profile == nil,
            let candidate = DeviceWorkflowRegistry.profile(
                for: identity,
-               includeExperimental: true
+               includeExperimental: true,
+               board: board
            ), candidate.validationState == .experimental {
             throw PatchfinderError.invalidFixture(
                 "firmware profile \(candidate.id) is experimental; rerun with --experimental"
@@ -73,8 +99,7 @@ enum FirmwareWorkflowRunner {
             let boards = Set(identity.buildIdentities.map(\.deviceClass)).sorted()
                 .joined(separator: ", ")
             print("firmware profile: none for this build")
-            print("  EXTRACTION ONLY. No reviewed workflow profile exists, so every")
-            print("  device action (make-cfw, restore-cfw, boot, provision) will refuse.")
+            print("  EXTRACTION ONLY. No reviewed workflow profile exists, so every device action (make-cfw, restore-cfw, boot, provision) will refuse.")
             print("  device/board: \(devices) / \(boards)")
         }
         print("  iOS/build: \(identity.productVersion) (\(identity.build))")
@@ -168,9 +193,13 @@ enum FirmwareWorkflowRunner {
         ticket: URL?,
         sshrdPayload: URL?,
         includeExperimental: Bool,
+        board: String?,
         workflowEnvironment: [String: String] = [:]
     ) throws {
-        let allMatches = try DeviceWorkflowRegistry.profiles.compactMap { profile -> DeviceWorkflowProfile? in
+        // Scan the work directory once, then narrow. Keeping the unnarrowed
+        // list lets the failure path name the boards this IPSW does offer
+        // without reading every BuildManifest a second time.
+        let onDisk = try DeviceWorkflowRegistry.profiles.compactMap { profile -> DeviceWorkflowProfile? in
             let manifest = workDirectory
                 .appendingPathComponent(profile.extractedDirectoryName)
                 .appendingPathComponent("BuildManifest.plist")
@@ -178,6 +207,7 @@ enum FirmwareWorkflowRunner {
             let identity = try IPSWManifestInspector.parse(Data(contentsOf: manifest))
             return profile.supports(identity) ? profile : nil
         }
+        let allMatches = board == nil ? onDisk : onDisk.filter { $0.deviceClass == board }
         if !includeExperimental,
            let candidate = allMatches.first(where: { $0.validationState == .experimental }) {
             throw PatchfinderError.invalidFixture(
@@ -188,15 +218,28 @@ enum FirmwareWorkflowRunner {
             $0.validationState == .reviewed || includeExperimental
         }
 
+        // Several matches is not a work-directory problem, so it does not get
+        // work-directory advice. One IPSW that supports two boards matches two
+        // profiles, and only the operator knows which phone is attached.
         guard matches.count == 1, let profile = matches.first else {
-            let reason = matches.isEmpty
-                ? "no supported extracted IPSW was found"
-                : "more than one supported extracted IPSW was found"
-            let guidance = matches.isEmpty
-                ? "prepare a supported IPSW or add an exact device workflow profile"
-                : "use a work directory with one supported IPSW"
+            guard matches.isEmpty else {
+                throw PatchfinderError.invalidFixture(
+                    DeviceWorkflowRegistry.ambiguityMessage(matches)
+                )
+            }
+            // A --board nobody matched is a typo far more often than a missing
+            // profile, so say which boards were on offer instead of sending
+            // the operator to go write one.
+            if let board, !onDisk.isEmpty {
+                throw PatchfinderError.invalidFixture(
+                    DeviceWorkflowRegistry.unknownBoardMessage(board, offered: onDisk)
+                )
+            }
             throw PatchfinderError.invalidFixture(
-                "\(reason) in \(workDirectory.path); \(guidance)"
+                """
+                no supported extracted IPSW was found in \(workDirectory.path); \
+                prepare a supported IPSW or add an exact device workflow profile
+                """
             )
         }
 
