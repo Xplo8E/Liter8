@@ -87,7 +87,7 @@ put() {
     [ "$_got" = "$_sz" ] || die "short write: $2 is $_got bytes, expected $_sz"
 }
 
-STEPS="mounts ticket setup userland screentime injection cache jbtools sileo resolv apps verify"
+STEPS="mounts ticket setup userland pairing screentime injection cache jbtools sileo resolv apps verify"
 
 usage() {
     echo "steps: $STEPS"
@@ -95,6 +95,7 @@ usage() {
     echo "  ticket   extract this restore's APTicket from Preboot"
     echo "  setup    patch Setup.app to skip unavailable first-run panes"
     echo "  userland patch and re-sign the SEP/activation daemons"
+    echo "  pairing  install the lockdownd fallback and coreauthd companion guard"
     echo "  screentime make Setup's unavailable ScreenTime requests fail fast"
     echo "  injection install launchd hook plus icon grant, disabled for first boot"
     echo "  cache    deploy the launchd service cache (dropbear + jbboot + watchdogd mitigation)"
@@ -265,11 +266,12 @@ echo DONE_OK
 fi
 
 # --------------------------------------------------------------- userland
-# These three daemons are ordinary files on the System volume, but their
+# These daemons are ordinary files on the System volume, but their
 # failures happen late enough to resemble a bad kernel boot. Build every patch
 # from the device's preserved .orig file so retries never patch an already
-# modified executable. Swift finds the instructions; Python only preserves the
-# original signing identity and entitlements.
+# modified executable. Swift finds the instruction patches; lockdownd uses one
+# reviewed structural load-command edit. Python preserves the original signing
+# identity and entitlements for both paths.
 build_userland_patch() {
     U_NAME=$1
     U_DEVICE=$2
@@ -311,24 +313,111 @@ echo DONE_OK
     ok "$U_NAME deployed and read back ($U_WANT)"
 }
 
+deploy_pairing_library() {
+    P_LOCAL=payload/l8pair.dylib
+    P_DEVICE=/mnt1/usr/lib/l8pair.dylib
+    P_STAGED=$P_DEVICE.liter8-new
+    P_READBACK=payload/.work/userland/l8pair.readback
+
+    [ -f "$P_LOCAL" ] || die "missing $P_LOCAL; run fetch_payloads.sh pairing"
+    codesign -v "$P_LOCAL" || die "l8pair.dylib has an invalid CodeDirectory"
+    P_WANT=$(shasum -a 256 "$P_LOCAL" | awk '{print $1}')
+    put "$P_LOCAL" "$P_STAGED"
+    must_dev "
+[ -f '$P_DEVICE' ] && [ ! -f '$P_DEVICE.orig' ] && cp '$P_DEVICE' '$P_DEVICE.orig'
+chmod 0755 '$P_STAGED'
+mv -f '$P_STAGED' '$P_DEVICE'
+echo DONE_OK
+" "could not activate l8pair.dylib"
+    sh_dev "/bin/cat '$P_DEVICE'" > "$P_READBACK" \
+        || die "could not read back l8pair.dylib"
+    P_GOT=$(shasum -a 256 "$P_READBACK" | awk '{print $1}')
+    [ "$P_GOT" = "$P_WANT" ] || die "l8pair.dylib readback hash mismatch"
+    ok "l8pair.dylib deployed and read back ($P_WANT)"
+}
+
+deploy_coreauth_library() {
+    C_LOCAL=payload/l8coreauth.dylib
+    C_DEVICE=/mnt1/usr/lib/l8coreauth.dylib
+    C_STAGED=$C_DEVICE.liter8-new
+    C_READBACK=payload/.work/userland/l8coreauth.readback
+
+    [ -f "$C_LOCAL" ] || die "missing $C_LOCAL; run fetch_payloads.sh pairing"
+    codesign -v "$C_LOCAL" || die "l8coreauth.dylib has an invalid CodeDirectory"
+    C_WANT=$(shasum -a 256 "$C_LOCAL" | awk '{print $1}')
+    put "$C_LOCAL" "$C_STAGED"
+    must_dev "
+[ -f '$C_DEVICE' ] && [ ! -f '$C_DEVICE.orig' ] && cp '$C_DEVICE' '$C_DEVICE.orig'
+chmod 0755 '$C_STAGED'
+mv -f '$C_STAGED' '$C_DEVICE'
+echo DONE_OK
+" "could not activate l8coreauth.dylib"
+    sh_dev "/bin/cat '$C_DEVICE'" > "$C_READBACK" \
+        || die "could not read back l8coreauth.dylib"
+    C_GOT=$(shasum -a 256 "$C_READBACK" | awk '{print $1}')
+    [ "$C_GOT" = "$C_WANT" ] || die "l8coreauth.dylib readback hash mismatch"
+    ok "l8coreauth.dylib deployed and read back ($C_WANT)"
+}
+
+enable_pairing_fallback() {
+    P_DIR=/mnt2/root/Library/Lockdown
+    P_MARKER=$P_DIR/.liter8-pairing-fallback
+    must_dev "
+mkdir -p '$P_DIR'
+: > '$P_MARKER.new'
+chmod 0600 '$P_MARKER.new'
+mv -f '$P_MARKER.new' '$P_MARKER'
+echo DONE_OK
+" "could not enable the marker-gated pairing fallback"
+    ok "lockdownd pairing fallback enabled by Data-volume marker"
+}
+
+deploy_userland_daemon() {
+    U_NAME=$1
+    case "$U_NAME" in
+        coreauthd)
+            U_DEVICE=/mnt1/System/Library/Frameworks/LocalAuthentication.framework/Support/coreauthd
+            ;;
+        mobileactivationd)
+            U_DEVICE=/mnt1/usr/libexec/mobileactivationd
+            ;;
+        ctkd)
+            U_DEVICE=/mnt1/System/Library/Frameworks/CryptoTokenKit.framework/ctkd
+            ;;
+        *)
+            die "unsupported userland daemon: $U_NAME"
+            ;;
+    esac
+    sh_dev "[ -f '$U_DEVICE' ]" || die "$U_NAME is absent at $U_DEVICE"
+    build_userland_patch "$U_NAME" "$U_DEVICE"
+    deploy_userland_patch "$U_NAME" "$U_DEVICE"
+}
+
 if wants userland && [ "$CHECK_ONLY" = 0 ]; then
     say "post-restore userland crash fixes"
+    deploy_coreauth_library
     for U_NAME in coreauthd mobileactivationd ctkd; do
-        case "$U_NAME" in
-            coreauthd)
-                U_DEVICE=/mnt1/System/Library/Frameworks/LocalAuthentication.framework/Support/coreauthd
-                ;;
-            mobileactivationd)
-                U_DEVICE=/mnt1/usr/libexec/mobileactivationd
-                ;;
-            ctkd)
-                U_DEVICE=/mnt1/System/Library/Frameworks/CryptoTokenKit.framework/ctkd
-                ;;
-        esac
-        sh_dev "[ -f '$U_DEVICE' ]" || die "$U_NAME is absent at $U_DEVICE"
-        build_userland_patch "$U_NAME" "$U_DEVICE"
-        deploy_userland_patch "$U_NAME" "$U_DEVICE"
+        deploy_userland_daemon "$U_NAME"
     done
+fi
+
+if wants pairing && [ "$CHECK_ONLY" = 0 ]; then
+    say "lockdownd pairing-key fallback"
+    # The Trust path asks coreauthd to parse ACM's empty SEP ratchet state.
+    # A selective `pairing` run therefore needs the companion guard even when
+    # the broader `userland` step was not requested. The normal full workflow
+    # already installed it immediately above, so do not rebuild it twice.
+    if ! wants userland; then
+        deploy_coreauth_library
+        deploy_userland_daemon coreauthd
+    fi
+    U_NAME=lockdownd
+    U_DEVICE=/mnt1/usr/libexec/lockdownd
+    sh_dev "[ -f '$U_DEVICE' ]" || die "lockdownd is absent at $U_DEVICE"
+    deploy_pairing_library
+    build_userland_patch "$U_NAME" "$U_DEVICE"
+    deploy_userland_patch "$U_NAME" "$U_DEVICE"
+    enable_pairing_fallback
 fi
 
 # ------------------------------------------------------------- ScreenTime
@@ -796,6 +885,40 @@ verify_userland_patch coreauthd \
 verify_userland_patch mobileactivationd /mnt1/usr/libexec/mobileactivationd
 verify_userland_patch ctkd \
     /mnt1/System/Library/Frameworks/CryptoTokenKit.framework/ctkd
+verify_userland_patch lockdownd /mnt1/usr/libexec/lockdownd
+
+if [ -f payload/l8pair.dylib ]; then
+    pairing_want=$(shasum -a 256 payload/l8pair.dylib | awk '{print $1}')
+    sh_dev '/bin/cat /mnt1/usr/lib/l8pair.dylib' \
+        > payload/.work/verify.l8pair 2>/dev/null || true
+    if [ -s payload/.work/verify.l8pair ] && \
+       [ "$(shasum -a 256 payload/.work/verify.l8pair | awk '{print $1}')" = "$pairing_want" ] && \
+       codesign -v payload/.work/verify.l8pair >/dev/null 2>&1; then
+        pairing_library_state=OK
+    else
+        pairing_library_state=MISMATCH
+    fi
+else
+    pairing_library_state=MISSING
+fi
+note "l8pair dylib" "$pairing_library_state"
+if [ -f payload/l8coreauth.dylib ]; then
+    coreauth_want=$(shasum -a 256 payload/l8coreauth.dylib | awk '{print $1}')
+    sh_dev '/bin/cat /mnt1/usr/lib/l8coreauth.dylib' \
+        > payload/.work/verify.l8coreauth 2>/dev/null || true
+    if [ -s payload/.work/verify.l8coreauth ] && \
+       [ "$(shasum -a 256 payload/.work/verify.l8coreauth | awk '{print $1}')" = "$coreauth_want" ] && \
+       codesign -v payload/.work/verify.l8coreauth >/dev/null 2>&1; then
+        coreauth_library_state=OK
+    else
+        coreauth_library_state=MISMATCH
+    fi
+else
+    coreauth_library_state=MISSING
+fi
+note "l8coreauth dylib" "$coreauth_library_state"
+note "pairing fallback marker" "$(sh_dev '[ -f /mnt2/root/Library/Lockdown/.liter8-pairing-fallback ] && [ ! -L /mnt2/root/Library/Lockdown/.liter8-pairing-fallback ] && echo OK || echo MISSING' | tr -d '\r')"
+note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_pairing_key.der ] && echo generated || echo pending' | tr -d '\r')"
 
 sh_dev '/bin/cat /mnt2/db/com.apple.xpc.launchd/disabled.plist' \
     > payload/.work/verify.disabled.plist 2>/dev/null || true

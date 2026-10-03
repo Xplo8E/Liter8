@@ -27,3 +27,9 @@ device/photoforce/pfwatch
 device/launchdhook/lhook.dylib
 device/launchdhook/systemhook.dylib
 device/launchdhook/sbextissue
+# Built by device/pairingfix/build.sh, reproduced from source each run.
+device/pairingfix/l8pair.dylib
+# Built by device/coreauthfix/build.sh, reproduced from source each run.
+device/coreauthfix/l8coreauth.dylib
+# Host-built/downloaded device payloads; always reproduced by fetch_payloads.sh.
+device/payload/
