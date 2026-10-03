@@ -26,6 +26,38 @@ cd "$BASE"
 # it is resolved once here rather than spelled out at each call site.
 TOOLS="$BASE/../tools"
 
+STEPS="mounts ticket setup userland pairing screentime injection cache jbtools sileo resolv apps verify"
+
+usage() {
+    echo "steps: $STEPS"
+    echo "  mounts   mount System rw, Data and Preboot (always runs first)"
+    echo "  ticket   extract this restore's APTicket from Preboot"
+    echo "  setup    patch Setup.app to skip unavailable first-run panes"
+    echo "  userland patch and re-sign the SEP/activation daemons"
+    echo "  pairing  install the lockdownd fallback and coreauthd companion guard"
+    echo "  screentime make Setup's unavailable ScreenTime requests fail fast"
+    echo "  injection install launchd hook plus icon grant, disabled for first boot"
+    echo "  cache    deploy the launchd service cache (dropbear + jbboot + watchdogd mitigation)"
+    echo "  jbtools  install boot helpers and the iOS 27 uicache"
+    echo "  sileo      install Sileo (from payload/, built by fetch_payloads.sh)"
+    # TrollStore is not installed here. It goes on after first boot from a deb,
+    # so it can be updated without another DFU trip. See COMMANDS.md.
+    echo "  resolv   write /private/etc/resolv.conf so CLI DNS works"
+    echo "  apps     copy the 50 removable system apps into /Applications"
+    echo "  verify   check the end state"
+    exit 0
+}
+
+CHECK_ONLY=0
+case "${1:-}" in
+    --list|-h|--help) usage ;;
+    --check) CHECK_ONLY=1; WANT="mounts verify" ;;
+    "") WANT="$STEPS" ;;
+    *) WANT="mounts $* verify" ;;
+esac
+
+wants() { case " $WANT " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
 # Prefer a native sshpass. The bundled one is x86_64, so it needs Rosetta
 # on Apple Silicon. See https://github.com/Xplo8E/Liter8/issues/2.
 SSHPASS=$(command -v sshpass || true)
@@ -86,38 +118,6 @@ put() {
     _got=$(sh_dev "wc -c < $2" 2>/dev/null | tr -d ' \r')
     [ "$_got" = "$_sz" ] || die "short write: $2 is $_got bytes, expected $_sz"
 }
-
-STEPS="mounts ticket setup userland pairing screentime injection cache jbtools sileo resolv apps verify"
-
-usage() {
-    echo "steps: $STEPS"
-    echo "  mounts   mount System rw, Data and Preboot (always runs first)"
-    echo "  ticket   extract this restore's APTicket from Preboot"
-    echo "  setup    patch Setup.app to skip unavailable first-run panes"
-    echo "  userland patch and re-sign the SEP/activation daemons"
-    echo "  pairing  install the lockdownd fallback and coreauthd companion guard"
-    echo "  screentime make Setup's unavailable ScreenTime requests fail fast"
-    echo "  injection install launchd hook plus icon grant, disabled for first boot"
-    echo "  cache    deploy the launchd service cache (dropbear + jbboot + watchdogd mitigation)"
-    echo "  jbtools  install boot helpers and the iOS 27 uicache"
-    echo "  sileo      install Sileo (from payload/, built by fetch_payloads.sh)"
-    # TrollStore is not installed here. It goes on after first boot from a deb,
-    # so it can be updated without another DFU trip. See COMMANDS.md.
-    echo "  resolv   write /private/etc/resolv.conf so CLI DNS works"
-    echo "  apps     copy the 50 removable system apps into /Applications"
-    echo "  verify   check the end state"
-    exit 0
-}
-
-CHECK_ONLY=0
-case "${1:-}" in
-    --list|-h|--help) usage ;;
-    --check) CHECK_ONLY=1; WANT="mounts verify" ;;
-    "") WANT="$STEPS" ;;
-    *) WANT="mounts $* verify" ;;
-esac
-
-wants() { case " $WANT " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # Reap an owned USB forward before the shell exits. Provisioning runs directly
 # after install_dropbear.sh, and allowing either phase's old iproxy to linger

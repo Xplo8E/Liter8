@@ -7,6 +7,7 @@ import hashlib
 import io
 import os
 import plistlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -785,6 +786,28 @@ class ContextTests(unittest.TestCase):
         self.assertIn('""|*ABSENT*|*MISSING*', provisioner)
         self.assertIn("verify.Setup.orig", provisioner)
         self.assertIn('-I"$setup_identifier"', provisioner)
+
+    def test_provisioning_help_needs_no_device_environment_or_host_tools(self):
+        environment = os.environ.copy()
+        for name in (
+            "LITER8_LAUNCHD_SHA",
+            "LITER8_LAUNCHD_CACHE_SHA",
+            "LITER8_LAUNCHD_CACHE_DAEMONS",
+            "LITER8_SETUP_METHODS",
+        ):
+            environment.pop(name, None)
+        environment["PATH"] = "/usr/bin:/bin"
+
+        result = subprocess.run(
+            [DEVICE / "sshrd_provision.sh", "--list"],
+            capture_output=True,
+            text=True,
+            env=environment,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("steps: mounts ticket setup userland pairing", result.stdout)
+        self.assertIn("coreauthd companion guard", result.stdout)
 
     def test_pairing_fallback_is_narrow_and_marker_gated(self):
         source = (DEVICE / "pairingfix/l8pair.c").read_text()
