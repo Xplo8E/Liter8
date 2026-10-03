@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Focused tests for the generic Python/Swift workflow boundary."""
 
+import copy
 import json
 import hashlib
 import io
@@ -54,6 +55,88 @@ from userland_fixups import (  # noqa: E402
     signing_identifier,
 )
 from patch_setup import discover_targets  # noqa: E402
+from patch_watchdogd_job import (  # noqa: E402
+    CACHE_KEY as WATCHDOGD_CACHE_KEY,
+    EXPECTED_MACH_SERVICES,
+    REMOVED_POLICY,
+    JobShapeError,
+    apply_mitigation,
+    policy_state,
+    remove_mitigation,
+    watchdogd_job_is_mitigated,
+)
+
+
+class WatchdogdJobPatchTests(unittest.TestCase):
+    def job(self):
+        return {
+            "Label": "com.apple.watchdogd",
+            "ProgramArguments": ["/usr/libexec/watchdogd"],
+            "MachServices": {
+                **EXPECTED_MACH_SERVICES,
+                "com.apple.future-service": {"ResetAtClose": True},
+            },
+            "AlwaysSIGTERMOnShutdown": True,
+            "EnablePressuredExit": False,
+            "EnableTransactions": True,
+            "ExitTimeOut": 15,
+            "POSIXSpawnType": "Interactive",
+            **copy.deepcopy(REMOVED_POLICY),
+        }
+
+    def document(self):
+        return {
+            "VersionNumber": 7,
+            "LaunchDaemons": {
+                WATCHDOGD_CACHE_KEY: self.job(),
+                "/System/Library/LaunchDaemons/com.apple.logd.plist": {
+                    "Label": "com.apple.logd"
+                },
+            },
+        }
+
+    def test_apply_removes_only_the_three_crash_loop_policies(self):
+        document = self.document()
+        before = copy.deepcopy(document)
+        self.assertTrue(apply_mitigation(document))
+
+        job = document["LaunchDaemons"][WATCHDOGD_CACHE_KEY]
+        for key in REMOVED_POLICY:
+            self.assertNotIn(key, job)
+        self.assertEqual(
+            job["MachServices"],
+            before["LaunchDaemons"][WATCHDOGD_CACHE_KEY]["MachServices"],
+        )
+        self.assertEqual(
+            document["LaunchDaemons"]["/System/Library/LaunchDaemons/com.apple.logd.plist"],
+            before["LaunchDaemons"]["/System/Library/LaunchDaemons/com.apple.logd.plist"],
+        )
+        self.assertTrue(watchdogd_job_is_mitigated(document))
+        self.assertFalse(apply_mitigation(document))
+
+    def test_remove_restores_the_reviewed_stock_policy(self):
+        document = self.document()
+        original = copy.deepcopy(document)
+        apply_mitigation(document)
+        self.assertTrue(remove_mitigation(document))
+        self.assertEqual(document, original)
+        self.assertEqual(
+            policy_state(document["LaunchDaemons"][WATCHDOGD_CACHE_KEY]), "stock"
+        )
+
+    def test_mixed_or_unknown_policy_fails_closed(self):
+        document = self.document()
+        del document["LaunchDaemons"][WATCHDOGD_CACHE_KEY]["KeepAlive"]
+        with self.assertRaisesRegex(JobShapeError, "neither reviewed stock nor mitigated"):
+            apply_mitigation(document)
+
+    def test_wrong_program_fails_closed(self):
+        document = self.document()
+        document["LaunchDaemons"][WATCHDOGD_CACHE_KEY]["ProgramArguments"] = [
+            "/tmp/not-watchdogd"
+        ]
+        with self.assertRaisesRegex(JobShapeError, "ProgramArguments"):
+            apply_mitigation(document)
 
 
 class ContextTests(unittest.TestCase):

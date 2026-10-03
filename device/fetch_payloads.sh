@@ -261,6 +261,10 @@ if wants cache; then
             --expected-pristine-daemons "$LAUNCHD_CACHE_DAEMONS" >/dev/null \
             || die "failed to add com.jbboot"
         ok "com.jbboot added"
+        ./patch_watchdogd_job.py boot/work/launchd.plist --apply \
+            --expected-pristine-daemons "$LAUNCHD_CACHE_DAEMONS" >/dev/null \
+            || die "failed to mitigate the watchdogd launch loop"
+        ok "watchdogd automatic launch, restart and panic escalation disabled"
         n=$(python3 -c "import plistlib;print(len(plistlib.load(open('boot/work/launchd.plist','rb'))['LaunchDaemons']))")
         [ "$n" = "$((LAUNCHD_CACHE_DAEMONS + 2))" ] \
             || die "patched cache has $n daemons, expected $((LAUNCHD_CACHE_DAEMONS + 2))"

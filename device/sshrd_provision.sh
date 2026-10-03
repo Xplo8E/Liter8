@@ -97,7 +97,7 @@ usage() {
     echo "  userland patch and re-sign the SEP/activation daemons"
     echo "  screentime make Setup's unavailable ScreenTime requests fail fast"
     echo "  injection install launchd hook plus icon grant, disabled for first boot"
-    echo "  cache    deploy the launchd service cache (dropbear + jbboot)"
+    echo "  cache    deploy the launchd service cache (dropbear + jbboot + watchdogd mitigation)"
     echo "  jbtools  install boot helpers and the iOS 27 uicache"
     echo "  sileo      install Sileo (from payload/, built by fetch_payloads.sh)"
     # TrollStore is not installed here. It goes on after first boot from a deb,
@@ -500,7 +500,7 @@ if wants cache && [ "$CHECK_ONLY" = 0 ]; then
     say "launchd service cache"
     CACHE=boot/work/launchd.plist
     if [ ! -f "$CACHE" ]; then
-        skip "no patched cache at $CACHE; build it with patch_launchd_cache.py + add_jbboot.py"
+        skip "no patched cache at $CACHE; build it with fetch_payloads.sh cache"
     else
         n=$(python3 -c "import plistlib,sys;print(len(plistlib.load(open('$CACHE','rb'))['LaunchDaemons']))")
         [ "$n" = "$((LAUNCHD_CACHE_DAEMONS + 2))" ] \
@@ -518,7 +518,13 @@ from patch_launchd_cache import CACHE_KEY, DROPBEAR_JOB
 d=plistlib.load(open('$CACHE','rb'))['LaunchDaemons']
 sys.exit(0 if d.get(CACHE_KEY) == DROPBEAR_JOB else 1)" \
             || die "$CACHE contains a stale or modified com.dropbear job"
-        ok "cache has $n daemons including com.dropbear and com.jbboot"
+        python3 -c "
+import plistlib,sys
+from patch_watchdogd_job import watchdogd_job_is_mitigated
+d=plistlib.load(open('$CACHE','rb'))
+sys.exit(0 if watchdogd_job_is_mitigated(d) else 1)" \
+            || die "$CACHE does not contain the reviewed watchdogd mitigation"
+        ok "cache has $n daemons including com.dropbear, com.jbboot and the watchdogd mitigation"
         # A stale .orig from another build would make a later rollback worse
         # than the active patch. Bind the preserved source to this profile
         # before changing the boot-critical service cache.
@@ -898,12 +904,16 @@ need = ["com.dropbear", "com.jbboot"]
 missing = [j for j in need if f"/System/Library/LaunchDaemons/{j}.plist" not in ld]
 from patch_launchd_cache import CACHE_KEY, DROPBEAR_JOB
 dropbear_ok = ld.get(CACHE_KEY) == DROPBEAR_JOB
+from patch_watchdogd_job import watchdogd_job_is_mitigated
+watchdogd_ok = watchdogd_job_is_mitigated({"LaunchDaemons": ld})
 if missing:
     state = f"MISSING {missing}"
 elif not dropbear_ok:
     state = "MISMATCH com.dropbear"
+elif not watchdogd_ok:
+    state = "MISMATCH watchdogd mitigation"
 else:
-    state = "all jobs present"
+    state = "all jobs present, watchdogd mitigated"
 expected = int(__import__("os").environ["LITER8_LAUNCHD_CACHE_DAEMONS"]) + 2
 if len(ld) != expected:
     state = f"MISMATCH count, expected {expected}"
