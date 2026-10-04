@@ -107,13 +107,6 @@ def write_boot_manifest(
     )
 
 
-def normal_kernel_plan() -> str:
-    """Keep the limited-validation Valeria plan behind an exact explicit opt-in."""
-    if os.environ.get("LITER8_EXPERIMENTAL_VALERIA") == "1":
-        return "boot-valeria"
-    return "boot-public"
-
-
 def build_normal_boot() -> None:
     context = Context.load()
     ticket = ticket_from_environment()
@@ -176,7 +169,7 @@ def build_normal_boot() -> None:
         print("[*] normal boot: patching kernelcache", flush=True)
         kernel = staging / ".Kernelcache.im4p"
         shutil.copy2(context.component("KernelCache"), kernel)
-        kernel_plan = normal_kernel_plan()
+        kernel_plan = "boot-public"
         context.apply("kernel", kernel_plan, kernel, record_name="boot-kernel")
         create_img4(
             context, kernel, ticket, staging / "Kernelcache.img4", fourcc="rkrn"

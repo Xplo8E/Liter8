@@ -36,7 +36,7 @@ private func usage() -> Never {
                   ibec-ignore-pinot-failure, ibec-force-pinot-id
       kernel      restore, boot-policy, aks, sep-silence, sep,
                   credential-manager, sandbox, valeria, boot, boot-public,
-                  boot-valeria, diagnostic
+                  diagnostic
       txm         restore, boot
       userland    restored-fdr, asr, coreauthd, ctkd, mobileactivationd
       devicetree  restore, normal
@@ -55,8 +55,6 @@ private func usage() -> Never {
                 (make-cfw, get-rd, get-boot). Off by default: it moves the
                 kernel console to the UART and the device screen stops showing
                 the verbose boot log.
-      --experimental-valeria  include the device-tested Valeria inactive-owner
-                registration candidate when building normal-boot artifacts with get-boot
       --records-out <records.json>  write records from the same apply operation
 
     """.utf8))
@@ -98,7 +96,6 @@ let resolverGroups: [String: [String: String]] = [
         // Keep the public CLI spelling stable while the Swift type describes
         // the plan's real cross-build compatibility contract.
         "boot-public": KernelBootCompatibilityResolver.name,
-        "boot-valeria": KernelBootValeriaResolver.name,
         "diagnostic": KernelDiagnosticResolver.name,
     ],
     "txm": [
@@ -256,9 +253,6 @@ func resolveRecords(
     case KernelBootCompatibilityResolver.name:
         guard options.bootArguments == nil, options.panelID == nil else { usage() }
         return try KernelBootCompatibilityResolver().resolve(in: image)
-    case KernelBootValeriaResolver.name:
-        guard options.bootArguments == nil, options.panelID == nil else { usage() }
-        return try KernelBootValeriaResolver().resolve(in: image)
     case KernelDiagnosticResolver.name:
         guard options.bootArguments == nil, options.panelID == nil else { usage() }
         return try KernelDiagnosticResolver().resolve(in: image)
@@ -472,7 +466,6 @@ do {
         var checkOnly = false
         var includeExperimental = false
         var serialConsole = false
-        var includeExperimentalValeria = false
         var index = 2
         while index < arguments.count {
             if arguments[index] == "--serial" {
@@ -487,11 +480,6 @@ do {
             }
             if arguments[index] == "--experimental" {
                 includeExperimental = true
-                index += 1
-                continue
-            }
-            if arguments[index] == "--experimental-valeria" {
-                includeExperimentalValeria = true
                 index += 1
                 continue
             }
@@ -538,8 +526,7 @@ do {
                   irecoveryArgument == nil,
                   idevicerestoreArgument == nil,
                   rootfsArgument == nil,
-                  !checkOnly,
-                  !includeExperimentalValeria else {
+                  !checkOnly else {
                 throw PatchfinderError.invalidFixture(
                     "fw prepare accepts only --file, --work-dir and --experimental"
                 )
@@ -615,11 +602,6 @@ do {
                     "--check is only valid for bootstrap, provision, finalize and setup-shell"
                 )
             }
-            guard !includeExperimentalValeria || action == "get-boot" else {
-                throw PatchfinderError.invalidFixture(
-                    "--experimental-valeria is only valid for fw get-boot"
-                )
-            }
             // The literal is written into iBSS and iBEC when the artifact is
             // built, so --serial is meaningful only for the commands that build
             // one. Accepting it elsewhere would look like it had an effect.
@@ -645,12 +627,6 @@ do {
             }
             if checkOnly {
                 workflowEnvironment["LITER8_CHECK_ONLY"] = "1"
-            }
-            if action == "get-boot" {
-                // The experimental patch must be selected by this invocation,
-                // not inherited accidentally from the operator's shell.
-                workflowEnvironment["LITER8_EXPERIMENTAL_VALERIA"] =
-                    includeExperimentalValeria ? "1" : "0"
             }
             try FirmwareWorkflowRunner.runPreparedAction(
                 action,

@@ -125,12 +125,13 @@ final class KernelFixtureTests: XCTestCase {
             bootPolicy: bootPolicy,
             sep: sep,
             credentialManager: credentialManager,
-            sandbox: sandbox
+            sandbox: sandbox,
+            valeria: valeria
         )
 
         // 20 restore + 2 persona + 32 SEP + 52 CredentialManager +
-        // 2 USB + 11 published Sandbox records = 119.
-        XCTAssertEqual(records.count, 119)
+        // 2 USB + 11 published Sandbox + 15 Valeria records = 134.
+        XCTAssertEqual(records.count, 134)
         XCTAssertFalse(records.contains { $0.id.contains("vnode-check-open") })
 
         let snapshot = try await KernelFixtureStore.shared.snapshot(for: fixture)
@@ -140,21 +141,6 @@ final class KernelFixtureTests: XCTestCase {
             .joined()
         XCTAssertEqual(
             digest,
-            "3a95ffe9cab7e191164ca23fc6eb9ee49ed6380659155e3f831c6bc584ec8ecb"
-        )
-
-        let valeriaRecords = try await valeria
-        let experimentalRecords = records + valeriaRecords
-        XCTAssertEqual(experimentalRecords.count, 134)
-        let experimentalImage = try GuardedPatchApplier.apply(
-            experimentalRecords,
-            to: snapshot.image
-        )
-        let experimentalDigest = SHA256.hash(data: experimentalImage.data)
-            .map { String(format: "%02x", $0) }
-            .joined()
-        XCTAssertEqual(
-            experimentalDigest,
             "e06ade2de75fe3107786e1830d0dd6c619f6bc06c8652f10f7431175414a3993"
         )
     }
@@ -177,34 +163,12 @@ final class KernelEndToEndTests: XCTestCase {
         let records = try KernelBootCompatibilityResolver().resolve(in: image)
 
         // 20 restore + 2 persona + 32 SEP + 52 CredentialManager +
-        // 2 USB + 11 published Sandbox records = 119.
-        XCTAssertEqual(records.count, 119)
+        // 2 USB + 11 published Sandbox + 15 Valeria records = 134.
+        XCTAssertEqual(records.count, 134)
         XCTAssertFalse(records.contains { $0.id.contains("vnode-check-open") })
 
-        // This digest was produced independently by the public Python
-        // `apply_patches.py kc-boot` table. Matching it proves that the Swift
-        // compatibility plan changes the same bytes, not merely 119 bytes.
-        let patched = try GuardedPatchApplier.apply(records, to: image)
-        let digest = SHA256.hash(data: patched.data)
-            .map { String(format: "%02x", $0) }
-            .joined()
-        XCTAssertEqual(
-            digest,
-            "3a95ffe9cab7e191164ca23fc6eb9ee49ed6380659155e3f831c6bc584ec8ecb"
-        )
-    }
-
-    func testValeriaKernelDeviceTestWiringAgainstBeta4Oracle() throws {
-        let privateFixtureRoot = liter8PrivateFixtureRoot(from: #filePath)
-        let beta4Kernel = privateFixtureRoot.appendingPathComponent("offsets/kc/kc_b4_n104.raw")
-        guard FileManager.default.fileExists(atPath: beta4Kernel.path) else {
-            throw XCTSkip("local beta-4 kernelcache fixture is absent")
-        }
-
-        let image = try BinaryImage(contentsOf: beta4Kernel)
-        let records = try KernelBootValeriaResolver().resolve(in: image)
-        XCTAssertEqual(records.count, 134)
-
+        // Pin the complete default output so wiring changes cannot quietly drop
+        // the Valeria repair while preserving a plausible record count.
         let patched = try GuardedPatchApplier.apply(records, to: image)
         let digest = SHA256.hash(data: patched.data)
             .map { String(format: "%02x", $0) }
@@ -213,5 +177,22 @@ final class KernelEndToEndTests: XCTestCase {
             digest,
             "e06ade2de75fe3107786e1830d0dd6c619f6bc06c8652f10f7431175414a3993"
         )
+    }
+
+    func testCompleteKernelPlanKeepsSandboxAndValeriaCavesDisjoint() throws {
+        let privateFixtureRoot = liter8PrivateFixtureRoot(from: #filePath)
+        let beta4Kernel = privateFixtureRoot.appendingPathComponent("offsets/kc/kc_b4_n104.raw")
+        guard FileManager.default.fileExists(atPath: beta4Kernel.path) else {
+            throw XCTSkip("local beta-4 kernelcache fixture is absent")
+        }
+
+        let image = try BinaryImage(contentsOf: beta4Kernel)
+        let records = try KernelBootResolver().resolve(in: image)
+
+        // The complete plan owns the 33-word Sandbox cave and the following
+        // 14-word Valeria cave. Every write must remain disjoint.
+        XCTAssertEqual(records.count, 169)
+        XCTAssertEqual(Set(records.map(\.offset)).count, records.count)
+        _ = try GuardedPatchApplier.apply(records, to: image)
     }
 }

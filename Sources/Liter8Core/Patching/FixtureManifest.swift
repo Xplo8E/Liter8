@@ -183,8 +183,6 @@ public struct FixtureManifest: Codable, Sendable {
             return try KernelBootResolver().resolve(in: image)
         case KernelBootCompatibilityResolver.name:
             return try KernelBootCompatibilityResolver().resolve(in: image)
-        case KernelBootValeriaResolver.name:
-            return try KernelBootValeriaResolver().resolve(in: image)
         case KernelDiagnosticResolver.name:
             return try KernelDiagnosticResolver().resolve(in: image)
         default:
