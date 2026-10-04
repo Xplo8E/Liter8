@@ -75,11 +75,18 @@ def build_binary(
     records.parent.mkdir(parents=True, exist_ok=True)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    if plan == "lockdownd":
-        # lockdownd needs no instruction patch. Add one weak dependency in its
-        # reviewed zero-padded Mach-O header so the marker-gated pairing shim is
-        # present before Security.framework binds SecItem* calls.
-        dylib_path = "/usr/lib/l8pair.dylib"
+    structural_loads = {
+        "lockdownd": ("/usr/lib/l8pair.dylib", "lockdownd.load-l8pair"),
+        "remotepairingdeviced": (
+            "/usr/lib/l8remotepairing.dylib",
+            "remotepairingdeviced.load-l8remotepairing",
+        ),
+    }
+    if plan in structural_loads:
+        # These daemons need no instruction patch. Add one weak dependency in
+        # the reviewed zero-padded Mach-O header so the process-local shim is
+        # present before its target framework binds the interposed call.
+        dylib_path, record_id = structural_loads[plan]
         patcher = Path(__file__).resolve().parent / "launchdhook/patch_launchd.py"
         run([
             sys.executable,
@@ -92,8 +99,8 @@ def build_binary(
             "--apply",
         ], capture=True)
         records.write_text(json.dumps([{
-            "id": "lockdownd.load-l8pair",
-            "component": "lockdownd",
+            "id": record_id,
+            "component": plan,
             "operation": "LC_LOAD_WEAK_DYLIB",
             "path": dylib_path,
         }], indent=2) + "\n")
@@ -201,7 +208,13 @@ def main() -> None:
     binary = subcommands.add_parser("binary")
     binary.add_argument(
         "plan",
-        choices=("coreauthd", "mobileactivationd", "ctkd", "lockdownd"),
+        choices=(
+            "coreauthd",
+            "mobileactivationd",
+            "ctkd",
+            "lockdownd",
+            "remotepairingdeviced",
+        ),
     )
     binary.add_argument("pristine", type=Path)
     binary.add_argument("output", type=Path)

@@ -34,7 +34,7 @@ usage() {
     echo "  ticket   extract this restore's APTicket from Preboot"
     echo "  setup    patch Setup.app to skip unavailable first-run panes"
     echo "  userland patch and re-sign the SEP/activation daemons"
-    echo "  pairing  install the lockdownd fallback and coreauthd companion guard"
+    echo "  pairing  install lockdownd, coreauthd companion guard and RemoteXPC repair"
     echo "  screentime make Setup's unavailable ScreenTime requests fail fast"
     echo "  injection install launchd hook plus icon grant, disabled for first boot"
     echo "  cache    deploy the launchd service cache (dropbear + jbboot + watchdogd mitigation)"
@@ -73,6 +73,7 @@ GTAR=$(command -v gtar || true)
 SSHOPT="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=25 -o HostKeyAlgorithms=+ecdsa-sha2-nistp521 -o Ciphers=+aes128-ctr -p 2222"
 DEV="root@localhost"
 PW=alpine
+SSH_ATTEMPTS=5
 
 IPSW_ROOT=${IPSW_ROOT:-/tmp/ios27-rootfs} # decrypted root filesystem, mounted
 STAGE=/mnt2/_provision                # device-side staging, Data volume
@@ -86,8 +87,35 @@ ok()   { printf '    [+] %s\n' "$1"; }
 skip() { printf '    [=] %s\n' "$1"; }
 die()  { printf '    [!] %s\n' "$1"; exit 1; }
 
-# shellcheck disable=SC2086  # $SSHOPT is an option LIST and must word-split
-sh_dev() { timeout 900 "$SSHPASS" -p "$PW" ssh $SSHOPT "$DEV" "$@"; }
+# SSHRD's old Dropbear occasionally rejects a valid password when the workflow
+# opens several connections back-to-back. Buffer each attempt independently so
+# a partial failed read cannot be concatenated with the successful retry.
+sh_dev() {
+    _L8_SSH_OUT=$(mktemp "${TMPDIR:-/tmp}/liter8-ssh-out.XXXXXX")
+    _L8_SSH_ERR=$(mktemp "${TMPDIR:-/tmp}/liter8-ssh-err.XXXXXX")
+    _L8_SSH_TRY=1
+    while [ "$_L8_SSH_TRY" -le "$SSH_ATTEMPTS" ]; do
+        : > "$_L8_SSH_OUT"
+        : > "$_L8_SSH_ERR"
+        # shellcheck disable=SC2086  # $SSHOPT is an option LIST and must word-split
+        if timeout 900 "$SSHPASS" -p "$PW" ssh $SSHOPT "$DEV" "$@" \
+                > "$_L8_SSH_OUT" 2> "$_L8_SSH_ERR"; then
+            cat "$_L8_SSH_OUT"
+            rm -f "$_L8_SSH_OUT" "$_L8_SSH_ERR"
+            return 0
+        else
+            _L8_SSH_STATUS=$?
+        fi
+        if [ "$_L8_SSH_TRY" -eq "$SSH_ATTEMPTS" ]; then
+            cat "$_L8_SSH_OUT"
+            cat "$_L8_SSH_ERR" >&2
+            rm -f "$_L8_SSH_OUT" "$_L8_SSH_ERR"
+            return "$_L8_SSH_STATUS"
+        fi
+        _L8_SSH_TRY=$((_L8_SSH_TRY + 1))
+        sleep 1
+    done
+}
 
 # Single-quoted bodies passed to must_dev/sh_dev are deliberate: the variables
 # inside them belong to the DEVICE and must not be expanded on the host. Linters
@@ -111,9 +139,24 @@ must_dev() {
 put() {
     [ -f "$1" ] || die "missing local file: $1"
     _sz=$(wc -c < "$1" | tr -d ' ')
-    # shellcheck disable=SC2086  # same: $SSHOPT must word-split
-    timeout 900 "$SSHPASS" -p "$PW" ssh $SSHOPT "$DEV" "cat > $2" < "$1" \
-        || die "transfer failed: $1 -> $2"
+    _L8_PUT_ERR=$(mktemp "${TMPDIR:-/tmp}/liter8-ssh-put.XXXXXX")
+    _L8_PUT_TRY=1
+    while :; do
+        : > "$_L8_PUT_ERR"
+        # shellcheck disable=SC2086  # same: $SSHOPT must word-split
+        if timeout 900 "$SSHPASS" -p "$PW" ssh $SSHOPT "$DEV" "cat > $2" \
+                < "$1" 2> "$_L8_PUT_ERR"; then
+            rm -f "$_L8_PUT_ERR"
+            break
+        fi
+        if [ "$_L8_PUT_TRY" -eq "$SSH_ATTEMPTS" ]; then
+            cat "$_L8_PUT_ERR" >&2
+            rm -f "$_L8_PUT_ERR"
+            die "transfer failed: $1 -> $2"
+        fi
+        _L8_PUT_TRY=$((_L8_PUT_TRY + 1))
+        sleep 1
+    done
     # tr runs on the HOST here (output of ssh), so it is fine
     _got=$(sh_dev "wc -c < $2" 2>/dev/null | tr -d ' \r')
     [ "$_got" = "$_sz" ] || die "short write: $2 is $_got bytes, expected $_sz"
@@ -318,6 +361,7 @@ deploy_pairing_library() {
     P_DEVICE=/mnt1/usr/lib/l8pair.dylib
     P_STAGED=$P_DEVICE.liter8-new
     P_READBACK=payload/.work/userland/l8pair.readback
+    mkdir -p payload/.work/userland
 
     [ -f "$P_LOCAL" ] || die "missing $P_LOCAL; run fetch_payloads.sh pairing"
     codesign -v "$P_LOCAL" || die "l8pair.dylib has an invalid CodeDirectory"
@@ -336,11 +380,38 @@ echo DONE_OK
     ok "l8pair.dylib deployed and read back ($P_WANT)"
 }
 
+deploy_remotepairing_library() {
+    R_LOCAL=payload/l8remotepairing.dylib
+    R_DEVICE=/mnt1/usr/lib/l8remotepairing.dylib
+    R_STAGED=$R_DEVICE.liter8-new
+    R_READBACK=payload/.work/userland/l8remotepairing.readback
+    mkdir -p payload/.work/userland
+
+    [ -f "$R_LOCAL" ] || die "missing $R_LOCAL; run fetch_payloads.sh pairing"
+    codesign -v "$R_LOCAL" \
+        || die "l8remotepairing.dylib has an invalid CodeDirectory"
+    R_WANT=$(shasum -a 256 "$R_LOCAL" | awk '{print $1}')
+    put "$R_LOCAL" "$R_STAGED"
+    must_dev "
+[ -f '$R_DEVICE' ] && [ ! -f '$R_DEVICE.orig' ] && cp '$R_DEVICE' '$R_DEVICE.orig'
+chmod 0755 '$R_STAGED'
+mv -f '$R_STAGED' '$R_DEVICE'
+echo DONE_OK
+" "could not activate l8remotepairing.dylib"
+    sh_dev "/bin/cat '$R_DEVICE'" > "$R_READBACK" \
+        || die "could not read back l8remotepairing.dylib"
+    R_GOT=$(shasum -a 256 "$R_READBACK" | awk '{print $1}')
+    [ "$R_GOT" = "$R_WANT" ] \
+        || die "l8remotepairing.dylib readback hash mismatch"
+    ok "l8remotepairing.dylib deployed and read back ($R_WANT)"
+}
+
 deploy_coreauth_library() {
     C_LOCAL=payload/l8coreauth.dylib
     C_DEVICE=/mnt1/usr/lib/l8coreauth.dylib
     C_STAGED=$C_DEVICE.liter8-new
     C_READBACK=payload/.work/userland/l8coreauth.readback
+    mkdir -p payload/.work/userland
 
     [ -f "$C_LOCAL" ] || die "missing $C_LOCAL; run fetch_payloads.sh pairing"
     codesign -v "$C_LOCAL" || die "l8coreauth.dylib has an invalid CodeDirectory"
@@ -362,14 +433,18 @@ echo DONE_OK
 enable_pairing_fallback() {
     P_DIR=/mnt2/root/Library/Lockdown
     P_MARKER=$P_DIR/.liter8-pairing-fallback
+    R_MARKER=/mnt1/usr/lib/.liter8-remotepairing-fallback
     must_dev "
 mkdir -p '$P_DIR'
 : > '$P_MARKER.new'
 chmod 0600 '$P_MARKER.new'
 mv -f '$P_MARKER.new' '$P_MARKER'
+: > '$R_MARKER.new'
+chmod 0600 '$R_MARKER.new'
+mv -f '$R_MARKER.new' '$R_MARKER'
 echo DONE_OK
 " "could not enable the marker-gated pairing fallback"
-    ok "lockdownd pairing fallback enabled by Data-volume marker"
+    ok "lockdownd and RemoteXPC fallbacks enabled by scoped markers"
 }
 
 deploy_userland_daemon() {
@@ -383,6 +458,12 @@ deploy_userland_daemon() {
             ;;
         ctkd)
             U_DEVICE=/mnt1/System/Library/Frameworks/CryptoTokenKit.framework/ctkd
+            ;;
+        lockdownd)
+            U_DEVICE=/mnt1/usr/libexec/lockdownd
+            ;;
+        remotepairingdeviced)
+            U_DEVICE=/mnt1/usr/libexec/remotepairingdeviced
             ;;
         *)
             die "unsupported userland daemon: $U_NAME"
@@ -402,7 +483,7 @@ if wants userland && [ "$CHECK_ONLY" = 0 ]; then
 fi
 
 if wants pairing && [ "$CHECK_ONLY" = 0 ]; then
-    say "lockdownd pairing-key fallback"
+    say "lockdownd and RemoteXPC pairing fallbacks"
     # The Trust path asks coreauthd to parse ACM's empty SEP ratchet state.
     # A selective `pairing` run therefore needs the companion guard even when
     # the broader `userland` step was not requested. The normal full workflow
@@ -411,12 +492,11 @@ if wants pairing && [ "$CHECK_ONLY" = 0 ]; then
         deploy_coreauth_library
         deploy_userland_daemon coreauthd
     fi
-    U_NAME=lockdownd
-    U_DEVICE=/mnt1/usr/libexec/lockdownd
-    sh_dev "[ -f '$U_DEVICE' ]" || die "lockdownd is absent at $U_DEVICE"
     deploy_pairing_library
-    build_userland_patch "$U_NAME" "$U_DEVICE"
-    deploy_userland_patch "$U_NAME" "$U_DEVICE"
+    deploy_remotepairing_library
+    for U_NAME in lockdownd remotepairingdeviced; do
+        deploy_userland_daemon "$U_NAME"
+    done
     enable_pairing_fallback
 fi
 
@@ -886,6 +966,7 @@ verify_userland_patch mobileactivationd /mnt1/usr/libexec/mobileactivationd
 verify_userland_patch ctkd \
     /mnt1/System/Library/Frameworks/CryptoTokenKit.framework/ctkd
 verify_userland_patch lockdownd /mnt1/usr/libexec/lockdownd
+verify_userland_patch remotepairingdeviced /mnt1/usr/libexec/remotepairingdeviced
 
 if [ -f payload/l8pair.dylib ]; then
     pairing_want=$(shasum -a 256 payload/l8pair.dylib | awk '{print $1}')
@@ -902,6 +983,21 @@ else
     pairing_library_state=MISSING
 fi
 note "l8pair dylib" "$pairing_library_state"
+if [ -f payload/l8remotepairing.dylib ]; then
+    remotepairing_want=$(shasum -a 256 payload/l8remotepairing.dylib | awk '{print $1}')
+    sh_dev '/bin/cat /mnt1/usr/lib/l8remotepairing.dylib' \
+        > payload/.work/verify.l8remotepairing 2>/dev/null || true
+    if [ -s payload/.work/verify.l8remotepairing ] && \
+       [ "$(shasum -a 256 payload/.work/verify.l8remotepairing | awk '{print $1}')" = "$remotepairing_want" ] && \
+       codesign -v payload/.work/verify.l8remotepairing >/dev/null 2>&1; then
+        remotepairing_library_state=OK
+    else
+        remotepairing_library_state=MISMATCH
+    fi
+else
+    remotepairing_library_state=MISSING
+fi
+note "l8remotepairing dylib" "$remotepairing_library_state"
 if [ -f payload/l8coreauth.dylib ]; then
     coreauth_want=$(shasum -a 256 payload/l8coreauth.dylib | awk '{print $1}')
     sh_dev '/bin/cat /mnt1/usr/lib/l8coreauth.dylib' \
@@ -918,6 +1014,7 @@ else
 fi
 note "l8coreauth dylib" "$coreauth_library_state"
 note "pairing fallback marker" "$(sh_dev '[ -f /mnt2/root/Library/Lockdown/.liter8-pairing-fallback ] && [ ! -L /mnt2/root/Library/Lockdown/.liter8-pairing-fallback ] && echo OK || echo MISSING' | tr -d '\r')"
+note "RemoteXPC fallback marker" "$(sh_dev '[ -f /mnt1/usr/lib/.liter8-remotepairing-fallback ] && [ ! -L /mnt1/usr/lib/.liter8-remotepairing-fallback ] && echo OK || echo MISSING' | tr -d '\r')"
 note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_pairing_key.der ] && echo generated || echo pending' | tr -d '\r')"
 
 sh_dev '/bin/cat /mnt2/db/com.apple.xpc.launchd/disabled.plist' \

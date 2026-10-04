@@ -236,16 +236,21 @@ fi
 
 # ------------------------------------------------------------------ pairing
 if wants pairing; then
-    say "pairing and coreauthd fallbacks"
+    say "pairing, RemoteXPC and coreauthd fallbacks"
     ( cd pairingfix && ./build.sh ) || die "pairing fallback build failed"
+    ( cd remotexpcfix && ./build.sh ) || die "RemoteXPC fallback build failed"
     ( cd coreauthfix && ./build.sh ) || die "coreauthd fallback build failed"
     cp pairingfix/l8pair.dylib "$OUT/l8pair.dylib"
+    cp remotexpcfix/l8remotepairing.dylib "$OUT/l8remotepairing.dylib"
     cp coreauthfix/l8coreauth.dylib "$OUT/l8coreauth.dylib"
     codesign -v "$OUT/l8pair.dylib" \
         || die "pairing fallback signature verification failed"
+    codesign -v "$OUT/l8remotepairing.dylib" \
+        || die "RemoteXPC fallback signature verification failed"
     codesign -v "$OUT/l8coreauth.dylib" \
         || die "coreauthd fallback signature verification failed"
     ok "marker-gated l8pair.dylib ready"
+    ok "remotepairingdeviced-only l8remotepairing.dylib ready"
     ok "coreauthd-only l8coreauth.dylib ready"
 fi
 
@@ -328,7 +333,7 @@ say "summary"
 for p in "$OUT/Sileo.app/Sileo" "$OUT/Sileo.app/giveMeRoot" \
          "$OUT/launchd.orig" "$OUT/launchd.hooked" "$OUT/lhook.dylib" \
          "$OUT/systemhook.dylib" "$OUT/sbextissue" "$OUT/l8pair.dylib" \
-         "$OUT/l8coreauth.dylib" \
+         "$OUT/l8remotepairing.dylib" "$OUT/l8coreauth.dylib" \
          "$OUT/uicache" \
          photodiag/photodiag spawnprobe/personaalloc appreg/appreg \
          photoforce/pfruntimeprobe photoforce/pfwatch; do

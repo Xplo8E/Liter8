@@ -18,8 +18,9 @@ Commands have deliberately narrow device states:
 - `liter8 fw provision --rootfs <mounted-rootfs>` builds the reviewed payloads,
   installs Dropbear and performs the System/Data/Preboot provisioning pass. It
   also patches and entitlement-preserving re-signs `coreauthd`,
-  `mobileactivationd`, `ctkd`, `lockdownd` and Setup, then installs the five
-  fail-fast ScreenTime overrides recorded by the beta-4 device research.
+  `mobileactivationd`, `ctkd`, `lockdownd`, `remotepairingdeviced` and Setup,
+  then installs the five fail-fast ScreenTime overrides recorded by the beta-4
+  device research.
   `lockdownd` weak-loads `/usr/lib/l8pair.dylib`, a marker-gated fallback for
   its one pairing identity when the no-content-protection profile cannot
   persist the corresponding system-keychain row. The Dropbear
@@ -63,3 +64,32 @@ LocalAuthenticationCore 24A446 otherwise copies 75 bytes from offset `0x100`
 and crashes at NULL + `0x120` after the user accepts the Trust dialog. The
 guard pads only short state blobs to the parser's 331-byte layout. Valid SEP
 state is passed through unchanged, and the hook is restricted to `coreauthd`.
+
+`remotepairingdeviced` weak-loads `/usr/lib/l8remotepairing.dylib`. After its
+own visible Trust dialog, the 24A446 daemon skips policy 1013 only when
+`MKBGetDeviceLockState(NULL)` returns the disabled-keybag state 3. The Liter8
+AKS shim reports scalar unlocked state but leaves the larger lock-state buffer
+zeroed, so the real API returns 0 and CoreAuth fails before it can display the
+passcode sheet. The interposer returns 3 only in `remotepairingdeviced`, with
+the root-owned `/usr/lib/.liter8-remotepairing-fallback` marker enabled, a
+`NULL` options argument, real state 0, content protection off, and
+unlocked-since-boot true. Every other state passes through unchanged; the
+payload does not intercept LocalAuthentication. This separate System marker is
+used because normal-boot processes can be denied access to lockdownd's
+Data-volume marker.
+
+The same daemon uses the system keychain for its self identity and paired-peer
+records. On this SEP-less profile, `SecItemAdd` can report success while the
+next PairVerify sees no identities or peers. The dylib keeps the real keychain
+as the first choice, then mirrors only the `com.apple.RemotePairing` generic-
+password items named `Remote Pairing Identity` or `Remote Pairing Paired Peer`
+into the daemon's writable `com.apple.remotepairing` preferences domain. Copy,
+update, and delete fall back to that bounded store only when the same System
+marker and process guard match. Other keychain access is unchanged.
+
+Exact-device validation completed PairSetup after an explicit Trust decision,
+then completed PairVerify on a second connection in the same boot without a
+new Trust sheet. After manually bootstrapping the already-mounted personalized
+DeveloperDiskImage launchd jobs, CoreDevice enumerated processes and captured a
+screenshot. Persistence across a full reboot and automatic DDI job registration
+remain separate, unconfirmed boundaries.

@@ -2,7 +2,7 @@
 
 - **Device:** iPhone 11 (`iPhone12,1`, `n104ap`)
 - **OS:** iOS 27.0.1 (`24A446`)
-- **Status:** USB lockdown pairing confirmed; watchdog mitigation deployed and under soak
+- **Status:** USB lockdown pairing and same-boot RemoteXPC confirmed; watchdog mitigation deployed and under soak
 
 This note records the failures behind two symptoms that initially looked unrelated:
 
@@ -238,7 +238,7 @@ The stable pairing public-key SHA-256 was:
 55b5de34b901d1cca559a8043e0578594913085d53e4b6cc866e2b47bd1c10d7
 ```
 
-## What is still broken
+## Remaining boundaries
 
 Pairing working does not make the whole SEP-less device equivalent to stock.
 
@@ -252,7 +252,7 @@ nil personaAttributes (MBErrorDomain/1)
 
 The service transport and escrow pairing are reachable, but a real backup does not complete because the boot has no normal persona state.
 
-### DeveloperDiskImage and RemoteXPC
+### RemoteXPC and DeveloperDiskImage lifecycle
 
 A personalized DeveloperDiskImage mounts at `/System/Developer`. Xcode also maintains a wired CoreDevice tunnel and heartbeats succeed, but `ddiServicesAvailable` stays false.
 
@@ -264,7 +264,71 @@ error:  com.apple.LocalAuthentication/-1000
 detail: ACM verification of TouchIdEnrollment on ACMContext 0 failed: -3
 ```
 
-The policy-1028 lockdownd fallback does not and should not match this. RemoteXPC consent therefore fails, leaving screenshot, process control, LLDB/Xcode, and WDA unavailable.
+The policy-1028 lockdownd fallback does not and should not match this. Before
+the daemon-scoped repair below, RemoteXPC consent therefore failed before
+screenshot, process-control, LLDB/Xcode, or WDA services became reachable.
+
+The device-scoped fix weak-loads `/usr/lib/l8remotepairing.dylib` only into
+`remotepairingdeviced`. Its MobileKeyBag interposer preserves the real
+`MKBGetDeviceLockState` result unless all measured Liter8 conditions match:
+
+- the process name is exactly `remotepairingdeviced`;
+- the root-owned `/usr/lib/.liter8-remotepairing-fallback` marker exists and is
+  not group/world writable;
+- the caller passed `NULL`, as the recovered 24A446 call site does;
+- the real state is 0;
+- content protection is off and the device reports unlocked-since-boot.
+
+Only then does it return state 3, selecting the daemon's existing
+`Not requiring user passcode as key bag is disabled` branch after the visible
+Trust decision. It does not intercept `LAContext` or relax policy 1013
+globally. Host-side validation confirmed the universal dylib shape, the exact
+daemon's 50,336-byte load-command slack, the weak load command, and preservation
+of the daemon's signing identifier and entitlements. SSHRD readback then
+verified the patched daemon, its original backup, all three pairing dylibs, and
+the complete existing provisioning state.
+
+The first normal-boot test rejected the original marker location. Trust was
+explicitly approved at 17:41:12, but the daemon still entered policy 1013 and
+failed ACM `-3`. The active daemon and dylib hashes matched the deployed
+artifacts and the daemon retained its weak load. A normal-boot root process also
+received `EPERM` reading the shared Data-volume marker, making that marker a
+concrete candidate for the pass-through. The revised build uses a distinct
+System-volume marker beside the dylib and logs its observed guard values once.
+SSHRD deployment read back the revised dylib at SHA-256
+`b9ab0009b59b021de423b0728c1bc5c9a96d3680ab2e568de10eb4101360ceeb`,
+verified both fallback markers, and completed the full device-state check with
+`done, safe to reboot`. Normal boot then confirmed the complete intended
+consent path: the guard observed `state=0 null_options=1 marker=1 formatted=0
+unlocked=1`, selected the built-in disabled-keybag branch, and logged
+`Successfully authenticated user` followed by `PairSetup server done -- client
+authenticated`.
+
+The first tunnel did not survive reconnection. Each new connection logged
+`Not paired with anyone`, then PairVerify failed while copying the device
+identity with `kNotFoundErr`. The host pairing plist was created and updated,
+so the residual failure is the device's RemotePairing system-keychain state.
+IDA recovered two generic-password item families in access group
+`com.apple.RemotePairing`: `Remote Pairing Identity` and
+`Remote Pairing Paired Peer`.
+
+The deployed five-interposer build keeps the real keychain first and mirrors
+only those records into the daemon's writable preferences domain. On the first
+connection it logged bounded persistence and retrieval, completed PairSetup,
+and created a TCP tunnel. After terminating only that tunnel, a second
+connection required no new Trust sheet, restored the identity and peer, and
+completed PairVerify M1 through M4. This confirms the fallback across
+independent connections in the same boot.
+
+The personalized DeveloperDiskImage was already mounted, but its launchd jobs
+were absent after boot. CoreDevice therefore obtained the tunnel and stalled
+while enabling DDI services. Manually bootstrapping
+`/System/Developer/Library/LaunchDaemons` registered the expected RemoteServices;
+`devicectl device info processes` then succeeded and CoreDevice captured an
+828x1792 screenshot. RemoteXPC pairing is fixed for the tested boot. Automatic
+DDI job registration and persistence of the newly written RemotePairing peer
+across a full reboot remain unconfirmed. QuickTime USB capture is a separate
+Valeria callback-ownership failure and is not fixed by this change.
 
 ### Wi-Fi pairing
 
@@ -282,12 +346,16 @@ Confirmed:
 - the pairing keychain failure;
 - the empty ratchet-state crash;
 - the policy-1028 ACM `-3` boundary;
-- pairing, replug, reboot, and same-Mac fresh-record behavior on iPhone12,1 / 24A446.
+- pairing, replug, reboot, and same-Mac fresh-record behavior on iPhone12,1 / 24A446;
+- RemoteXPC PairSetup and same-boot PairVerify reconnect;
+- CoreDevice process enumeration and screenshot capture after manual DDI job bootstrap.
 
 Not claimed:
 
 - genuine SEP-backed passcode proof;
 - support for another device or build;
-- working MobileBackup2, RemoteXPC, LLDB, Xcode, or WDA;
+- working MobileBackup2, automatic DDI job registration, post-write reboot
+  persistence, Xcode, or WDA;
+- working QuickTime USB capture;
 - conversion of the existing Data volume to content protection;
 - long-term watchdog reliability beyond the completed and ongoing soak evidence.

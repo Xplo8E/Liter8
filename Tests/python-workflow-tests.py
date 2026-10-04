@@ -773,12 +773,15 @@ class ContextTests(unittest.TestCase):
         self.assertIn("Data volume NOT writable", provisioner)
         self.assertIn("verify_userland_patch coreauthd", provisioner)
         self.assertIn("verify_userland_patch lockdownd", provisioner)
+        self.assertIn("verify_userland_patch remotepairingdeviced", provisioner)
         self.assertIn("deploy_pairing_library", provisioner)
+        self.assertIn("deploy_remotepairing_library", provisioner)
         self.assertIn("deploy_coreauth_library", provisioner)
         self.assertIn("deploy_userland_daemon coreauthd", provisioner)
         self.assertIn("if ! wants userland", provisioner)
         self.assertIn(".liter8-pairing-fallback", provisioner)
         self.assertIn('note "l8pair dylib"', provisioner)
+        self.assertIn('note "l8remotepairing dylib"', provisioner)
         self.assertIn('note "l8coreauth dylib"', provisioner)
         self.assertIn('note "ScreenTime overrides"', provisioner)
         self.assertIn('note "Setup CodeDirectory/id"', provisioner)
@@ -786,6 +789,9 @@ class ContextTests(unittest.TestCase):
         self.assertIn('""|*ABSENT*|*MISSING*', provisioner)
         self.assertIn("verify.Setup.orig", provisioner)
         self.assertIn('-I"$setup_identifier"', provisioner)
+        self.assertIn("SSH_ATTEMPTS=5", provisioner)
+        self.assertIn("liter8-ssh-out.XXXXXX", provisioner)
+        self.assertIn("liter8-ssh-put.XXXXXX", provisioner)
 
     def test_provisioning_help_needs_no_device_environment_or_host_tools(self):
         environment = os.environ.copy()
@@ -815,6 +821,8 @@ class ContextTests(unittest.TestCase):
         builder = (DEVICE / "pairingfix/build.sh").read_text()
         payload_builder = (DEVICE / "fetch_payloads.sh").read_text()
         fixups = (DEVICE / "userland_fixups.py").read_text()
+        remotexpc_source = (DEVICE / "remotexpcfix/l8remotepairing.c").read_text()
+        remotexpc_builder = (DEVICE / "remotexpcfix/build.sh").read_text()
 
         self.assertIn("lockdown-identities", source)
         self.assertIn("com.apple.lockdown.pairingkeypair", source)
@@ -852,7 +860,57 @@ class ContextTests(unittest.TestCase):
         self.assertIn("-install_name /usr/lib/l8pair.dylib", builder)
         self.assertIn('"$BASE/l8pair_auth.m"', builder)
         self.assertIn("sileo helpers cache injection pairing", payload_builder)
-        self.assertIn('dylib_path = "/usr/lib/l8pair.dylib"', fixups)
+        self.assertIn('"lockdownd": ("/usr/lib/l8pair.dylib"', fixups)
+
+        self.assertIn('strcmp(program, "remotepairingdeviced")', remotexpc_source)
+        self.assertIn("fallback_marker_status()", remotexpc_source)
+        self.assertIn("options != NULL", remotexpc_source)
+        self.assertIn("state != 0", remotexpc_source)
+        self.assertIn("formatted = MKBDeviceFormattedForContentProtection()", remotexpc_source)
+        self.assertIn("unlocked = MKBDeviceUnlockedSinceBoot()", remotexpc_source)
+        self.assertIn("formatted != 0", remotexpc_source)
+        self.assertIn("unlocked != 1", remotexpc_source)
+        self.assertIn("return 3", remotexpc_source)
+        self.assertIn("/usr/lib/.liter8-remotepairing-fallback", remotexpc_source)
+        self.assertIn("guard state=%d", remotexpc_source)
+        self.assertIn("com.apple.RemotePairing", remotexpc_source)
+        self.assertIn("Remote Pairing Identity", remotexpc_source)
+        self.assertIn("Remote Pairing Paired Peer", remotexpc_source)
+        self.assertIn("Liter8RemotePairingKeychainItems", remotexpc_source)
+        self.assertIn("CFPreferencesAppSynchronize", remotexpc_source)
+        self.assertIn(
+            "DYLD_INTERPOSE(l8_MKBGetDeviceLockState, MKBGetDeviceLockState)",
+            remotexpc_source,
+        )
+        self.assertIn(
+            "DYLD_INTERPOSE(l8_SecItemCopyMatching, SecItemCopyMatching)",
+            remotexpc_source,
+        )
+        self.assertIn(
+            "DYLD_INTERPOSE(l8_SecItemAdd, SecItemAdd)",
+            remotexpc_source,
+        )
+        self.assertIn(
+            "DYLD_INTERPOSE(l8_SecItemUpdate, SecItemUpdate)",
+            remotexpc_source,
+        )
+        self.assertIn(
+            "DYLD_INTERPOSE(l8_SecItemDelete, SecItemDelete)",
+            remotexpc_source,
+        )
+        self.assertNotIn("LAContext", remotexpc_source)
+        self.assertIn(
+            "-install_name /usr/lib/l8remotepairing.dylib",
+            remotexpc_builder,
+        )
+        self.assertIn("-framework Security", remotexpc_builder)
+        self.assertIn("exactly five interposers", remotexpc_builder)
+        self.assertIn("remotexpcfix/l8remotepairing.dylib", payload_builder)
+        self.assertIn('"/usr/lib/l8remotepairing.dylib"', fixups)
+        self.assertIn(
+            '"remotepairingdeviced.load-l8remotepairing"',
+            fixups,
+        )
 
         coreauth_source = (DEVICE / "coreauthfix/l8coreauth.m").read_text()
         self.assertIn("LACDTORatchetSEPStateParser", coreauth_source)
