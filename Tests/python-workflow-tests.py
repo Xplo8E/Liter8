@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Focused tests for the generic Python/Swift workflow boundary."""
 
+import copy
 import json
 import hashlib
 import io
 import os
 import plistlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -54,6 +56,88 @@ from userland_fixups import (  # noqa: E402
     signing_identifier,
 )
 from patch_setup import discover_targets  # noqa: E402
+from patch_watchdogd_job import (  # noqa: E402
+    CACHE_KEY as WATCHDOGD_CACHE_KEY,
+    EXPECTED_MACH_SERVICES,
+    REMOVED_POLICY,
+    JobShapeError,
+    apply_mitigation,
+    policy_state,
+    remove_mitigation,
+    watchdogd_job_is_mitigated,
+)
+
+
+class WatchdogdJobPatchTests(unittest.TestCase):
+    def job(self):
+        return {
+            "Label": "com.apple.watchdogd",
+            "ProgramArguments": ["/usr/libexec/watchdogd"],
+            "MachServices": {
+                **EXPECTED_MACH_SERVICES,
+                "com.apple.future-service": {"ResetAtClose": True},
+            },
+            "AlwaysSIGTERMOnShutdown": True,
+            "EnablePressuredExit": False,
+            "EnableTransactions": True,
+            "ExitTimeOut": 15,
+            "POSIXSpawnType": "Interactive",
+            **copy.deepcopy(REMOVED_POLICY),
+        }
+
+    def document(self):
+        return {
+            "VersionNumber": 7,
+            "LaunchDaemons": {
+                WATCHDOGD_CACHE_KEY: self.job(),
+                "/System/Library/LaunchDaemons/com.apple.logd.plist": {
+                    "Label": "com.apple.logd"
+                },
+            },
+        }
+
+    def test_apply_removes_only_the_three_crash_loop_policies(self):
+        document = self.document()
+        before = copy.deepcopy(document)
+        self.assertTrue(apply_mitigation(document))
+
+        job = document["LaunchDaemons"][WATCHDOGD_CACHE_KEY]
+        for key in REMOVED_POLICY:
+            self.assertNotIn(key, job)
+        self.assertEqual(
+            job["MachServices"],
+            before["LaunchDaemons"][WATCHDOGD_CACHE_KEY]["MachServices"],
+        )
+        self.assertEqual(
+            document["LaunchDaemons"]["/System/Library/LaunchDaemons/com.apple.logd.plist"],
+            before["LaunchDaemons"]["/System/Library/LaunchDaemons/com.apple.logd.plist"],
+        )
+        self.assertTrue(watchdogd_job_is_mitigated(document))
+        self.assertFalse(apply_mitigation(document))
+
+    def test_remove_restores_the_reviewed_stock_policy(self):
+        document = self.document()
+        original = copy.deepcopy(document)
+        apply_mitigation(document)
+        self.assertTrue(remove_mitigation(document))
+        self.assertEqual(document, original)
+        self.assertEqual(
+            policy_state(document["LaunchDaemons"][WATCHDOGD_CACHE_KEY]), "stock"
+        )
+
+    def test_mixed_or_unknown_policy_fails_closed(self):
+        document = self.document()
+        del document["LaunchDaemons"][WATCHDOGD_CACHE_KEY]["KeepAlive"]
+        with self.assertRaisesRegex(JobShapeError, "neither reviewed stock nor mitigated"):
+            apply_mitigation(document)
+
+    def test_wrong_program_fails_closed(self):
+        document = self.document()
+        document["LaunchDaemons"][WATCHDOGD_CACHE_KEY]["ProgramArguments"] = [
+            "/tmp/not-watchdogd"
+        ]
+        with self.assertRaisesRegex(JobShapeError, "ProgramArguments"):
+            apply_mitigation(document)
 
 
 class ContextTests(unittest.TestCase):
@@ -684,16 +768,157 @@ class ContextTests(unittest.TestCase):
 
     def test_userland_provisioning_is_wired_into_device_verification(self):
         provisioner = (DEVICE / "sshrd_provision.sh").read_text()
-        self.assertIn("ticket setup userland screentime injection", provisioner)
+        self.assertIn("ticket setup userland pairing screentime injection", provisioner)
         self.assertIn("mount -u -o rw /dev/disk1s2", provisioner)
         self.assertIn("Data volume NOT writable", provisioner)
         self.assertIn("verify_userland_patch coreauthd", provisioner)
+        self.assertIn("verify_userland_patch lockdownd", provisioner)
+        self.assertIn("verify_userland_patch remotepairingdeviced", provisioner)
+        self.assertIn("deploy_pairing_library", provisioner)
+        self.assertIn("deploy_remotepairing_library", provisioner)
+        self.assertIn("deploy_coreauth_library", provisioner)
+        self.assertIn("deploy_userland_daemon coreauthd", provisioner)
+        self.assertIn("if ! wants userland", provisioner)
+        self.assertIn(".liter8-pairing-fallback", provisioner)
+        self.assertIn('note "l8pair dylib"', provisioner)
+        self.assertIn('note "l8remotepairing dylib"', provisioner)
+        self.assertIn('note "l8coreauth dylib"', provisioner)
         self.assertIn('note "ScreenTime overrides"', provisioner)
         self.assertIn('note "Setup CodeDirectory/id"', provisioner)
         self.assertIn('note "System /bin/sh"', provisioner)
         self.assertIn('""|*ABSENT*|*MISSING*', provisioner)
         self.assertIn("verify.Setup.orig", provisioner)
         self.assertIn('-I"$setup_identifier"', provisioner)
+        self.assertIn("SSH_ATTEMPTS=5", provisioner)
+        self.assertIn("liter8-ssh-out.XXXXXX", provisioner)
+        self.assertIn("liter8-ssh-put.XXXXXX", provisioner)
+
+    def test_provisioning_help_needs_no_device_environment_or_host_tools(self):
+        environment = os.environ.copy()
+        for name in (
+            "LITER8_LAUNCHD_SHA",
+            "LITER8_LAUNCHD_CACHE_SHA",
+            "LITER8_LAUNCHD_CACHE_DAEMONS",
+            "LITER8_SETUP_METHODS",
+        ):
+            environment.pop(name, None)
+        environment["PATH"] = "/usr/bin:/bin"
+
+        result = subprocess.run(
+            [DEVICE / "sshrd_provision.sh", "--list"],
+            capture_output=True,
+            text=True,
+            env=environment,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("steps: mounts ticket setup userland pairing", result.stdout)
+        self.assertIn("coreauthd companion guard", result.stdout)
+
+    def test_pairing_fallback_is_narrow_and_marker_gated(self):
+        source = (DEVICE / "pairingfix/l8pair.c").read_text()
+        auth_source = (DEVICE / "pairingfix/l8pair_auth.m").read_text()
+        builder = (DEVICE / "pairingfix/build.sh").read_text()
+        payload_builder = (DEVICE / "fetch_payloads.sh").read_text()
+        fixups = (DEVICE / "userland_fixups.py").read_text()
+        remotexpc_source = (DEVICE / "remotexpcfix/l8remotepairing.c").read_text()
+        remotexpc_builder = (DEVICE / "remotexpcfix/build.sh").read_text()
+
+        self.assertIn("lockdown-identities", source)
+        self.assertIn("com.apple.lockdown.pairingkeypair", source)
+        self.assertIn("kSecUseSystemKeychain", source)
+        self.assertIn("fallback_enabled()", source)
+        self.assertIn("O_NOFOLLOW", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemCopyMatching", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemAdd", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemDelete", source)
+        self.assertIn("kLocationBasedTrustComputerPolicy = 1028", auth_source)
+        self.assertIn('strcmp(program, "lockdownd")', auth_source)
+        self.assertIn("pairing_fallback_enabled()", auth_source)
+        self.assertIn("error.code != -1000", auth_source)
+        self.assertIn('@"LocationBasedTrustComputer"', auth_source)
+        self.assertIn('@"failed: -3"', auth_source)
+        self.assertIn("gOriginalEvaluatePolicy(", auth_source)
+        self.assertIn("method_setImplementation", auth_source)
+
+        # Exact 24A446 lockdownd evidence: Copy/Delete carry kSecClassKey, but
+        # SecItemAdd relies on the SecKeyRef in kSecValueRef and omits class.
+        identity_matcher = source.split(
+            "static bool is_pairing_identity_dictionary", 1
+        )[1].split("static CFDataRef read_key_data", 1)[0]
+        add_hook = source.split("static OSStatus l8_SecItemAdd", 1)[1].split(
+            "static OSStatus l8_SecItemDelete", 1
+        )[0]
+        copy_hook = source.split(
+            "static OSStatus l8_SecItemCopyMatching", 1
+        )[1].split("static OSStatus l8_SecItemAdd", 1)[0]
+        self.assertNotIn("kSecClass", identity_matcher)
+        self.assertIn("kSecValueRef", add_hook)
+        self.assertIn("item_class != NULL", add_hook)
+        self.assertIn("kSecClassKey", copy_hook)
+
+        self.assertIn("-install_name /usr/lib/l8pair.dylib", builder)
+        self.assertIn('"$BASE/l8pair_auth.m"', builder)
+        self.assertIn("sileo helpers cache injection pairing", payload_builder)
+        self.assertIn('"lockdownd": ("/usr/lib/l8pair.dylib"', fixups)
+
+        self.assertIn('strcmp(program, "remotepairingdeviced")', remotexpc_source)
+        self.assertIn("fallback_marker_status()", remotexpc_source)
+        self.assertIn("options != NULL", remotexpc_source)
+        self.assertIn("state != 0", remotexpc_source)
+        self.assertIn("formatted = MKBDeviceFormattedForContentProtection()", remotexpc_source)
+        self.assertIn("unlocked = MKBDeviceUnlockedSinceBoot()", remotexpc_source)
+        self.assertIn("formatted != 0", remotexpc_source)
+        self.assertIn("unlocked != 1", remotexpc_source)
+        self.assertIn("return 3", remotexpc_source)
+        self.assertIn("/usr/lib/.liter8-remotepairing-fallback", remotexpc_source)
+        self.assertIn("guard state=%d", remotexpc_source)
+        self.assertIn("com.apple.RemotePairing", remotexpc_source)
+        self.assertIn("Remote Pairing Identity", remotexpc_source)
+        self.assertIn("Remote Pairing Paired Peer", remotexpc_source)
+        self.assertIn("Liter8RemotePairingKeychainItems", remotexpc_source)
+        self.assertIn("CFPreferencesAppSynchronize", remotexpc_source)
+        self.assertIn(
+            "DYLD_INTERPOSE(l8_MKBGetDeviceLockState, MKBGetDeviceLockState)",
+            remotexpc_source,
+        )
+        self.assertIn(
+            "DYLD_INTERPOSE(l8_SecItemCopyMatching, SecItemCopyMatching)",
+            remotexpc_source,
+        )
+        self.assertIn(
+            "DYLD_INTERPOSE(l8_SecItemAdd, SecItemAdd)",
+            remotexpc_source,
+        )
+        self.assertIn(
+            "DYLD_INTERPOSE(l8_SecItemUpdate, SecItemUpdate)",
+            remotexpc_source,
+        )
+        self.assertIn(
+            "DYLD_INTERPOSE(l8_SecItemDelete, SecItemDelete)",
+            remotexpc_source,
+        )
+        self.assertNotIn("LAContext", remotexpc_source)
+        self.assertIn(
+            "-install_name /usr/lib/l8remotepairing.dylib",
+            remotexpc_builder,
+        )
+        self.assertIn("-framework Security", remotexpc_builder)
+        self.assertIn("exactly five interposers", remotexpc_builder)
+        self.assertIn("remotexpcfix/l8remotepairing.dylib", payload_builder)
+        self.assertIn('"/usr/lib/l8remotepairing.dylib"', fixups)
+        self.assertIn(
+            '"remotepairingdeviced.load-l8remotepairing"',
+            fixups,
+        )
+
+        coreauth_source = (DEVICE / "coreauthfix/l8coreauth.m").read_text()
+        self.assertIn("LACDTORatchetSEPStateParser", coreauth_source)
+        self.assertIn("ratchetStateFromState:", coreauth_source)
+        self.assertIn("kRatchetStateBytes = 0x14b", coreauth_source)
+        self.assertIn("length >= kRatchetStateBytes", coreauth_source)
+        self.assertIn("method_setImplementation", coreauth_source)
+        self.assertIn('dylib_path = "/usr/lib/l8coreauth.dylib"', fixups)
 
     def test_userland_builder_preserves_identity_and_entitlements(self):
         liter8 = SCRIPTS.parent / ".build/debug/liter8"
@@ -702,7 +927,7 @@ class ContextTests(unittest.TestCase):
         if not liter8.is_file() or not ldid.is_file() or not fixtures.is_dir():
             self.skipTest("local beta-4 userland fixture or debug tools are absent")
 
-        expected_records = {"coreauthd": 1, "mobileactivationd": 5, "ctkd": 2}
+        expected_records = {"coreauthd": 2, "mobileactivationd": 5, "ctkd": 2}
         for name, count in expected_records.items():
             fixture = fixtures / name
             if not fixture.is_file():
@@ -723,13 +948,9 @@ class ContextTests(unittest.TestCase):
             self.assertEqual(entitlements(ldid, output), entitlements(ldid, fixture))
             self.assertEqual(len(json.loads(records.read_text())), count)
 
-        # This exact artifact was deployed successfully in the earlier beta-4
-        # research, so the orchestration must continue reproducing it.
-        coreauth_digest = hashlib.sha256((self.root / "coreauthd.patched").read_bytes()).hexdigest()
-        self.assertEqual(
-            coreauth_digest,
-            "51531edb37ebef37c23d4ce9127e61e2fa1908c408f02de074958a34ee892a7d",
-        )
+        coreauth_records = json.loads((self.root / "coreauthd.records.json").read_text())
+        self.assertEqual(coreauth_records[-1]["id"], "coreauthd.load-l8coreauth")
+        self.assertEqual(coreauth_records[-1]["path"], "/usr/lib/l8coreauth.dylib")
 
     def test_boot_manifest_rejects_wrong_mode_and_modified_artifacts(self):
         fixture_context = self.make_boot_set("restore")

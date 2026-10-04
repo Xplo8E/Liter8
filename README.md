@@ -186,7 +186,10 @@ It's all one Swift target. The folders are there so i can find things, nothing m
 
 `fw get-rd` and `fw get-boot` rebuild far more than they need to. It's slow and i know it, it's on the list.
 
-Normal Apple pairing still isn't lined up with the Wi-Fi and Dropbear SSH path that actually works. Written up in the docs.
+USB lockdown pairing now works on the validated iPhone 11 `24A446` SEP-less
+profile. It remains a scoped compatibility path, not a replacement for SEP or
+content protection, and developer RemoteXPC is still blocked. The full failure
+chain and fix are written up in the docs.
 
 ## Docs
 
@@ -194,6 +197,7 @@ Normal Apple pairing still isn't lined up with the Wi-Fi and Dropbear SSH path t
 - [Firmware and device support guide](docs/FIRMWARE_SUPPORT_GUIDE.md)
 - [iOS 27 `24A435` resolver and device evidence](docs/plans/IOS_27_24A435_RC_PATCHES.md)
 - [iPhone 11 beta 4 device run](docs/runs/IOS_27_BETA4_IPHONE11.md)
+- [iPhone 11 `24A446` pairing and watchdog research](docs/runs/IOS_27_24A446_PAIRING_AND_WATCHDOG.md)
 - [Bootstrap and provisioning status](docs/design/BOOTSTRAP_JB_STATUS.md)
 - [Normal boot handoff](docs/design/NORMAL_BOOT_HANDOFF.md)
 - [Performance backlog](docs/BACKLOG.md)

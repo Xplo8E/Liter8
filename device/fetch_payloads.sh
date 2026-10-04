@@ -79,7 +79,7 @@ die()  { printf '    [!] %s\n' "$1"; exit 1; }
     || die "ldid at $LDID cannot run on this host; brew install ldid-procursus"
 mkdir -p "$OUT" "$WORK"
 
-WANT="${*:-sileo helpers cache injection}"
+WANT="${*:-sileo helpers cache injection pairing}"
 wants() { case " $WANT " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 
@@ -234,6 +234,26 @@ if wants injection; then
     ok "launchd, lhook, icon sandbox payload and token issuer ready"
 fi
 
+# ------------------------------------------------------------------ pairing
+if wants pairing; then
+    say "pairing, RemoteXPC and coreauthd fallbacks"
+    ( cd pairingfix && ./build.sh ) || die "pairing fallback build failed"
+    ( cd remotexpcfix && ./build.sh ) || die "RemoteXPC fallback build failed"
+    ( cd coreauthfix && ./build.sh ) || die "coreauthd fallback build failed"
+    cp pairingfix/l8pair.dylib "$OUT/l8pair.dylib"
+    cp remotexpcfix/l8remotepairing.dylib "$OUT/l8remotepairing.dylib"
+    cp coreauthfix/l8coreauth.dylib "$OUT/l8coreauth.dylib"
+    codesign -v "$OUT/l8pair.dylib" \
+        || die "pairing fallback signature verification failed"
+    codesign -v "$OUT/l8remotepairing.dylib" \
+        || die "RemoteXPC fallback signature verification failed"
+    codesign -v "$OUT/l8coreauth.dylib" \
+        || die "coreauthd fallback signature verification failed"
+    ok "marker-gated l8pair.dylib ready"
+    ok "remotepairingdeviced-only l8remotepairing.dylib ready"
+    ok "coreauthd-only l8coreauth.dylib ready"
+fi
+
 # ------------------------------------------------------------------- cache
 # Build the launchd service cache from the IPSW, not from the device. It used
 # to be pulled off a live phone, which meant you needed an already-provisioned
@@ -261,6 +281,10 @@ if wants cache; then
             --expected-pristine-daemons "$LAUNCHD_CACHE_DAEMONS" >/dev/null \
             || die "failed to add com.jbboot"
         ok "com.jbboot added"
+        ./patch_watchdogd_job.py boot/work/launchd.plist --apply \
+            --expected-pristine-daemons "$LAUNCHD_CACHE_DAEMONS" >/dev/null \
+            || die "failed to mitigate the watchdogd launch loop"
+        ok "watchdogd automatic launch, restart and panic escalation disabled"
         n=$(python3 -c "import plistlib;print(len(plistlib.load(open('boot/work/launchd.plist','rb'))['LaunchDaemons']))")
         [ "$n" = "$((LAUNCHD_CACHE_DAEMONS + 2))" ] \
             || die "patched cache has $n daemons, expected $((LAUNCHD_CACHE_DAEMONS + 2))"
@@ -308,7 +332,8 @@ fi
 say "summary"
 for p in "$OUT/Sileo.app/Sileo" "$OUT/Sileo.app/giveMeRoot" \
          "$OUT/launchd.orig" "$OUT/launchd.hooked" "$OUT/lhook.dylib" \
-         "$OUT/systemhook.dylib" "$OUT/sbextissue" \
+         "$OUT/systemhook.dylib" "$OUT/sbextissue" "$OUT/l8pair.dylib" \
+         "$OUT/l8remotepairing.dylib" "$OUT/l8coreauth.dylib" \
          "$OUT/uicache" \
          photodiag/photodiag spawnprobe/personaalloc appreg/appreg \
          photoforce/pfruntimeprobe photoforce/pfwatch; do

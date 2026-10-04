@@ -4,7 +4,8 @@
 
 - [ ] Restore passcode functionality.
 - [ ] Fix cellular functionality.
-- [ ] Fix host-device pairing.
+- [x] Fix USB lockdown pairing on the iPhone 11 `24A446` SEP-less profile.
+- [ ] Fix RemoteXPC developer pairing and MobileBackup2 persona state.
 - [ ] Fix Apple services.
 - [ ] Update the existing tweak-injection path for the current Liter8 runtime.
 
