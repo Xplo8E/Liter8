@@ -8,7 +8,8 @@
 - [x] Fix same-boot RemoteXPC pairing and reconnect on the iPhone 11 `24A446` SEP-less profile.
 - [x] Fix QuickTime/Valeria capture after USB re-enumeration.
 - [ ] Restore MobileBackup2 persona state.
-- [ ] Automate DeveloperDiskImage job registration and validate the normal Xcode/LLDB lifecycle.
+- [x] Automate DeveloperDiskImage job registration on the iPhone 11 `24A446` profile.
+- [ ] Validate the normal Xcode/debugserver/LLDB lifecycle on-device.
 - [ ] Fix Apple services.
 - [ ] Update the existing tweak-injection path for the current Liter8 runtime.
 

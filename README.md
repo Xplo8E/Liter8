@@ -188,11 +188,13 @@ It's all one Swift target. The folders are there so i can find things, nothing m
 
 USB lockdown pairing, same-boot RemoteXPC reconnect and QuickTime capture now
 work on the validated iPhone 11 `24A446` SEP-less profile. CoreDevice process
-listing and screenshots also work after manually starting the DeveloperDiskImage
-jobs. These are scoped compatibility fixes, not replacements for SEP, keybags or
-content protection. MobileBackup2 still stops at missing persona state, while
-automatic DeveloperDiskImage registration and the normal Xcode/LLDB lifecycle
-remain open. The failure chains and fixes are written up in the docs.
+listing and screenshots also work after starting the DeveloperDiskImage jobs.
+The provisioning workflow now adds a System-volume watcher to perform that
+registration when the image appears. Automatic registration and CoreDevice
+process enumeration are validated on the same device; the normal Xcode/LLDB
+flow remains open. These are scoped compatibility fixes, not replacements for
+SEP, keybags or content protection. MobileBackup2 still stops at missing persona
+state. The failure chains and fixes are written up in the docs.
 
 ## Docs
 

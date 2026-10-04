@@ -37,7 +37,7 @@ usage() {
     echo "  pairing  install lockdownd, coreauthd companion guard and RemoteXPC repair"
     echo "  screentime make Setup's unavailable ScreenTime requests fail fast"
     echo "  injection install launchd hook plus icon grant, disabled for first boot"
-    echo "  cache    deploy the launchd service cache (dropbear + jbboot + watchdogd mitigation)"
+    echo "  cache    deploy the launchd service cache (dropbear + jbboot + DDI watcher + watchdogd mitigation)"
     echo "  jbtools  install boot helpers and the iOS 27 uicache"
     echo "  sileo      install Sileo (from payload/, built by fetch_payloads.sh)"
     # TrollStore is not installed here. It goes on after first boot from a deb,
@@ -672,9 +672,9 @@ if wants cache && [ "$CHECK_ONLY" = 0 ]; then
         skip "no patched cache at $CACHE; build it with fetch_payloads.sh cache"
     else
         n=$(python3 -c "import plistlib,sys;print(len(plistlib.load(open('$CACHE','rb'))['LaunchDaemons']))")
-        [ "$n" = "$((LAUNCHD_CACHE_DAEMONS + 2))" ] \
-            || die "$CACHE has $n daemons, expected $((LAUNCHD_CACHE_DAEMONS + 2)) for this profile"
-        for j in com.dropbear com.jbboot; do
+        [ "$n" = "$((LAUNCHD_CACHE_DAEMONS + 3))" ] \
+            || die "$CACHE has $n daemons, expected $((LAUNCHD_CACHE_DAEMONS + 3)) for this profile"
+        for j in com.dropbear com.jbboot com.liter8.ddi-services; do
             python3 -c "
 import plistlib,sys
 d=plistlib.load(open('$CACHE','rb'))['LaunchDaemons']
@@ -693,7 +693,13 @@ from patch_watchdogd_job import watchdogd_job_is_mitigated
 d=plistlib.load(open('$CACHE','rb'))
 sys.exit(0 if watchdogd_job_is_mitigated(d) else 1)" \
             || die "$CACHE does not contain the reviewed watchdogd mitigation"
-        ok "cache has $n daemons including com.dropbear, com.jbboot and the watchdogd mitigation"
+        python3 -c "
+import plistlib,sys
+from add_ddi_services import CACHE_KEY, DDI_SERVICES_JOB
+d=plistlib.load(open('$CACHE','rb'))['LaunchDaemons']
+sys.exit(0 if d.get(CACHE_KEY) == DDI_SERVICES_JOB else 1)" \
+            || die "$CACHE contains a stale or modified DeveloperDiskImage registration job"
+        ok "cache has $n daemons including Dropbear, jbboot, DDI registration and the watchdogd mitigation"
         # A stale .orig from another build would make a later rollback worse
         # than the active patch. Bind the preserved source to this profile
         # before changing the boot-critical service cache.
@@ -724,7 +730,7 @@ fi
 if wants jbtools && [ "$CHECK_ONLY" = 0 ]; then
     say "per-boot tools into System /usr/local and /var/jb"
     mkdir -p payload/.work
-    for required in boot/jbboot.sh spawnprobe/personaalloc \
+    for required in boot/jbboot.sh spawnprobe/personaalloc ddiwatch/ddiwatch \
                     photoforce/pfwatch photoforce/pfruntimeprobe payload/uicache; do
         [ -f "$required" ] || die "$required absent; run ./fetch_payloads.sh helpers"
     done
@@ -752,6 +758,20 @@ if wants jbtools && [ "$CHECK_ONLY" = 0 ]; then
     put photoforce/pfruntimeprobe /mnt2/jb/usr/bin/pfruntimeprobe
     sh_dev 'chmod 755 /mnt2/jb/usr/bin/pfruntimeprobe'
     ok "pfruntimeprobe"
+    ddiwatch_sha=$(shasum -a 256 ddiwatch/ddiwatch | awk '{print $1}')
+    put ddiwatch/ddiwatch /mnt1/usr/local/bin/ddiwatch.usbl8r-new
+    put ddiwatch/ddiwatch /mnt2/jb/usr/bin/ddiwatch.usbl8r-new
+    sh_dev '
+chmod 755 /mnt1/usr/local/bin/ddiwatch.usbl8r-new /mnt2/jb/usr/bin/ddiwatch.usbl8r-new
+mv -f /mnt1/usr/local/bin/ddiwatch.usbl8r-new /mnt1/usr/local/bin/ddiwatch
+mv -f /mnt2/jb/usr/bin/ddiwatch.usbl8r-new /mnt2/jb/usr/bin/ddiwatch
+'
+    sh_dev '/bin/cat /mnt1/usr/local/bin/ddiwatch' > payload/.work/ddiwatch.readback
+    [ "$(shasum -a 256 payload/.work/ddiwatch.readback | awk '{print $1}')" = "$ddiwatch_sha" ] \
+        || die "ddiwatch readback hash mismatch"
+    codesign -v payload/.work/ddiwatch.readback \
+        || die "ddiwatch readback signature verification failed"
+    ok "ddiwatch ($ddiwatch_sha)"
 
     # Preserve the Procursus copy once, then install the iOS 27 transport. Package upgrades
     # can replace this file, so normal-boot verification checks its hash explicitly.
@@ -1039,6 +1059,21 @@ note "System applications" "$(sh_dev 'for a in Camera MobileSafari Calculator Ma
 note "jbboot.sh System"   "$(sh_dev '[ -x /mnt1/usr/local/bin/jbboot.sh ] && echo present || echo ABSENT' | tr -d '\r')"
 note "personaalloc System" "$(sh_dev '[ -x /mnt1/usr/local/bin/personaalloc ] && echo present || echo ABSENT' | tr -d '\r')"
 note "pfwatch System"     "$(sh_dev '[ -x /mnt1/usr/local/bin/pfwatch ] && echo present || echo ABSENT' | tr -d '\r')"
+if [ -f ddiwatch/ddiwatch ]; then
+    expected_ddiwatch=$(shasum -a 256 ddiwatch/ddiwatch | awk '{print $1}')
+    sh_dev '/bin/cat /mnt1/usr/local/bin/ddiwatch' \
+        > payload/.work/verify.ddiwatch 2>/dev/null || true
+    if [ -s payload/.work/verify.ddiwatch ] && \
+       [ "$(shasum -a 256 payload/.work/verify.ddiwatch | awk '{print $1}')" = "$expected_ddiwatch" ] && \
+       codesign -v payload/.work/verify.ddiwatch >/dev/null 2>&1; then
+        ddiwatch_state=OK
+    else
+        ddiwatch_state=MISMATCH
+    fi
+else
+    ddiwatch_state=MISSING
+fi
+note "ddiwatch System" "$ddiwatch_state"
 note "sbextissue System"  "$(sh_dev '[ -x /mnt1/usr/local/bin/sbextissue ] && echo present || echo ABSENT' | tr -d '\r')"
 note "pfruntimeprobe"     "$(sh_dev '[ -x /mnt2/jb/usr/bin/pfruntimeprobe ] && echo present || echo ABSENT' | tr -d '\r')"
 
@@ -1120,21 +1155,25 @@ try:
     ld = plistlib.load(open("payload/.work/dev_cache.plist","rb"))["LaunchDaemons"]
 except Exception as e:
     print(f"UNREADABLE ({e})"); raise SystemExit
-need = ["com.dropbear", "com.jbboot"]
+need = ["com.dropbear", "com.jbboot", "com.liter8.ddi-services"]
 missing = [j for j in need if f"/System/Library/LaunchDaemons/{j}.plist" not in ld]
 from patch_launchd_cache import CACHE_KEY, DROPBEAR_JOB
 dropbear_ok = ld.get(CACHE_KEY) == DROPBEAR_JOB
+from add_ddi_services import CACHE_KEY as DDI_CACHE_KEY, DDI_SERVICES_JOB
+ddi_ok = ld.get(DDI_CACHE_KEY) == DDI_SERVICES_JOB
 from patch_watchdogd_job import watchdogd_job_is_mitigated
 watchdogd_ok = watchdogd_job_is_mitigated({"LaunchDaemons": ld})
 if missing:
     state = f"MISSING {missing}"
 elif not dropbear_ok:
     state = "MISMATCH com.dropbear"
+elif not ddi_ok:
+    state = "MISMATCH com.liter8.ddi-services"
 elif not watchdogd_ok:
     state = "MISMATCH watchdogd mitigation"
 else:
     state = "all jobs present, watchdogd mitigated"
-expected = int(__import__("os").environ["LITER8_LAUNCHD_CACHE_DAEMONS"]) + 2
+expected = int(__import__("os").environ["LITER8_LAUNCHD_CACHE_DAEMONS"]) + 3
 if len(ld) != expected:
     state = f"MISMATCH count, expected {expected}"
 print(f"{len(ld)} daemons, {state}")

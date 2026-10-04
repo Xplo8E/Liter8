@@ -91,5 +91,16 @@ Exact-device validation completed PairSetup after an explicit Trust decision,
 then completed PairVerify on a second connection in the same boot without a
 new Trust sheet. After manually bootstrapping the already-mounted personalized
 DeveloperDiskImage launchd jobs, CoreDevice enumerated processes and captured a
-screenshot. Persistence across a full reboot and automatic DDI job registration
-remain separate, unconfirmed boundaries.
+screenshot. The generated launchd cache now includes
+`com.liter8.ddi-services`, which keeps the System-volume `ddiwatch` helper alive.
+The helper waits for the DDI's `dtdeviceinfod` plist without busy-looping, then
+uses the bootstrap's `/var/jb/usr/bin/launchctl` through `/bin/sh` to register
+the complete launch-daemon directory. It resets when the image disappears and
+handles a later remount. A native watcher is required because 24A446 has no
+`/bin/launchctl`, and exact-device testing showed that `StartOnMount` did not
+relaunch a generated-cache job when CoreDevice mounted `/System/Developer`.
+After provisioning this watcher and performing a clean normal boot, the helper
+remained supervised by launchd, detected the later personalized-image mount,
+registered `dtdeviceinfod` and `dtappserviced`, and allowed
+`devicectl device info processes` to complete without an SSH bootstrap or host
+service restart. The normal Xcode/debugserver/LLDB lifecycle remains untested.

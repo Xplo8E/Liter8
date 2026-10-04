@@ -330,6 +330,49 @@ DDI job registration and persistence of the newly written RemotePairing peer
 across a full reboot remain unconfirmed. QuickTime USB capture is a separate
 Valeria callback-ownership failure and is not fixed by this change.
 
+The first automatic-registration attempt put the validated bootstrap command
+directly into the generated cache as `/bin/launchctl`. On the next normal boot,
+xpcproxy rejected the job before it could execute:
+
+```text
+Could not find and/or execute program specified by service: 2: No such file or directory: /bin/launchctl
+Service could not initialize: access(/bin/launchctl, X_OK) failed with errno 2
+last exit code = 78: EX_CONFIG
+```
+
+The interactive SSH command had succeeded only because its PATH selected the
+bootstrap replacement at `/var/jb/usr/bin/launchctl`; 24A446 has no
+`/bin/launchctl`. Running the replacement through the trusted System
+`/bin/sh` repaired that executable mismatch, but exposed a second lifecycle
+failure. `RunAtLoad` executed before the image existed and returned `ENOENT`.
+After `devicectl device info processes` mounted `/System/Developer`, the job
+still reported `runs = 1`, exit 2, and no registered `dtdeviceinfod` service.
+This disproved `StartOnMount` as a usable trigger for this generated-cache job.
+
+The final implementation keeps a native universal `arm64`/`arm64e`
+`/usr/local/bin/ddiwatch` helper alive under `com.liter8.ddi-services`. It polls
+for the specific DDI `dtdeviceinfod` plist at 250 ms intervals, checks whether
+the services are already registered, bootstraps the complete directory through
+the installed launchctl when necessary, and resets its state if the image
+disappears. A direct live run established the helper mechanism before the
+persistent job was deployed:
+
+```text
+[ddiwatch] started
+[ddiwatch] DeveloperDiskImage launch daemons ready
+[ddiwatch] bootstrap exit: 0
+[ddiwatch] services registered
+```
+
+The persistent validation then started from a clean normal boot. launchd kept
+the watcher running as PID 75. CoreDevice transitioned from `available
+(paired)` through `connecting` to `connected`; the watcher registered the DDI
+jobs, `dtdeviceinfod` ran from `/System/Developer/usr/libexec/dtdeviceinfod`,
+and `xcrun devicectl device info processes` returned the process table. No SSH
+bootstrap and no host CoreDevice restart were used in that final run. This
+confirms automatic DDI registration on iPhone12,1 / 24A446. It does not yet
+confirm the separate Xcode/debugserver/LLDB lifecycle.
+
 ### Wi-Fi pairing
 
 Wi-Fi pairing already worked before this change, so it is not evidence for the fix. The validated result here is USB lockdown pairing and its fresh-record lifecycle.
@@ -349,13 +392,15 @@ Confirmed:
 - pairing, replug, reboot, and same-Mac fresh-record behavior on iPhone12,1 / 24A446;
 - RemoteXPC PairSetup and same-boot PairVerify reconnect;
 - CoreDevice process enumeration and screenshot capture after manual DDI job bootstrap.
+- automatic DDI registration and CoreDevice process enumeration after a clean
+  normal boot on iPhone12,1 / 24A446.
 
 Not claimed:
 
 - genuine SEP-backed passcode proof;
 - support for another device or build;
-- working MobileBackup2, automatic DDI job registration, post-write reboot
-  persistence, Xcode, or WDA;
+- working MobileBackup2, post-write RemotePairing reboot persistence, Xcode,
+  debugserver/LLDB, or WDA;
 - working QuickTime USB capture;
 - conversion of the existing Data volume to content protection;
 - long-term watchdog reliability beyond the completed and ongoing soak evidence.

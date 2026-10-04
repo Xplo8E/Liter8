@@ -18,6 +18,7 @@ tools/*.setup-new
 # the reviewed Objective-C sources before copying them to the phone.
 device/photoforce/pfruntimeprobe
 device/photoforce/pfwatch
+device/ddiwatch/ddiwatch
 .ios272/
 .ios272b2/
 

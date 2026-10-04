@@ -68,6 +68,7 @@ REMOVED_POLICY = {
 LITER8_ADDED_JOBS = {
     "/System/Library/LaunchDaemons/com.dropbear.plist",
     "/System/Library/LaunchDaemons/com.jbboot.plist",
+    "/System/Library/LaunchDaemons/com.liter8.ddi-services.plist",
 }
 
 
@@ -203,7 +204,7 @@ def main() -> int:
     parser.add_argument(
         "--expected-pristine-daemons",
         type=int,
-        help="profile-owned daemon count before Liter8 adds its two jobs",
+        help="profile-owned daemon count before Liter8 adds its jobs",
     )
     arguments = parser.parse_args()
 

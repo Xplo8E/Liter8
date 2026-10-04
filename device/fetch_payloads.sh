@@ -281,13 +281,17 @@ if wants cache; then
             --expected-pristine-daemons "$LAUNCHD_CACHE_DAEMONS" >/dev/null \
             || die "failed to add com.jbboot"
         ok "com.jbboot added"
+        ./add_ddi_services.py boot/work/launchd.plist --apply \
+            --expected-pristine-daemons "$LAUNCHD_CACHE_DAEMONS" >/dev/null \
+            || die "failed to add automatic DeveloperDiskImage service registration"
+        ok "DeveloperDiskImage service registration job added"
         ./patch_watchdogd_job.py boot/work/launchd.plist --apply \
             --expected-pristine-daemons "$LAUNCHD_CACHE_DAEMONS" >/dev/null \
             || die "failed to mitigate the watchdogd launch loop"
         ok "watchdogd automatic launch, restart and panic escalation disabled"
         n=$(python3 -c "import plistlib;print(len(plistlib.load(open('boot/work/launchd.plist','rb'))['LaunchDaemons']))")
-        [ "$n" = "$((LAUNCHD_CACHE_DAEMONS + 2))" ] \
-            || die "patched cache has $n daemons, expected $((LAUNCHD_CACHE_DAEMONS + 2))"
+        [ "$n" = "$((LAUNCHD_CACHE_DAEMONS + 3))" ] \
+            || die "patched cache has $n daemons, expected $((LAUNCHD_CACHE_DAEMONS + 3))"
         ok "boot/work/launchd.plist ready, $n daemons"
         echo "        the detached .sig on the device is left untouched; the loader"
         echo "        accepts a modified cache because of launchd_unsecure_cache=1"
@@ -316,6 +320,11 @@ if wants helpers; then
     else
         die "PosterBoard wallpaper repair tools build failed"
     fi
+    if ( cd ddiwatch && ./build.sh >/dev/null 2>&1 ); then
+        ok "DeveloperDiskImage service watcher built"
+    else
+        die "DeveloperDiskImage service watcher build failed"
+    fi
 
     uicache_asset="$WORK/uicache27-$UICACHE_VER"
     [ -f "$uicache_asset" ] \
@@ -336,7 +345,7 @@ for p in "$OUT/Sileo.app/Sileo" "$OUT/Sileo.app/giveMeRoot" \
          "$OUT/l8remotepairing.dylib" "$OUT/l8coreauth.dylib" \
          "$OUT/uicache" \
          photodiag/photodiag spawnprobe/personaalloc appreg/appreg \
-         photoforce/pfruntimeprobe photoforce/pfwatch; do
+         photoforce/pfruntimeprobe photoforce/pfwatch ddiwatch/ddiwatch; do
     if [ -f "$p" ]; then
         # "$BASE" quoted separately inside ${..}: unquoted it is treated as a
         # glob pattern, so a path containing [ or * would strip the wrong prefix

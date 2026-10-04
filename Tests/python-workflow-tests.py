@@ -66,6 +66,79 @@ from patch_watchdogd_job import (  # noqa: E402
     remove_mitigation,
     watchdogd_job_is_mitigated,
 )
+from add_ddi_services import (  # noqa: E402
+    CACHE_KEY as DDI_CACHE_KEY,
+    DDI_SERVICES_JOB,
+    DDI_WATCHER,
+    JobShapeError as DDIJobShapeError,
+    apply_job as apply_ddi_job,
+    remove_job as remove_ddi_job,
+    validate_document as validate_ddi_document,
+)
+
+
+class DeveloperDiskImageJobTests(unittest.TestCase):
+    def document(self):
+        return {
+            "VersionNumber": 7,
+            "AppExtensions": {},
+            "SystemLibraryTreeState": {},
+            "LaunchDaemons": {
+                "/System/Library/LaunchDaemons/com.apple.fixture.plist": {
+                    "Label": "com.apple.fixture"
+                },
+            },
+        }
+
+    def test_job_bootstraps_the_fixed_system_domain_directory_on_mount(self):
+        self.assertEqual(
+            DDI_SERVICES_JOB["ProgramArguments"],
+            [DDI_WATCHER],
+        )
+        self.assertTrue(DDI_SERVICES_JOB["RunAtLoad"])
+        self.assertEqual(DDI_SERVICES_JOB["KeepAlive"], {"SuccessfulExit": False})
+        self.assertNotIn("StartOnMount", DDI_SERVICES_JOB)
+
+    def test_apply_and_remove_preserve_unrelated_jobs(self):
+        document = self.document()
+        before = copy.deepcopy(document)
+        validate_ddi_document(document, expected_pristine=1)
+        self.assertTrue(apply_ddi_job(document))
+        self.assertEqual(document["LaunchDaemons"][DDI_CACHE_KEY], DDI_SERVICES_JOB)
+        self.assertEqual(
+            document["LaunchDaemons"]["/System/Library/LaunchDaemons/com.apple.fixture.plist"],
+            before["LaunchDaemons"]["/System/Library/LaunchDaemons/com.apple.fixture.plist"],
+        )
+        validate_ddi_document(document, expected_pristine=1)
+        self.assertFalse(apply_ddi_job(document))
+        self.assertTrue(remove_ddi_job(document))
+        self.assertEqual(document, before)
+
+    def test_existing_modified_job_fails_closed(self):
+        document = self.document()
+        document["LaunchDaemons"][DDI_CACHE_KEY] = {"Label": "unexpected"}
+        with self.assertRaisesRegex(DDIJobShapeError, "unexpected job definition"):
+            apply_ddi_job(document)
+
+    def test_unknown_extra_job_fails_profile_count_guard(self):
+        document = self.document()
+        document["LaunchDaemons"]["/tmp/unreviewed.plist"] = {"Label": "unreviewed"}
+        with self.assertRaisesRegex(DDIJobShapeError, "expected 1"):
+            validate_ddi_document(document, expected_pristine=1)
+
+    def test_cache_build_and_device_verification_require_the_job(self):
+        builder = (DEVICE / "fetch_payloads.sh").read_text()
+        provisioner = (DEVICE / "sshrd_provision.sh").read_text()
+        watcher = (DEVICE / "ddiwatch/ddiwatch.c").read_text()
+        self.assertIn("./add_ddi_services.py", builder)
+        self.assertIn("cd ddiwatch", builder)
+        self.assertIn("LAUNCHD_CACHE_DAEMONS + 3", builder)
+        self.assertIn("com.liter8.ddi-services", provisioner)
+        self.assertIn("ddiwatch readback hash mismatch", provisioner)
+        self.assertIn("LAUNCHD_CACHE_DAEMONS + 3", provisioner)
+        self.assertIn("com.apple.coredevice.dtdeviceinfod.plist", watcher)
+        self.assertIn("usleep(250000)", watcher)
+        self.assertIn("services_registered()", watcher)
 
 
 class WatchdogdJobPatchTests(unittest.TestCase):
