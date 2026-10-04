@@ -23,6 +23,7 @@ enum KernelFixturePlan: Hashable, Sendable {
     case sep
     case credentialManager
     case sandbox
+    case valeria
     case compatibilitySandbox
 
     func resolve(in image: BinaryImage) throws -> [PatchRecord] {
@@ -37,6 +38,8 @@ enum KernelFixturePlan: Hashable, Sendable {
             return try KernelCredentialManagerResolver().resolve(in: image)
         case .sandbox:
             return try KernelSandboxResolver().resolve(in: image)
+        case .valeria:
+            return try KernelValeriaResolver().resolve(in: image)
         case .compatibilitySandbox:
             return try KernelSandboxResolver(includeScopedVnodeOpen: false).resolve(in: image)
         }

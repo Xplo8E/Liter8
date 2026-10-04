@@ -114,6 +114,10 @@ assert document["bootPlan"] == {
     "restoreIBSSAdditionalPlans": ["ibss-skip-display-init"],
 }
 ''')
+(work.parent / "resources" / "scripts" / "get_boot.py").write_text('''
+import os
+print("experimental-valeria=" + os.environ.get("LITER8_EXPERIMENTAL_VALERIA", "missing"))
+''')
 PY
 
 # Resource discovery and firmware outputs must not depend on the directory from
@@ -177,5 +181,23 @@ test ! -e "$BAD_WORK_DIR/escaped"
 # The validated work tree must beat a stale legacy IPSW_SRC value.
 IPSW_SRC=/deliberately/wrong-tree WORK_DIR="$WORK_DIR" \
     "$PATCHER" fw verify-cfw --python /usr/bin/python3 --resource-dir "$RESOURCE_DIR"
+
+# Ambient state must not activate an experimental kernel patch. Only the CLI
+# option for this exact get-boot invocation is authoritative.
+touch "$TEST_ROOT/apticket.im4m"
+LITER8_EXPERIMENTAL_VALERIA=1 "$PATCHER" fw get-boot \
+    --work-dir "$WORK_DIR" \
+    --python /usr/bin/python3 \
+    --resource-dir "$RESOURCE_DIR" \
+    --ticket "$TEST_ROOT/apticket.im4m" > "$TEST_ROOT/valeria-default.log"
+grep -q 'experimental-valeria=0' "$TEST_ROOT/valeria-default.log"
+
+"$PATCHER" fw get-boot \
+    --work-dir "$WORK_DIR" \
+    --python /usr/bin/python3 \
+    --resource-dir "$RESOURCE_DIR" \
+    --ticket "$TEST_ROOT/apticket.im4m" \
+    --experimental-valeria > "$TEST_ROOT/valeria-opt-in.log"
+grep -q 'experimental-valeria=1' "$TEST_ROOT/valeria-opt-in.log"
 
 echo "fw workflow integration: passed"

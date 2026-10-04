@@ -177,10 +177,14 @@ public struct FixtureManifest: Codable, Sendable {
             return try KernelCredentialManagerResolver().resolve(in: image)
         case KernelSandboxResolver.name:
             return try KernelSandboxResolver().resolve(in: image)
+        case KernelValeriaResolver.name:
+            return try KernelValeriaResolver().resolve(in: image)
         case KernelBootResolver.name:
             return try KernelBootResolver().resolve(in: image)
         case KernelBootCompatibilityResolver.name:
             return try KernelBootCompatibilityResolver().resolve(in: image)
+        case KernelBootValeriaResolver.name:
+            return try KernelBootValeriaResolver().resolve(in: image)
         case KernelDiagnosticResolver.name:
             return try KernelDiagnosticResolver().resolve(in: image)
         default:

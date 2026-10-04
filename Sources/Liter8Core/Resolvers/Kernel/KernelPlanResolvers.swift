@@ -61,6 +61,21 @@ public struct KernelBootCompatibilityResolver: Sendable {
     }
 }
 
+/// Explicit device-test plan for Valeria inactive-owner reclamation.
+///
+/// Keep this separate from the reviewed compatibility plan until repeated
+/// QuickTime close/reopen, cable-replug, reboot, and soak validation pass on
+/// real hardware.
+public struct KernelBootValeriaResolver: Sendable {
+    public static let name = "kernel-boot-valeria"
+    public init() {}
+
+    public func resolve(in image: BinaryImage) throws -> [PatchRecord] {
+        try KernelBootCompatibilityResolver().resolve(in: image)
+            + KernelValeriaResolver().resolve(in: image)
+    }
+}
+
 /// Diagnostic kernel plan: retain the anti-hang AKS changes, but deliberately
 /// omit SEP panic silencing, CredentialManager suppression, USB restore-mode
 /// forcing, persona changes, and Sandbox relaxation. If SEP still fails, this

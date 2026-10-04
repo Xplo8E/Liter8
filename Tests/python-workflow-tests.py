@@ -23,6 +23,7 @@ sys.path.insert(0, str(SCRIPTS))
 from liter8_workflow import Context, WorkflowError, run  # noqa: E402
 import measure_guards  # noqa: E402
 from boot_artifacts import (  # noqa: E402
+    normal_kernel_plan,
     publish_directory,
     ticket_from_environment,
     write_boot_manifest,
@@ -963,6 +964,17 @@ class ContextTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkflowError, "changed after generation"):
             validate_boot_set(fixture_context, "restore")
 
+    def test_valeria_kernel_plan_requires_exact_opt_in_and_is_recorded(self):
+        with patch.dict(os.environ, {"LITER8_EXPERIMENTAL_VALERIA": "0"}):
+            self.assertEqual(normal_kernel_plan(), "boot-public")
+        with patch.dict(os.environ, {"LITER8_EXPERIMENTAL_VALERIA": "1"}):
+            self.assertEqual(normal_kernel_plan(), "boot-valeria")
+
+        fixture_context = self.make_boot_set("normal", kernel_plan="boot-valeria")
+        manifest = json.loads((self.work / "Ramdisk/liter8-boot.json").read_text())
+        self.assertEqual(manifest["kernelPlan"], "boot-valeria")
+        self.assertEqual(validate_boot_set(fixture_context, "normal"), self.work / "Ramdisk")
+
     def test_restore_boot_sequence_sends_ramdisk_before_devicetree(self):
         fixture_context = self.make_boot_set("restore")
         with (
@@ -987,7 +999,7 @@ class ContextTests(unittest.TestCase):
             ["/custom/irecovery", "-c", "bootx"],
         )
 
-    def make_boot_set(self, mode):
+    def make_boot_set(self, mode, *, kernel_plan=None):
         staging = self.work / "boot-staging"
         staging.mkdir()
         names = {
@@ -1005,7 +1017,7 @@ class ContextTests(unittest.TestCase):
             "profile_id": "fixture-profile",
             "work": self.work,
         })()
-        write_boot_manifest(fixture_context, staging, mode)
+        write_boot_manifest(fixture_context, staging, mode, kernel_plan=kernel_plan)
         publish_directory(staging, self.work / "Ramdisk")
         return fixture_context
 

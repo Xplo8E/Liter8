@@ -95,6 +95,18 @@ final class KernelFixtureTests: XCTestCase {
         XCTAssertEqual(records.count, 46)
     }
 
+    func testKernelValeriaRediscoversBeta4InactiveOwnerGuard() async throws {
+        let fixture = try requireBeta4Fixture()
+        let snapshot = try await KernelFixtureStore.shared.snapshot(for: fixture)
+        let records = try await KernelFixtureStore.shared.records(for: .valeria, fixture: fixture)
+        let manifest = try manifest("kernel-valeria-n104-24A5390f.json")
+
+        // The manifest pins the selector-8 owner check, every shim word, and
+        // the complete patched-kernelcache digest.
+        try manifest.verify(resolved: records, in: snapshot.image)
+        XCTAssertEqual(records.count, 15)
+    }
+
     func testCompatibilityKernelPlanCompositionAgainstBeta4Oracle() async throws {
         let fixture = try requireBeta4Fixture()
 
@@ -106,6 +118,7 @@ final class KernelFixtureTests: XCTestCase {
         async let sep = KernelFixtureStore.shared.records(for: .sep, fixture: fixture)
         async let credentialManager = KernelFixtureStore.shared.records(for: .credentialManager, fixture: fixture)
         async let sandbox = KernelFixtureStore.shared.records(for: .compatibilitySandbox, fixture: fixture)
+        async let valeria = KernelFixtureStore.shared.records(for: .valeria, fixture: fixture)
 
         let records = try await KernelBootPlanComposer.compose(
             restore: restore,
@@ -128,6 +141,21 @@ final class KernelFixtureTests: XCTestCase {
         XCTAssertEqual(
             digest,
             "3a95ffe9cab7e191164ca23fc6eb9ee49ed6380659155e3f831c6bc584ec8ecb"
+        )
+
+        let valeriaRecords = try await valeria
+        let experimentalRecords = records + valeriaRecords
+        XCTAssertEqual(experimentalRecords.count, 134)
+        let experimentalImage = try GuardedPatchApplier.apply(
+            experimentalRecords,
+            to: snapshot.image
+        )
+        let experimentalDigest = SHA256.hash(data: experimentalImage.data)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        XCTAssertEqual(
+            experimentalDigest,
+            "e06ade2de75fe3107786e1830d0dd6c619f6bc06c8652f10f7431175414a3993"
         )
     }
 }
@@ -163,6 +191,27 @@ final class KernelEndToEndTests: XCTestCase {
         XCTAssertEqual(
             digest,
             "3a95ffe9cab7e191164ca23fc6eb9ee49ed6380659155e3f831c6bc584ec8ecb"
+        )
+    }
+
+    func testValeriaKernelDeviceTestWiringAgainstBeta4Oracle() throws {
+        let privateFixtureRoot = liter8PrivateFixtureRoot(from: #filePath)
+        let beta4Kernel = privateFixtureRoot.appendingPathComponent("offsets/kc/kc_b4_n104.raw")
+        guard FileManager.default.fileExists(atPath: beta4Kernel.path) else {
+            throw XCTSkip("local beta-4 kernelcache fixture is absent")
+        }
+
+        let image = try BinaryImage(contentsOf: beta4Kernel)
+        let records = try KernelBootValeriaResolver().resolve(in: image)
+        XCTAssertEqual(records.count, 134)
+
+        let patched = try GuardedPatchApplier.apply(records, to: image)
+        let digest = SHA256.hash(data: patched.data)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        XCTAssertEqual(
+            digest,
+            "e06ade2de75fe3107786e1830d0dd6c619f6bc06c8652f10f7431175414a3993"
         )
     }
 }
