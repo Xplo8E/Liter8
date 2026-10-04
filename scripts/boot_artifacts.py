@@ -74,7 +74,13 @@ def publish_directory(staging: Path, destination: Path) -> None:
         shutil.rmtree(previous)
 
 
-def write_boot_manifest(context: Context, staging: Path, mode: str) -> None:
+def write_boot_manifest(
+    context: Context,
+    staging: Path,
+    mode: str,
+    *,
+    kernel_plan: str | None = None,
+) -> None:
     """Bind a device command to the exact artifact family it is about to send."""
     artifacts = {}
     for path in sorted(staging.iterdir()):
@@ -88,12 +94,17 @@ def write_boot_manifest(context: Context, staging: Path, mode: str) -> None:
             "bytes": path.stat().st_size,
             "sha256": digest.hexdigest(),
         }
-    (staging / "liter8-boot.json").write_text(json.dumps({
+    document = {
         "schema": 1,
         "profileID": context.profile_id,
         "mode": mode,
         "artifacts": artifacts,
-    }, indent=2, sort_keys=True) + "\n")
+    }
+    if kernel_plan is not None:
+        document["kernelPlan"] = kernel_plan
+    (staging / "liter8-boot.json").write_text(
+        json.dumps(document, indent=2, sort_keys=True) + "\n"
+    )
 
 
 def build_normal_boot() -> None:
@@ -158,7 +169,8 @@ def build_normal_boot() -> None:
         print("[*] normal boot: patching kernelcache", flush=True)
         kernel = staging / ".Kernelcache.im4p"
         shutil.copy2(context.component("KernelCache"), kernel)
-        context.apply("kernel", "boot-public", kernel, record_name="boot-kernel")
+        kernel_plan = "boot-public"
+        context.apply("kernel", kernel_plan, kernel, record_name="boot-kernel")
         create_img4(
             context, kernel, ticket, staging / "Kernelcache.img4", fourcc="rkrn"
         )
@@ -166,7 +178,7 @@ def build_normal_boot() -> None:
         # Dot-prefixed intermediates are not part of the public boot artifact set.
         for intermediate in staging.glob(".*"):
             intermediate.unlink()
-        write_boot_manifest(context, staging, "normal")
+        write_boot_manifest(context, staging, "normal", kernel_plan=kernel_plan)
         publish_directory(staging, context.work / "Ramdisk")
 
     print("[+] normal boot artifacts are ready in Ramdisk", flush=True)

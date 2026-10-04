@@ -1,0 +1,104 @@
+{
+  "expectedOutputSHA256" : "2fe635a58e876b06c89e77e6a6b153e1767e17d2ace67bc7f8e374b7834707b8",
+  "expectedPatches" : [
+    {
+      "id" : "kernel.valeria.class-command-registration.inactive-owner-check",
+      "offset" : 47362208,
+      "originalBytes" : "686a40f9",
+      "replacementBytes" : "19493894"
+    },
+    {
+      "id" : "kernel.valeria.registration-shim.0",
+      "offset" : 62117124,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "5f2403d5"
+    },
+    {
+      "id" : "kernel.valeria.registration-shim.1",
+      "offset" : 62117128,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "7f2303d5"
+    },
+    {
+      "id" : "kernel.valeria.registration-shim.2",
+      "offset" : 62117132,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "f57bbfa9"
+    },
+    {
+      "id" : "kernel.valeria.registration-shim.3",
+      "offset" : 62117136,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "f50301aa"
+    },
+    {
+      "id" : "kernel.valeria.registration-shim.4",
+      "offset" : 62117140,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "686a40f9"
+    },
+    {
+      "id" : "kernel.valeria.registration-shim.5",
+      "offset" : 62117144,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "c80000b4"
+    },
+    {
+      "id" : "kernel.valeria.registration-shim.6",
+      "offset" : 62117148,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "094940b9"
+    },
+    {
+      "id" : "kernel.valeria.registration-shim.7",
+      "offset" : 62117152,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "89000036"
+    },
+    {
+      "id" : "kernel.valeria.registration-shim.8",
+      "offset" : 62117156,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "e00313aa"
+    },
+    {
+      "id" : "kernel.valeria.registration-shim.9",
+      "offset" : 62117160,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "42b7c797"
+    },
+    {
+      "id" : "kernel.valeria.registration-shim.10",
+      "offset" : 62117164,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "e8031faa"
+    },
+    {
+      "id" : "kernel.valeria.registration-shim.11",
+      "offset" : 62117168,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "e10315aa"
+    },
+    {
+      "id" : "kernel.valeria.registration-shim.12",
+      "offset" : 62117172,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "f57bc1a8"
+    },
+    {
+      "id" : "kernel.valeria.registration-shim.13",
+      "offset" : 62117176,
+      "originalBytes" : "00000000",
+      "replacementBytes" : "ff0f5fd6"
+    }
+  ],
+  "expectedSize" : 68927488,
+  "resolver" : "kernel-valeria",
+  "sha256" : "cff26a8a9c3184d38cc3df3b284ff61cc9dd19ab11517e86aaf8019f3a95d76f",
+  "target" : {
+    "board" : "n104ap",
+    "build" : "24B5084k",
+    "component" : "kernelcache",
+    "device" : "iPhone12,1"
+  }
+}
