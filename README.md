@@ -186,10 +186,13 @@ It's all one Swift target. The folders are there so i can find things, nothing m
 
 `fw get-rd` and `fw get-boot` rebuild far more than they need to. It's slow and i know it, it's on the list.
 
-USB lockdown pairing now works on the validated iPhone 11 `24A446` SEP-less
-profile. It remains a scoped compatibility path, not a replacement for SEP or
-content protection, and developer RemoteXPC is still blocked. The full failure
-chain and fix are written up in the docs.
+USB lockdown pairing, same-boot RemoteXPC reconnect and QuickTime capture now
+work on the validated iPhone 11 `24A446` SEP-less profile. CoreDevice process
+listing and screenshots also work after manually starting the DeveloperDiskImage
+jobs. These are scoped compatibility fixes, not replacements for SEP, keybags or
+content protection. MobileBackup2 still stops at missing persona state, while
+automatic DeveloperDiskImage registration and the normal Xcode/LLDB lifecycle
+remain open. The failure chains and fixes are written up in the docs.
 
 ## Docs
 
