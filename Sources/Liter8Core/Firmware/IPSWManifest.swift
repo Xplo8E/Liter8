@@ -290,6 +290,30 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
             )
         ),
+        // iOS 27.2 beta 3, device-validated on an iPhone 11: erase restore and
+        // normal boot both passed. All four oracles were measured from this
+        // build's own root filesystem by `survey --guards`. The daemon count is
+        // 732, one fewer than both earlier 27.2 seeds, which is a read value
+        // rather than a carried one.
+        DeviceWorkflowProfile(
+            id: "iphone12,1-n104ap-24B5099f",
+            productVersion: "27.2",
+            build: "24B5099f",
+            productType: "iPhone12,1",
+            deviceClass: "n104ap",
+            chipID: 0x8030,
+            boardID: 0x04,
+            extractedDirectoryName: "iPhone12,1_27.2_24B5099f_Restore",
+            validationState: .reviewed,
+            launchdSHA256: "addb9ccb1b5650116ab5da59d1a53dc3f54e6a2a29cdcafa036c0c2376cd5ca2",
+            launchdCacheSHA256: "9fd8a69b3f0a364e5e599ccc5601cb21f101786cbc3e802438fa4bf297d296aa",
+            launchdCacheDaemonCount: 732,
+            setupControllerMethodCount: 65,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [.skipDisplayInitialization],
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
+            )
+        ),
         // iOS 27.0.1, device-validated on an iPhone 11: erase restore, SSHRD
         // provisioning, normal boot, repeat boot, Procursus finalization,
         // Dropbear, persona 99, icon token and PosterBoard repair all passed.

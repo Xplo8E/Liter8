@@ -186,6 +186,24 @@ public enum KernelResolverProfileRegistry {
                 ),
             ]
         ),
+        KernelResolverProfile(
+            // Third 27.2 seed, third XNU string, so a third profile.
+            id: "ios272b3-24B5099f-n104ap",
+            productVersion: "27.2 beta 3",
+            builds: ["24B5099f"],
+            boards: ["n104ap"],
+            component: "kernelcache.release.iphone12b",
+            embeddedFingerprint: "xnu-13432.40.177.0.3~16/RELEASE_ARM64_T8030",
+            resolverVariants: [
+                // Shape-identical to both earlier seeds, recorded separately
+                // for the same reason beta 2 was. See
+                // KernelCredentialManagerSignatures.release24B5099fV1.
+                "kernel-credential-manager": ResolverVariantProfile(
+                    signature: "ios272b3-24B5099f-acm-v1",
+                    payload: "acm-return-success-v1"
+                ),
+            ]
+        ),
     ]
 
     /// Detect a profile using evidence embedded in the artifact itself.
