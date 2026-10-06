@@ -73,14 +73,15 @@ final class FirmwareProfileTests: XCTestCase {
         XCTAssertNotNil(KernelCredentialManagerSignatures.variant(named: newVariant.signature))
     }
 
-    /// Every registered ACM signature variant must name 26 methods, in one order.
+    /// iOS 27 ACM variants keep their 26-method roster and reference order.
     ///
     /// The resolver scores four bodies against the entries either side of them,
     /// so a family that dropped or reordered an entry would still resolve and
     /// would silently patch the wrong function.
     func testEveryACMVariantDescribesTheSameTwentySixMethods() throws {
         let ids = KernelResolverProfileRegistry.profiles.compactMap {
-            $0.variants(for: KernelCredentialManagerResolver.name)?.signature
+            $0.productVersion.hasPrefix("27.")
+                ? $0.variants(for: KernelCredentialManagerResolver.name)?.signature : nil
         }
         XCTAssertFalse(ids.isEmpty)
 
@@ -95,6 +96,25 @@ final class FirmwareProfileTests: XCTestCase {
                 reference = names
             }
         }
+    }
+
+    func testIPad8UsesItsOwnDistinctTwentyFiveMethodRoster() throws {
+        let profile = try XCTUnwrap(KernelResolverProfileRegistry.profiles.first {
+            $0.covers(build: "23H30")
+        })
+        let selected = try XCTUnwrap(profile.variants(for: KernelCredentialManagerResolver.name))
+        let variant = try XCTUnwrap(KernelCredentialManagerSignatures.variant(named: selected.signature))
+        let reference = KernelCredentialManagerSignatures.release24A435V1
+        XCTAssertEqual(variant.functions.map(\.name), reference.functions.map(\.name).filter {
+            $0 != "updateAnalytics"
+        })
+        XCTAssertEqual(Set(variant.functions.map(\.name)).count, 25)
+        XCTAssertFalse(variant.requiresReferenceOrder)
+        XCTAssertTrue(variant.preserveBareBTI)
+        XCTAssertFalse(profile.includesValeriaRepair)
+        XCTAssertTrue(KernelResolverProfileRegistry.profiles.filter {
+            !$0.covers(build: "23H30")
+        }.allSatisfy(\.includesValeriaRepair))
     }
 
     /// 24A437 is 24A435 rebuilt and 24A446 is 27.0.1 on the same XNU. All three

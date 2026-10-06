@@ -196,6 +196,17 @@ ok "device is in SSHRD"
 
 # ------------------------------------------------------------------ mounts
 say "mounts"
+mkdir -p payload/.work
+sh_dev '/usr/sbin/ioreg -r -c AppleAPFSVolume -l' > payload/.work/apfs-volumes.txt \
+    || die "could not read APFS volume roles"
+preboot_device=$(python3 apfs_role.py Preboot < payload/.work/apfs-volumes.txt) \
+    || die "could not identify Preboot"
+# APFS numbering differs between devices: disk1s6 is Update on j171aap.
+# Keep the legacy /mnt6 mountpoint, but select its device by its actual role.
+sh_dev "/bin/mkdir -p /mnt6 && { /sbin/mount | /usr/bin/grep -q '^$preboot_device on /mnt6 ' || { \
+    /sbin/umount /mnt6 2>/dev/null; \
+    /sbin/mount_apfs -o rdonly '$preboot_device' /mnt6; }; }" \
+    || die "could not mount the identified Preboot volume"
 # Preboot holds the restore-bound APTicket extracted by the ticket step below. The ramdisk
 # mounts only System and Data on its own, so searching an unmounted /mnt6 would otherwise
 # look like a missing ticket. The ticket step requires exactly one matching image.
@@ -203,7 +214,6 @@ must_dev '
 mkdir -p /mnt1 /mnt2 /mnt6 2>/dev/null
 /sbin/mount_apfs /dev/disk1s1 /mnt1 2>/dev/null
 /sbin/mount_apfs /dev/disk1s2 /mnt2 2>/dev/null
-/sbin/mount_apfs /dev/disk1s6 /mnt6 2>/dev/null
 /sbin/mount -u -o rw /dev/disk1s1 2>/dev/null
 /sbin/mount -u -o rw /dev/disk1s2 2>/dev/null
 [ -d /mnt1/Applications ] || { echo "System volume not mounted"; exit 1; }
@@ -221,8 +231,9 @@ sh_dev "mkdir -p $STAGE" >/dev/null
 if wants ticket && [ "$CHECK_ONLY" = 0 ]; then
     say "restore-bound APTicket"
     mkdir -p payload/.work
-    sep_paths=$(sh_dev '/usr/bin/find /mnt6 -type f -name sep-firmware.img4 2>/dev/null' \
-        | tr -d '\r')
+    sh_dev '/usr/bin/find /mnt6 -type f -name sep-firmware.img4' \
+        > payload/.work/sep-paths.txt || die "could not search Preboot for SEP firmware"
+    sep_paths=$(tr -d '\r' < payload/.work/sep-paths.txt)
     sep_count=$(printf '%s\n' "$sep_paths" | sed '/^$/d' | wc -l | tr -d ' ')
     [ "$sep_count" = 1 ] \
         || die "expected one sep-firmware.img4 in Preboot, found $sep_count"
@@ -600,8 +611,8 @@ if wants injection && [ "$CHECK_ONLY" = 0 ]; then
     sh_dev 'mkdir -p /mnt1/usr/lib /mnt1/usr/local/bin /mnt2/jb/etc' \
         || die "could not create injection directories"
     must_dev '
-if [ -f /mnt1/usr/lib/lhook.dylib ] && [ ! -f /mnt1/usr/lib/lhook.dylib.orig ]; then
-    cp /mnt1/usr/lib/lhook.dylib /mnt1/usr/lib/lhook.dylib.orig
+if [ -f /mnt1/usr/lib/lhook ] && [ ! -f /mnt1/usr/lib/lhook.orig ]; then
+    cp /mnt1/usr/lib/lhook /mnt1/usr/lib/lhook.orig
 fi
 if [ -f /mnt1/usr/lib/systemhook.dylib ] && [ ! -f /mnt1/usr/lib/systemhook.dylib.orig ]; then
     cp /mnt1/usr/lib/systemhook.dylib /mnt1/usr/lib/systemhook.dylib.orig
@@ -615,12 +626,12 @@ fi
 echo DONE_OK
 ' "could not preserve existing injection files"
     put payload/launchd.hooked /mnt1/sbin/launchd.usbl8r-new
-    put payload/lhook.dylib /mnt1/usr/lib/lhook.dylib.usbl8r-new
+    put payload/lhook.dylib /mnt1/usr/lib/lhook.usbl8r-new
     put payload/systemhook.dylib /mnt1/usr/lib/systemhook.dylib.usbl8r-new
     put payload/sbextissue /mnt1/usr/local/bin/sbextissue.usbl8r-new
     put launchdhook/lhook.deny /mnt2/jb/etc/lhook.deny.new
     sh_dev 'cat /mnt1/sbin/launchd.usbl8r-new' > payload/.work/launchd.staged
-    sh_dev 'cat /mnt1/usr/lib/lhook.dylib.usbl8r-new' > payload/.work/lhook.staged
+    sh_dev 'cat /mnt1/usr/lib/lhook.usbl8r-new' > payload/.work/lhook.staged
     sh_dev 'cat /mnt1/usr/lib/systemhook.dylib.usbl8r-new' > payload/.work/systemhook.staged
     sh_dev 'cat /mnt1/usr/local/bin/sbextissue.usbl8r-new' > payload/.work/sbextissue.staged
     [ "$(shasum -a 256 payload/.work/launchd.staged | awk '{print $1}')" = "$hooked_sha" ] \
@@ -632,11 +643,11 @@ echo DONE_OK
     [ "$(shasum -a 256 payload/.work/sbextissue.staged | awk '{print $1}')" = "$sbextissue_sha" ] \
         || die "staged sbextissue hash mismatch; original is still active"
     must_dev '
-chmod 0755 /mnt1/sbin/launchd.usbl8r-new /mnt1/usr/lib/lhook.dylib.usbl8r-new
+chmod 0755 /mnt1/sbin/launchd.usbl8r-new /mnt1/usr/lib/lhook.usbl8r-new
 chmod 0755 /mnt1/usr/lib/systemhook.dylib.usbl8r-new /mnt1/usr/local/bin/sbextissue.usbl8r-new
 chmod 0644 /mnt2/jb/etc/lhook.deny.new
 mv -f /mnt1/sbin/launchd.usbl8r-new /mnt1/sbin/launchd
-mv -f /mnt1/usr/lib/lhook.dylib.usbl8r-new /mnt1/usr/lib/lhook.dylib
+mv -f /mnt1/usr/lib/lhook.usbl8r-new /mnt1/usr/lib/lhook
 mv -f /mnt1/usr/lib/systemhook.dylib.usbl8r-new /mnt1/usr/lib/systemhook.dylib
 mv -f /mnt1/usr/local/bin/sbextissue.usbl8r-new /mnt1/usr/local/bin/sbextissue
 mv -f /mnt2/jb/etc/lhook.deny.new /mnt2/jb/etc/lhook.deny
@@ -648,7 +659,7 @@ echo DONE_OK
 
     sh_dev 'cat /mnt1/sbin/launchd' > payload/.work/launchd.readback
     sh_dev 'cat /mnt1/sbin/launchd.bak' > payload/.work/launchd.bak.readback
-    sh_dev 'cat /mnt1/usr/lib/lhook.dylib' > payload/.work/lhook.readback
+    sh_dev 'cat /mnt1/usr/lib/lhook' > payload/.work/lhook.readback
     sh_dev 'cat /mnt1/usr/lib/systemhook.dylib' > payload/.work/systemhook.readback
     sh_dev 'cat /mnt1/usr/local/bin/sbextissue' > payload/.work/sbextissue.readback
     [ "$(shasum -a 256 payload/.work/launchd.readback | awk '{print $1}')" = "$hooked_sha" ] \
@@ -1106,7 +1117,7 @@ if [ -f payload/launchd.orig ] && [ -f payload/launchd.hooked ] && \
     else
         sh_dev 'cat /mnt1/sbin/launchd' > payload/.work/verify.launchd 2>/dev/null || true
         sh_dev 'cat /mnt1/sbin/launchd.bak' > payload/.work/verify.launchd.bak 2>/dev/null || true
-        sh_dev 'cat /mnt1/usr/lib/lhook.dylib' > payload/.work/verify.lhook 2>/dev/null || true
+        sh_dev 'cat /mnt1/usr/lib/lhook' > payload/.work/verify.lhook 2>/dev/null || true
         sh_dev 'cat /mnt1/usr/lib/systemhook.dylib' > payload/.work/verify.systemhook 2>/dev/null || true
         sh_dev 'cat /mnt1/usr/local/bin/sbextissue' > payload/.work/verify.sbextissue 2>/dev/null || true
         [ -s payload/.work/verify.launchd ] && \
@@ -1119,7 +1130,7 @@ if [ -f payload/launchd.orig ] && [ -f payload/launchd.hooked ] && \
             && injection_backup=OK || injection_backup=MISMATCH
         [ -s payload/.work/verify.lhook ] && \
             [ "$(shasum -a 256 payload/.work/verify.lhook | awk '{print $1}')" = "$verify_lhook" ] && \
-            sh_dev '[ -x /mnt1/usr/lib/lhook.dylib ]' \
+            sh_dev '[ -x /mnt1/usr/lib/lhook ]' \
             && injection_hook=OK || injection_hook=MISMATCH
         [ -s payload/.work/verify.systemhook ] && \
             [ "$(shasum -a 256 payload/.work/verify.systemhook | awk '{print $1}')" = "$verify_systemhook" ] && \

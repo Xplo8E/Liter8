@@ -11,7 +11,8 @@ import subprocess
 import time
 from pathlib import Path
 
-from liter8_workflow import Context, WorkflowError, main_guard, run
+from boot_artifacts import has_txm, selected_passthrough
+from liter8_workflow import Context, DEFAULT_BOOT_FIRMWARE, WorkflowError, main_guard, run
 
 
 # The order and pauses come from the beta-4 sequence that was reliable on the
@@ -27,10 +28,28 @@ FIRMWARE_SEQUENCE = [
     ("GFX.img4", "firmware", 0),
     ("ISP.img4", "firmware", 1),
     ("PMP.img4", "firmware", 0),
+    ("StaticTrustCache.img4", "firmware", 0),
     ("RestoreTrustCache.img4", "firmware", 0),
     ("SIO.img4", "firmware", 0),
     ("WCH.img4", "firmware", 0),
 ]
+
+
+def selected_firmware_sequence(
+    components: dict[str, str], mode: str,
+    firmware_components: tuple[str, ...] = DEFAULT_BOOT_FIRMWARE,
+    normal_trust_cache: str = "RestoreTrustCache",
+) -> list[tuple[str, str, int]]:
+    """Keep the established upload order for the profile's required firmware."""
+    available = {
+        name for _, name, _ in selected_passthrough(
+            components, mode, firmware_components, normal_trust_cache
+        )
+    }
+    if has_txm(components, mode, firmware_components):
+        available.add("TXM.img4")
+    # SEP is uploaded separately after DeviceTree.
+    return [entry for entry in FIRMWARE_SEQUENCE if entry[0] in available]
 
 
 def sha256_file(path: Path) -> str:
@@ -76,7 +95,12 @@ def validate_boot_set(context: Context, expected_mode: str) -> Path:
         )
 
     required = ["iBSS.raw", "iBEC.img4", "DeviceTree.img4", "SEP.img4", "Kernelcache.img4"]
-    required += [name for name, _, _ in FIRMWARE_SEQUENCE]
+    required += [
+        name for name, _, _ in selected_firmware_sequence(
+            context.components, expected_mode,
+            context.boot_firmware_components, context.normal_trust_cache
+        )
+    ]
     if expected_mode == "restore":
         required.append("RestoreRamdisk.img4")
     records = document.get("artifacts", {})
@@ -91,11 +115,15 @@ def validate_boot_set(context: Context, expected_mode: str) -> Path:
 
 
 def send(irecovery: str, root: Path, name: str, command: str) -> None:
-    """Upload one artifact, then require iBoot to accept its load command."""
+    """Upload an artifact and issue its load command over USB.
+
+    irecovery's exit status reports transport success. iBoot can still reject
+    the image on its console; this function cannot establish image acceptance.
+    """
     print(f"  {name:<24} uploading", flush=True)
     run([irecovery, "-f", root / name])
     run([irecovery, "-c", command])
-    print(f"  {name:<24} accepted ({command})", flush=True)
+    print(f"  {name:<24} sent; issued {command} (check iBoot console)", flush=True)
 
 
 def boot() -> None:
@@ -135,7 +163,9 @@ def boot() -> None:
 
     print("[*] stage 3: display and firmware", flush=True)
     run([irecovery, "-c", "bgcolor 0 191 255"])
-    for name, command, pause_after in FIRMWARE_SEQUENCE:
+    for name, command, pause_after in selected_firmware_sequence(
+        context.components, mode, context.boot_firmware_components, context.normal_trust_cache
+    ):
         send(irecovery, root, name, command)
         if pause_after:
             time.sleep(pause_after)

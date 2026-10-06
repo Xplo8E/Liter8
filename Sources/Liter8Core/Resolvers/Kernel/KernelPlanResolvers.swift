@@ -45,7 +45,7 @@ public struct KernelBootResolver: Sendable {
 /// Device-reviewed compatibility plan for the public Liter8 boot workflow.
 ///
 /// This deliberately omits the later 35-record scoped vnode-open shim. It is
-/// the stable normal-boot plan and includes the Valeria inactive-owner repair.
+/// the normal-boot plan. Valeria is selected by the exact kernel profile.
 /// The compatibility contract is the selected patch set, not one firmware
 /// build or a table of fixed offsets.
 public struct KernelBootCompatibilityResolver: Sendable {
@@ -58,8 +58,8 @@ public struct KernelBootCompatibilityResolver: Sendable {
             bootPolicy: KernelBootPolicyResolver().resolve(in: image),
             sep: KernelSEPResolver().resolve(in: image),
             credentialManager: KernelCredentialManagerResolver().resolve(in: image),
-            sandbox: KernelSandboxResolver(includeScopedVnodeOpen: false).resolve(in: image),
-            valeria: KernelValeriaResolver().resolve(in: image)
+            sandbox: KernelSandboxCompatibilityResolver().resolve(in: image),
+            valeria: KernelValeriaResolver.requiredRecords(in: image)
         )
     }
 }

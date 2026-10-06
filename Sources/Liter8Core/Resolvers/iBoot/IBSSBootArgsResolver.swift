@@ -162,15 +162,21 @@ public struct IBSSBootArgsResolver: Sendable {
             //
             //   ADRP X2, <any page>       X2 will be snprintf's format
             //   ADD  X2, X2, <any imm>    finish that format pointer
-            //   ADD  X0, SP, <any imm>    destination is a stack buffer
+            //   ADD  X0, SP, <any imm>    destination is a stack buffer, or
+            //   SUB  X0, X29, <any imm>   the same buffer addressed via the FP
             //   MOV  W1, #0x400           destination capacity is 1024
             //   BL   <any target>          make the call
             //
             // The masks keep opcode and register fields fixed but deliberately
             // erase page/stack immediates that are expected to move by build.
+            // The destination buffer may be formed off SP (n104, iOS 27) or off
+            // the frame pointer (j171a, iPadOS 26: `SUB X0, X29, #imm`); both
+            // put a stack-buffer address in X0 and the capacity constant below
+            // still pins this to the single boot-argument copy.
             guard adrp & 0x9F00_001F == 0x9000_0002, // ADRP X2,<page>
                   add & 0xFFC0_03FF == 0x9100_0042, // ADD X2,X2,#imm
-                  destination & 0xFFC0_03FF == 0x9100_03E0, // ADD X0,SP,#imm
+                  (destination & 0xFFC0_03FF == 0x9100_03E0 // ADD X0,SP,#imm
+                      || destination & 0xFFC0_03FF == 0xD100_03A0), // SUB X0,X29,#imm
                   capacity == 0x5280_8001, // MOV W1,#0x400
                   call >> 26 == 0b100101
             else {

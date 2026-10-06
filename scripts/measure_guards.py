@@ -126,7 +126,7 @@ def emit(manifest: dict, extracted: Path, guards: dict[str, object]) -> None:
             )
         ),""")
     print("\nvalidationState stays .experimental until a device run says otherwise.")
-    print("bootPlan is empty: set it from the board's own display behaviour.")
+    print("bootPlan uses iPhone firmware defaults: review firmware components, trust cache and display policy for this board.")
 
 
 def main(argv: list[str]) -> int:

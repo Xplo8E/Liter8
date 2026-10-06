@@ -27,7 +27,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import resign_pagehashes
 import patch_launchd
 
-HOOK_PATH = "/usr/lib/lhook.dylib"
+HOOK_PATH = "/usr/lib/lhook"
 
 
 def changed_ranges(a, b):

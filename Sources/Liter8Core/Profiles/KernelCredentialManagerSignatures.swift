@@ -42,6 +42,20 @@ struct KernelFunctionSignatureDescriptor: Sendable {
 struct KernelCredentialManagerSignatureVariant: Sendable {
     let id: String
     let functions: [KernelFunctionSignatureDescriptor]
+    let requiresReferenceOrder: Bool
+    let preserveBareBTI: Bool
+
+    init(
+        id: String,
+        functions: [KernelFunctionSignatureDescriptor],
+        requiresReferenceOrder: Bool = true,
+        preserveBareBTI: Bool = false
+    ) {
+        self.id = id
+        self.functions = functions
+        self.requiresReferenceOrder = requiresReferenceOrder
+        self.preserveBareBTI = preserveBareBTI
+    }
 }
 
 /// Build-family-specific locator data for AppleCredentialManager.
@@ -423,6 +437,58 @@ enum KernelCredentialManagerSignatures {
         ]
     )
 
+    /// iPad 8 A12 / T8020, iPadOS 26.7.1 23H30.
+    /// Reuse the unchanged 24A435 shapes and replace eight drifted entries.
+    /// The command/context call graph and setPowerStateGated diagnostic xref
+    /// are recorded in docs/plans/IPAD8_26_7_1_PORT.md.
+    /// updateAnalytics aliases unlockItem under the old signature; exclude it
+    /// rather than patching the same entry twice. All 25 entries must be unique.
+    /// setPowerStateGated moved beyond the old roster, so only this variant
+    /// relaxes reference ordering. The PAC-less logging leaf keeps its BTI.
+    static let release23H30V1 = KernelCredentialManagerSignatureVariant(
+        id: "ios26-23H30-acm-v1",
+        functions: release24A435V1.functions.filter { $0.name != "updateAnalytics" }.map { descriptor in
+            switch descriptor.name {
+            // PACIBSP; 0x60-byte frame; preserve x0...x6 before checking the
+            // command type and tail-calling one of the context handlers.
+            case "callPlatformFunction":
+                return .init("callPlatformFunction", words: "d503237f d10183ff a90167fa a9025ff8 a90357f6 a9044ff4 a9057bfd 910143fd aa0603f3 aa0503f4 aa0403f5 aa0303f6 aa0203f7 aa0103f9 aa0003f8 d000dd88")
+            // PACIBSP; x4 points to a V2 context: 32-bit command at +0,
+            // pointer at +8, and a cleared byte in the stack copy at +12.
+            case "cmdContextV2":
+                return .init("cmdContextV2", words: "d503237f d101c3ff a90457f6 a9054ff4 a9067bfd 910183fd b4000484 aa0303f3 aa0203f4 aa0103f5 aa0003f6 b9400088 b90033e8 f9400488 f80343e8 3900f3ff")
+            // PACIBSP; x4 points to a V3 context. Its byte at +12 is passed
+            // to the common context helper before scheduling the same callback.
+            case "cmdContextV3":
+                return .init("cmdContextV3", words: "d503237f d101c3ff a9035ff8 a90457f6 a9054ff4 a9067bfd 910183fd b40004a4 aa0403f3 aa0303f4 aa0203f5 aa0103f6 aa0003f7 39403081 94000033 f9404ee0")
+            // PACIBSP; 0xd0-byte frame, save x0...x4; the large gated body
+            // directly calls _performKernelControl at 0x1b21244.
+            case "performCommandGated":
+                return .init("performCommandGated", words: "d503237f d10343ff a9076ffc a90867fa a9095ff8 a90a57f6 a90b4ff4 a90c7bfd 910303fd aa0403f4 aa0303f5 aa0203f8 aa0103f6 aa0003f3 b9006bff f90033ff")
+            // PACIBSP; self-only entry checks the ACM state, then calls the
+            // eight-argument command implementation below.
+            case "performSCRDInitialization":
+                return .init("performSCRDInitialization", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd aa0003f3 b000dd95 394022a8 b0ff5254 91017a94 7100291f 540002a8 39423268 360001a8 f9400270")
+            // PACIBSP; 0x110-byte frame saves x0...x7 and calls both the SEP
+            // buffer writer and the message sender later in the body.
+            case "sendSEPCommand":
+                return .init("sendSEPCommand", words: "d503237f d10443ff 6d0a23e9 a90b6ffc a90c67fa a90d5ff8 a90e57f6 a90f4ff4 a9107bfd 910403fd aa0703fc aa0603f9 aa0503f6 aa0403f5 aa0303f8 f90043e2 aa0103f4 aa0003f3 f81903a4 b000dd88 39402108 7100291f 540002e8 39423268 360001a8 f9400270 aa1303f1 f2f9b431 dac11a30 d2803d11 8b110210 f9400208")
+            // PACIBSP; five-argument message path uses getSEPEndpoint and
+            // follows writeToSEPBuffer in this class's code layout.
+            case "sendSEPMessage":
+                return .init("sendSEPMessage", words: "d503237f d10203ff a90367fa a9045ff8 a90557f6 a9064ff4 a9077bfd 9101c3fd aa0403f7 aa0303f5 aa0203f6 aa0103f4 aa0003f3 f90017ff f000dd79 39402328")
+            // PACIBSP; preserves self and x1 power state. Later in this body,
+            // ADRP/ADD names the setPowerStateGated diagnostic string.
+            case "setPowerStateGated":
+                return .init("setPowerStateGated", words: "d503237f d101c3ff a9035ff8 a90457f6 a9054ff4 a9067bfd 910183fd aa0103f4 aa0003f3 b000dd18 39402308 b0ff51d7 9108eef7 7100a11f 540001c8 39423268 360003a8 97ffd0f1 f2f9b431 dac11a30 d2803d11 8b110210 f9400208 aa1303e0 d2800001 f2e19390 d73f0910 14000013 b5000334 5280ce68 90ff51c9 9130fd29")
+            default:
+                return descriptor
+            }
+        },
+        requiresReferenceOrder: false,
+        preserveBareBTI: true
+    )
+
     /// iOS 27.2 beta 3 `24B5099f`.
     ///
     /// Shape-identical to beta 2, and to beta 1 before it: probing
@@ -503,6 +569,7 @@ enum KernelCredentialManagerSignatures {
         case release24A435V1.id: return release24A435V1
         case release24B5084kV1.id: return release24B5084kV1
         case release24B5089gV1.id: return release24B5089gV1
+        case release23H30V1.id: return release23H30V1
         case release24B5099fV1.id: return release24B5099fV1
         default: return nil
         }

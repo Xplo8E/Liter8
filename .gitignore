@@ -36,3 +36,6 @@ device/coreauthfix/l8coreauth.dylib
 device/remotexpcfix/l8remotepairing.dylib
 # Host-built/downloaded device payloads; always reproduced by fetch_payloads.sh.
 device/payload/
+
+# Private iPad firmware work directory used by the documented runbook.
+.liter8-ipad8-*/

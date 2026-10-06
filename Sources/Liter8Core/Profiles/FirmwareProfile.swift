@@ -47,6 +47,9 @@ public struct KernelResolverProfile: Equatable, Sendable {
     public let boards: [String]
     public let component: String
     public let embeddedFingerprint: String
+    /// The Valeria repair needs a separately validated executable cave.
+    /// iPad 8 has no such evidence; its experimental public plan omits it.
+    public let includesValeriaRepair: Bool
     public let resolverVariants: [String: ResolverVariantProfile]
 
     public init(
@@ -56,7 +59,8 @@ public struct KernelResolverProfile: Equatable, Sendable {
         boards: [String],
         component: String,
         embeddedFingerprint: String,
-        resolverVariants: [String: ResolverVariantProfile]
+        resolverVariants: [String: ResolverVariantProfile],
+        includesValeriaRepair: Bool = true
     ) {
         self.id = id
         self.productVersion = productVersion
@@ -65,6 +69,7 @@ public struct KernelResolverProfile: Equatable, Sendable {
         self.component = component
         self.embeddedFingerprint = embeddedFingerprint
         self.resolverVariants = resolverVariants
+        self.includesValeriaRepair = includesValeriaRepair
     }
 
     /// Whether this profile covers a specific Apple build ID.
@@ -203,6 +208,33 @@ public enum KernelResolverProfileRegistry {
                     payload: "acm-return-success-v1"
                 ),
             ]
+        ),
+        KernelResolverProfile(
+            // Exact 23H30 A12 kernel. Only j171aap has a workflow profile.
+            // ACM has 25 distinct entries; updateAnalytics is not recovered.
+            // The public plan has 118 records. Scoped sandbox and Valeria
+            // caves are unverified. See docs/plans/IPAD8_26_7_1_PORT.md.
+            id: "ios26-23H30-j171aap",
+            productVersion: "26.7.1",
+            builds: ["23H30"],
+            boards: ["j171aap", "j172aap"],
+            component: "kernelcache.release.ipad11b",
+            embeddedFingerprint: "xnu-12377.162.13.700.38~2/RELEASE_ARM64_T8020",
+            resolverVariants: [
+                "kernel-ppl-trust-cache": ResolverVariantProfile(
+                    signature: "t8020-loaded-trust-cache-v1",
+                    payload: "loaded-trust-cache-true-v1"
+                ),
+                // 23H30 has 25 distinct entries in this patch roster. The
+                // previous updateAnalytics locator collides with unlockItem;
+                // no second entry is patched. The workflow profile remains
+                // experimental pending a complete device boot.
+                "kernel-credential-manager": ResolverVariantProfile(
+                    signature: "ios26-23H30-acm-v1",
+                    payload: "acm-return-success-v1"
+                ),
+            ],
+            includesValeriaRepair: false
         ),
     ]
 

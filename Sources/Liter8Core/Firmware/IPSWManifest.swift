@@ -122,14 +122,31 @@ public enum DeviceIBSSAdditionalPlan: String, Codable, Equatable, Sendable {
 /// Normal boot and SSHRD are separate because a future board may need the
 /// display handoff workaround in only one path. An explicit empty array means
 /// that the profile was reviewed and intentionally needs no extra operation.
+public enum DeviceBootTrustCache: String, Codable, Equatable, Sendable {
+    case restore = "RestoreTrustCache"
+    case `static` = "StaticTrustCache"
+}
+
 public struct DeviceBootPlan: Codable, Equatable, Sendable {
+    /// Required semantic components, not a best-effort filter of the manifest.
+    /// Missing firmware must fail before a boot set is built or uploaded.
+    public static let defaultFirmwareComponents = [
+        "RestoreLogo", "ANE", "AOP", "AVE", "Ap,SecurePageTableMonitor",
+        "GFX", "ISP", "PMP", "SIO", "WCHFirmwareUpdater", "SEP",
+    ]
+    public let firmwareComponents: [String]
+    public let normalTrustCache: DeviceBootTrustCache
     public let normalIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan]
     public let restoreIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan]
 
     public init(
         normalIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan],
-        restoreIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan]
+        restoreIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan],
+        firmwareComponents: [String] = DeviceBootPlan.defaultFirmwareComponents,
+        normalTrustCache: DeviceBootTrustCache = .restore
     ) {
+        self.firmwareComponents = firmwareComponents
+        self.normalTrustCache = normalTrustCache
         self.normalIBSSAdditionalPlans = normalIBSSAdditionalPlans
         self.restoreIBSSAdditionalPlans = restoreIBSSAdditionalPlans
     }
@@ -441,6 +458,34 @@ public enum DeviceWorkflowRegistry {
             bootPlan: DeviceBootPlan(
                 normalIBSSAdditionalPlans: [],
                 restoreIBSSAdditionalPlans: []
+            )
+        ),
+        // iPad 8 Wi-Fi, 23H30. Guards measured from 141-38001-023.dmg.
+        // Restore and SSHRD passed in the recorded run; normal boot,
+        // finalization and repeat boot are unverified. Keep experimental.
+        // No n104 display workaround, SPTM/TXM, PMP or WCH on this identity.
+        // See docs/plans/IPAD8_26_7_1_PORT.md and the device runbook.
+        DeviceWorkflowProfile(
+            id: "ipad11,6-j171aap-23H30",
+            productVersion: "26.7.1",
+            build: "23H30",
+            productType: "iPad11,6",
+            deviceClass: "j171aap",
+            chipID: 0x8020,
+            boardID: 0x24,
+            extractedDirectoryName: "iPad11,6_26.7.1_23H30_Restore",
+            validationState: .experimental,
+            launchdSHA256: "1b37dae048542729a622a1a3f4b77ec8829d32e918f0d6a0c0c037f32d9e84b1",
+            launchdCacheSHA256: "af9183685525a0833fea7a16c7a81b3f85e14372ea33d49f3e1ec6ab1a90ca4f",
+            launchdCacheDaemonCount: 672,
+            setupControllerMethodCount: 58,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: [],
+                firmwareComponents: [
+                    "RestoreLogo", "ANE", "AOP", "AVE", "GFX", "ISP", "SIO", "SEP",
+                ],
+                normalTrustCache: .static
             )
         ),
     ]

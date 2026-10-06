@@ -16,6 +16,7 @@ import tempfile
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 
 from apticket import publish_ticket, request_identity, ticket_from_tss_response
 
@@ -30,6 +31,15 @@ EUICC_KEYS = (
     "\t<key>eUICC,RootKeyIdentifier</key>\n\t<data>\n"
     "\tQVhK/T5EfBDbGEdwMfU42u7Qx9M=\n\t</data>\n"
 )
+
+
+class TSSProxyServer(HTTPServer):
+    def server_bind(self) -> None:
+        # HTTPServer normally performs reverse DNS here via getfqdn(). A
+        # numeric loopback listener needs no hostname; macOS DNS stalls must
+        # not delay readiness or make a local restore depend on DNS health.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 def tss_status(response: bytes) -> str | None:
@@ -148,7 +158,7 @@ def main() -> None:
 
     # Port zero asks the kernel for an unused port, avoiding collisions with a
     # forgotten manual proxy while remaining reachable only from this Mac.
-    server = HTTPServer((arguments.bind, arguments.port), TSSProxyHandler)
+    server = TSSProxyServer((arguments.bind, arguments.port), TSSProxyHandler)
     server.ticket_directory = arguments.ticket_directory
     server.profile_id = arguments.profile_id
     port = server.server_address[1]

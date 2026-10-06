@@ -18,6 +18,15 @@ public struct KernelValeriaResolver: Sendable {
 
     public init() {}
 
+    /// Preserve upstream's repair on existing/unknown inputs. Omit it only
+    /// when an exact detected profile explicitly selects the older public plan.
+    static func requiredRecords(in image: BinaryImage) throws -> [PatchRecord] {
+        if KernelResolverProfileRegistry.detect(in: image)?.includesValeriaRepair == false {
+            return []
+        }
+        return try Self().resolve(in: image)
+    }
+
     public func resolve(in image: BinaryImage) throws -> [PatchRecord] {
         let layout = try MachOLayout(image: image)
         let ownerLoad = try Self.classCommandRegistrationOwnerCheck.uniqueMatch(

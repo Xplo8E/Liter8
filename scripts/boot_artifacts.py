@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from liter8_workflow import Context, WorkflowError, run
+from liter8_workflow import Context, DEFAULT_BOOT_FIRMWARE, WorkflowError, run, validate_boot_firmware
 
 
 # Output names are the stable interface consumed by the device boot command.
@@ -23,11 +23,53 @@ PASSTHROUGH_IMG4 = [
     ("GFX", "GFX.img4", "gfxf"),
     ("ISP", "ISP.img4", "ispf"),
     ("PMP", "PMP.img4", "pmpf"),
+    ("StaticTrustCache", "StaticTrustCache.img4", "trst"),
     ("RestoreTrustCache", "RestoreTrustCache.img4", "rtsc"),
     ("SIO", "SIO.img4", "siof"),
     ("WCHFirmwareUpdater", "WCH.img4", "wchf"),
     ("SEP", "SEP.img4", "rsep"),
 ]
+
+def selected_passthrough(
+    components: dict[str, str], mode: str = "restore",
+    firmware_components: tuple[str, ...] = DEFAULT_BOOT_FIRMWARE,
+    normal_trust_cache: str = "RestoreTrustCache",
+) -> list[tuple[str, str, str]]:
+    """BuildManifest supplies paths; the Swift profile supplies required policy."""
+    if mode not in {"normal", "restore"}:
+        raise WorkflowError(f"unknown boot mode: {mode}")
+    if normal_trust_cache not in {"RestoreTrustCache", "StaticTrustCache"}:
+        raise WorkflowError("invalid normal trust cache selection")
+    required = set(validate_boot_firmware(list(firmware_components)))
+    trust_cache = normal_trust_cache if mode == "normal" else "RestoreTrustCache"
+    required.add(trust_cache)
+    # Validate the monitor pair even before checking the other peripherals.
+    has_txm(components, mode, firmware_components)
+    missing = sorted(required - components.keys())
+    if missing:
+        raise WorkflowError(f"BuildManifest is missing required boot firmware: {', '.join(missing)}")
+    return [entry for entry in PASSTHROUGH_IMG4 if entry[0] in required]
+
+
+def has_txm(
+    components: dict[str, str], mode: str,
+    firmware_components: tuple[str, ...] = DEFAULT_BOOT_FIRMWARE,
+) -> bool:
+    """Reject a partial or profile-inconsistent SPTM/TXM chain."""
+    if mode not in {"normal", "restore"}:
+        raise WorkflowError(f"unknown boot mode: {mode}")
+    txm_name = (
+        "Ap,TrustedExecutionMonitor" if mode == "normal"
+        else "Ap,RestoreTrustedExecutionMonitor"
+    )
+    has_sptm = "Ap,SecurePageTableMonitor" in components
+    has_monitor = txm_name in components
+    if has_sptm != has_monitor:
+        raise WorkflowError(f"BuildManifest has an incomplete {mode} SPTM/TXM pair")
+    expects_pair = "Ap,SecurePageTableMonitor" in firmware_components
+    if has_monitor != expects_pair:
+        raise WorkflowError(f"BuildManifest {mode} SPTM/TXM pair disagrees with the boot profile")
+    return has_monitor
 
 
 def ticket_from_environment() -> Path:
@@ -110,6 +152,10 @@ def write_boot_manifest(
 def build_normal_boot() -> None:
     context = Context.load()
     ticket = ticket_from_environment()
+    firmware = selected_passthrough(
+        context.components, "normal", context.boot_firmware_components, context.normal_trust_cache
+    )
+    patch_txm = has_txm(context.components, "normal", context.boot_firmware_components)
 
     # Build beside .liter8 first. A failed resolver or signing step leaves the
     # operator's previous Ramdisk directory intact.
@@ -140,7 +186,7 @@ def build_normal_boot() -> None:
         context.extract_im4p(context.component("iBoot"), staging / "iBoot.raw")
 
         print("[*] normal boot: signing firmware payloads", flush=True)
-        for component, output_name, fourcc in PASSTHROUGH_IMG4:
+        for component, output_name, fourcc in firmware:
             create_img4(
                 context,
                 context.component(component),
@@ -149,11 +195,12 @@ def build_normal_boot() -> None:
                 fourcc=fourcc,
             )
 
-        print("[*] normal boot: patching TXM", flush=True)
-        txm = staging / ".TXM.im4p"
-        shutil.copy2(context.component("Ap,TrustedExecutionMonitor"), txm)
-        context.apply("txm", "boot", txm, record_name="boot-txm")
-        create_img4(context, txm, ticket, staging / "TXM.img4")
+        if patch_txm:
+            print("[*] normal boot: patching TXM", flush=True)
+            txm = staging / ".TXM.im4p"
+            shutil.copy2(context.component("Ap,TrustedExecutionMonitor"), txm)
+            context.apply("txm", "boot", txm, record_name="boot-txm")
+            create_img4(context, txm, ticket, staging / "TXM.img4")
 
         print("[*] normal boot: patching DeviceTree", flush=True)
         devicetree = staging / ".DeviceTree.im4p"
@@ -188,6 +235,10 @@ def build_restore_boot() -> None:
     """Build the ticketed SSH restore-ramdisk artifact set."""
     context = Context.load()
     ticket = ticket_from_environment()
+    firmware = selected_passthrough(
+        context.components, "restore", context.boot_firmware_components, context.normal_trust_cache
+    )
+    patch_txm = has_txm(context.components, "restore", context.boot_firmware_components)
 
     with tempfile.TemporaryDirectory(prefix="rd-staging-", dir=context.state) as directory:
         staging = Path(directory)
@@ -212,7 +263,7 @@ def build_restore_boot() -> None:
         create_img4(context, ibec_im4p, ticket, staging / "iBEC.img4")
 
         print("[*] SSHRD: signing firmware payloads", flush=True)
-        for component, output_name, fourcc in PASSTHROUGH_IMG4:
+        for component, output_name, fourcc in firmware:
             create_img4(
                 context,
                 context.component(component),
@@ -221,11 +272,12 @@ def build_restore_boot() -> None:
                 fourcc=fourcc,
             )
 
-        print("[*] SSHRD: patching TXM", flush=True)
-        txm = staging / ".TXM.im4p"
-        shutil.copy2(context.component("Ap,RestoreTrustedExecutionMonitor"), txm)
-        context.apply("txm", "restore", txm, record_name="rd-txm")
-        create_img4(context, txm, ticket, staging / "TXM.img4")
+        if patch_txm:
+            print("[*] SSHRD: patching TXM", flush=True)
+            txm = staging / ".TXM.im4p"
+            shutil.copy2(context.component("Ap,RestoreTrustedExecutionMonitor"), txm)
+            context.apply("txm", "restore", txm, record_name="rd-txm")
+            create_img4(context, txm, ticket, staging / "TXM.img4")
 
         print("[*] SSHRD: patching DeviceTree", flush=True)
         devicetree = staging / ".DeviceTree.im4p"

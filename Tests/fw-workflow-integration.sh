@@ -107,11 +107,16 @@ assert Path(os.environ["LITER8_RESOURCE_DIR"]).resolve() == Path(__file__).resol
 context = Path(os.environ["LITER8_CONTEXT"])
 assert context.resolve() == (Path.cwd() / "context.json").resolve()
 document = __import__("json").loads(context.read_text())
-assert document["schema"] == 2
+assert document["schema"] == 3
 assert document["components"]["iBSS"] == "Firmware/dfu/iBSS.test.im4p"
 assert document["bootPlan"] == {
     "normalIBSSAdditionalPlans": ["ibss-skip-display-init"],
     "restoreIBSSAdditionalPlans": ["ibss-skip-display-init"],
+    "firmwareComponents": [
+        "RestoreLogo", "ANE", "AOP", "AVE", "Ap,SecurePageTableMonitor",
+        "GFX", "ISP", "PMP", "SIO", "WCHFirmwareUpdater", "SEP",
+    ],
+    "normalTrustCache": "RestoreTrustCache",
 }
 ''')
 PY

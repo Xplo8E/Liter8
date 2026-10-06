@@ -6,7 +6,7 @@ import Foundation
 /// `RestoreKernelCache`; it never guesses board-specific filenames. Binary
 /// signatures and replacement instructions remain exclusively in Swift.
 public struct FirmwareWorkflowContext: Codable, Equatable, Sendable {
-    public static let schemaVersion = 2
+    public static let schemaVersion = 3
 
     public let schema: Int
     public let profileID: String

@@ -20,14 +20,20 @@ from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
-from liter8_workflow import Context, WorkflowError, run  # noqa: E402
+from liter8_workflow import Context, DEFAULT_BOOT_FIRMWARE, WorkflowError, run  # noqa: E402
 import measure_guards  # noqa: E402
 from boot_artifacts import (  # noqa: E402
+    PASSTHROUGH_IMG4,
+    has_txm,
     publish_directory,
     ticket_from_environment,
     write_boot_manifest,
 )
-from device_boot import FIRMWARE_SEQUENCE, boot as boot_device, validate_boot_set  # noqa: E402
+from device_boot import (  # noqa: E402
+    boot as boot_device,
+    selected_firmware_sequence,
+    validate_boot_set,
+)
 from device_provision import (  # noqa: E402
     BOOTSTRAP_SHA256,
     SSHRD_PAYLOAD_SHA256,
@@ -37,7 +43,7 @@ from device_provision import (  # noqa: E402
 import sshrd  # noqa: E402
 from sshrd import REVIEWED_PAYLOAD_SHA256, build_sshrd, sha256_file  # noqa: E402
 from restore_cfw import managed_tss_proxy, restore_log_path, stage  # noqa: E402
-from tss_proxy import inject_euicc  # noqa: E402
+from tss_proxy import TSSProxyHandler, TSSProxyServer, inject_euicc  # noqa: E402
 from apticket import (  # noqa: E402
     capture_from_debug_log,
     ticket_from_tss_response,
@@ -212,6 +218,34 @@ class WatchdogdJobPatchTests(unittest.TestCase):
         with self.assertRaisesRegex(JobShapeError, "ProgramArguments"):
             apply_mitigation(document)
 
+from apfs_role import volume_for_role  # noqa: E402
+
+
+IPAD_BOOT_FIRMWARE = tuple(name for name in DEFAULT_BOOT_FIRMWARE
+                           if name not in {"Ap,SecurePageTableMonitor", "PMP", "WCHFirmwareUpdater"})
+
+
+class APFSRoleTests(unittest.TestCase):
+    def test_preboot_is_selected_by_role_instead_of_partition_number(self):
+        registry = '''+-o Preboot@5 <class AppleAPFSVolume, id 1>
+          "Role" = ("Preboot")
+          "BSD Name" = "disk1s5"
+        +-o Update@6 <class AppleAPFSVolume, id 2>
+          "Role" = ("Update")
+          "BSD Name" = "disk1s6"
+        '''
+        self.assertEqual(volume_for_role(registry, 'Preboot'), '/dev/disk1s5')
+        self.assertEqual(volume_for_role(registry.replace('"Role"', '\x1b[0;31m"Role"'), 'Preboot'), '/dev/disk1s5')
+
+    def test_missing_or_ambiguous_role_is_rejected(self):
+        volume = '''+-o Preboot@5 <class AppleAPFSVolume, id 1>
+          "Role" = ("Preboot")
+          "BSD Name" = "disk1s5"
+        '''
+        for registry in ('', volume + volume, volume.replace('disk1s5', 'disk1s5;reboot')):
+            with self.assertRaises(ValueError):
+                volume_for_role(registry, 'Preboot')
+
 
 class ContextTests(unittest.TestCase):
     def setUp(self):
@@ -227,11 +261,13 @@ class ContextTests(unittest.TestCase):
         self.liter8.touch()
         self.context_file = self.work / "context.json"
         self.context_file.write_text(json.dumps({
-            "schema": 2,
+            "schema": 3,
             "profileID": "fixture-profile",
             "sourceRoot": str(self.source),
             "components": {"iBSS": "Firmware/dfu/iBSS.im4p"},
             "bootPlan": {
+                "firmwareComponents": list(DEFAULT_BOOT_FIRMWARE),
+                "normalTrustCache": "RestoreTrustCache",
                 "normalIBSSAdditionalPlans": ["ibss-skip-display-init"],
                 "restoreIBSSAdditionalPlans": ["ibss-skip-display-init"],
             },
@@ -292,6 +328,24 @@ class ContextTests(unittest.TestCase):
         finally:
             os.chdir(previous)
 
+    def test_rejects_stale_or_malformed_boot_firmware_policy(self):
+        original = json.loads(self.context_file.read_text())
+        invalid = [None, [], ["RestoreLogo", "SEP", "unknown"],
+                   ["RestoreLogo", "SEP", "SEP"], ["RestoreLogo", 1]]
+        for value in invalid:
+            document = copy.deepcopy(original)
+            document["bootPlan"]["firmwareComponents"] = value
+            self.context_file.write_text(json.dumps(document))
+            with self.subTest(value=value), patch.dict(os.environ, self.environment, clear=True):
+                with self.assertRaises(WorkflowError):
+                    Context.load()
+        document = copy.deepcopy(original)
+        document["schema"] = 2
+        self.context_file.write_text(json.dumps(document))
+        with patch.dict(os.environ, self.environment, clear=True):
+            with self.assertRaisesRegex(WorkflowError, "unsupported Liter8 context schema"):
+                Context.load()
+
     def test_rejects_context_path_that_escapes_firmware_tree(self):
         document = json.loads(self.context_file.read_text())
         document["components"]["iBSS"] = "../outside.im4p"
@@ -327,6 +381,7 @@ class ContextTests(unittest.TestCase):
         finally:
             os.chdir(previous)
 
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS APFS clone support")
     def test_cfw_uses_an_atomic_writable_clone(self):
         """A CFW tree must not require a second physical 10-GB copy."""
         source_file = self.source / "large-firmware-image"
@@ -613,6 +668,12 @@ class ContextTests(unittest.TestCase):
         self.assertFalse((self.work / "tss-proxy.pid").exists())
         with self.assertRaises(ProcessLookupError):
             os.kill(pid, 0)
+
+    def test_loopback_tss_startup_does_not_depend_on_reverse_dns(self):
+        with patch("socket.getfqdn", side_effect=AssertionError("unexpected DNS lookup")):
+            with TSSProxyServer(("127.0.0.1", 0), TSSProxyHandler) as server:
+                self.assertEqual(server.server_name, "127.0.0.1")
+                self.assertGreater(server.server_port, 0)
 
     def test_restore_log_paths_are_durable_and_stage_output_is_visible(self):
         context = Context(
@@ -1036,6 +1097,81 @@ class ContextTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkflowError, "changed after generation"):
             validate_boot_set(fixture_context, "restore")
 
+    def test_ipad_boot_sequence_uses_erase_identity_components(self):
+        # The 23H30 j171aap erase identity has these keys and no SPTM/TXM,
+        # PMP, or WCH. The boot set must be buildable without those artifacts.
+        components = {
+            name: f"Firmware/{name}.im4p" for name in (
+                "RestoreLogo", "ANE", "AOP", "AVE", "GFX", "ISP",
+                "RestoreTrustCache", "SIO", "SEP",
+            )
+        }
+        fixture_context = self.make_boot_set("restore", components, firmware_components=IPAD_BOOT_FIRMWARE)
+        sequence = selected_firmware_sequence(components, "restore", IPAD_BOOT_FIRMWARE)
+        self.assertEqual(
+            [name for name, _, _ in sequence],
+            ["RestoreLogo.img4", "ANE.img4", "AOP.img4", "AVE.img4",
+             "GFX.img4", "ISP.img4", "RestoreTrustCache.img4", "SIO.img4"],
+        )
+        self.assertEqual(validate_boot_set(fixture_context, "restore"), self.work / "Ramdisk")
+        self.assertFalse(has_txm(components, "restore", IPAD_BOOT_FIRMWARE))
+
+    def test_ipad_normal_boot_uses_static_trust_cache(self):
+        components = {
+            name: f"Firmware/{name}.im4p" for name in (
+                "RestoreLogo", "ANE", "AOP", "AVE", "GFX", "ISP",
+                "StaticTrustCache", "RestoreTrustCache", "SIO", "SEP",
+            )
+        }
+        firmware = IPAD_BOOT_FIRMWARE
+        normal = [name for name, _, _ in selected_firmware_sequence(components, "normal", firmware, "StaticTrustCache")]
+        restore = [name for name, _, _ in selected_firmware_sequence(components, "restore", firmware, "StaticTrustCache")]
+        self.assertIn("StaticTrustCache.img4", normal)
+        self.assertNotIn("RestoreTrustCache.img4", normal)
+        self.assertIn("RestoreTrustCache.img4", restore)
+        self.assertNotIn("StaticTrustCache.img4", restore)
+
+    def test_rejects_partial_sptm_txm_boot_chain(self):
+        components = {name: name for name, _, _ in PASSTHROUGH_IMG4}
+        del components["Ap,SecurePageTableMonitor"]
+        components["Ap,RestoreTrustedExecutionMonitor"] = "txm.im4p"
+        with self.assertRaisesRegex(WorkflowError, "incomplete restore SPTM/TXM pair"):
+            selected_firmware_sequence(components, "restore", IPAD_BOOT_FIRMWARE)
+
+    def test_iphone_boot_preserves_the_complete_firmware_order(self):
+        components = {name: name for name, _, _ in PASSTHROUGH_IMG4}
+        components["Ap,RestoreTrustedExecutionMonitor"] = "txm.im4p"
+        sequence = selected_firmware_sequence(components, "restore")
+        self.assertEqual([name for name, _, _ in sequence], [
+            "RestoreLogo.img4", "ANE.img4", "AOP.img4", "AVE.img4", "SPTM.img4",
+            "TXM.img4", "GFX.img4", "ISP.img4", "PMP.img4", "RestoreTrustCache.img4",
+            "SIO.img4", "WCH.img4",
+        ])
+
+    def test_missing_iphone_peripheral_is_not_silently_omitted(self):
+        for missing in DEFAULT_BOOT_FIRMWARE:
+            components = {name: name for name, _, _ in PASSTHROUGH_IMG4}
+            components["Ap,RestoreTrustedExecutionMonitor"] = "txm.im4p"
+            del components[missing]
+            with self.subTest(component=missing), self.assertRaises(WorkflowError):
+                selected_firmware_sequence(components, "restore")
+
+    def test_absent_monitor_pair_requires_explicit_profile_policy(self):
+        components = {name: name for name in IPAD_BOOT_FIRMWARE}
+        components["RestoreTrustCache"] = "cache.im4p"
+        with self.assertRaisesRegex(WorkflowError, "disagrees with the boot profile"):
+            selected_firmware_sequence(components, "restore")
+
+    def test_missing_static_cache_is_not_replaced_by_restore_cache(self):
+        components = {name: name for name in IPAD_BOOT_FIRMWARE}
+        components["RestoreTrustCache"] = "cache.im4p"
+        with self.assertRaisesRegex(WorkflowError, "StaticTrustCache"):
+            selected_firmware_sequence(components, "normal", IPAD_BOOT_FIRMWARE, "StaticTrustCache")
+
+    def test_unknown_boot_mode_fails_before_upload(self):
+        with self.assertRaisesRegex(WorkflowError, "unknown boot mode"):
+            selected_firmware_sequence({}, "unknown")
+
     def test_normal_boot_manifest_records_the_public_kernel_plan(self):
         fixture_context = self.make_boot_set("normal", kernel_plan="boot-public")
         manifest = json.loads((self.work / "Ramdisk/liter8-boot.json").read_text())
@@ -1066,12 +1202,19 @@ class ContextTests(unittest.TestCase):
             ["/custom/irecovery", "-c", "bootx"],
         )
 
-    def make_boot_set(self, mode, *, kernel_plan=None):
+    def make_boot_set(self, mode, components=None, *, kernel_plan=None,
+                      firmware_components=DEFAULT_BOOT_FIRMWARE, normal_trust_cache="RestoreTrustCache"):
         staging = self.work / "boot-staging"
         staging.mkdir()
+        if components is None:
+            components = {name: name for name, _, _ in PASSTHROUGH_IMG4}
+            components[
+                "Ap,TrustedExecutionMonitor" if mode == "normal"
+                else "Ap,RestoreTrustedExecutionMonitor"
+            ] = "txm.im4p"
         names = {
             "iBSS.raw", "iBEC.img4", "DeviceTree.img4", "SEP.img4", "Kernelcache.img4",
-            *(name for name, _, _ in FIRMWARE_SEQUENCE),
+            *(name for name, _, _ in selected_firmware_sequence(components, mode, firmware_components, normal_trust_cache)),
         }
         if mode == "restore":
             names.add("RestoreRamdisk.img4")
@@ -1083,6 +1226,9 @@ class ContextTests(unittest.TestCase):
         fixture_context = type("FixtureContext", (), {
             "profile_id": "fixture-profile",
             "work": self.work,
+            "components": components,
+            "boot_firmware_components": firmware_components,
+            "normal_trust_cache": normal_trust_cache,
         })()
         write_boot_manifest(fixture_context, staging, mode, kernel_plan=kernel_plan)
         publish_directory(staging, self.work / "Ramdisk")

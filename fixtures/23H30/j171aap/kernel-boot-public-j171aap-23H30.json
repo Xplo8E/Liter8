@@ -1,0 +1,722 @@
+{
+  "expectedOutputSHA256" : "51a2a3d89f315224137c462bc94cfb8c8502b3680c208216227ea97486d45580",
+  "expectedPatches" : [
+    {
+      "id" : "kernel.identity.0",
+      "offset" : 256351,
+      "originalBytes" : "2f52454c454153455f41524d36345f5438303230",
+      "replacementBytes" : "2f504154434845445f41524d36345f5438303230"
+    },
+    {
+      "id" : "kernel.identity.1",
+      "offset" : 256462,
+      "originalBytes" : "2f52454c454153455f41524d36345f5438303230",
+      "replacementBytes" : "2f504154434845445f41524d36345f5438303230"
+    },
+    {
+      "id" : "kernel.panic.root-snapshot",
+      "offset" : 42562688,
+      "originalBytes" : "28062837",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.panic.seal-broken",
+      "offset" : 41973228,
+      "originalBytes" : "60017037",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.panic.rootvp-authentication",
+      "offset" : 49037204,
+      "originalBytes" : "e0120035",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.panic.unencrypted-data-volume",
+      "offset" : 42567752,
+      "originalBytes" : "a8000037",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.amfi.trust-cache.0",
+      "offset" : 27022548,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "5f2403d5"
+    },
+    {
+      "id" : "kernel.amfi.trust-cache.1",
+      "offset" : 27022552,
+      "originalBytes" : "ffc300d1",
+      "replacementBytes" : "200080d2"
+    },
+    {
+      "id" : "kernel.amfi.trust-cache.2",
+      "offset" : 27022556,
+      "originalBytes" : "f44f01a9",
+      "replacementBytes" : "420000b4"
+    },
+    {
+      "id" : "kernel.amfi.trust-cache.3",
+      "offset" : 27022560,
+      "originalBytes" : "fd7b02a9",
+      "replacementBytes" : "400000f9"
+    },
+    {
+      "id" : "kernel.amfi.trust-cache.4",
+      "offset" : 27022564,
+      "originalBytes" : "fd830091",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.amfi.launch-constraints.result",
+      "offset" : 27041832,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.amfi.launch-constraints.return",
+      "offset" : 27041836,
+      "originalBytes" : "ff0306d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.debugger.result",
+      "offset" : 52402324,
+      "originalBytes" : "28c7feb0",
+      "replacementBytes" : "200080d2"
+    },
+    {
+      "id" : "kernel.debugger.return",
+      "offset" : 52402328,
+      "originalBytes" : "e00000b4",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.amfi.developer-mode.result",
+      "offset" : 49601276,
+      "originalBytes" : "e8d9fe90",
+      "replacementBytes" : "20008052"
+    },
+    {
+      "id" : "kernel.amfi.developer-mode.return",
+      "offset" : 49601280,
+      "originalBytes" : "08a946f9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.amfi.post-validation.compare",
+      "offset" : 27072428,
+      "originalBytes" : "1f080071",
+      "replacementBytes" : "1f00006b"
+    },
+    {
+      "id" : "kernel.amfi.dyld-policy.0",
+      "offset" : 27075088,
+      "originalBytes" : "3bee5594",
+      "replacementBytes" : "20008052"
+    },
+    {
+      "id" : "kernel.amfi.dyld-policy.1",
+      "offset" : 27075100,
+      "originalBytes" : "e5deff97",
+      "replacementBytes" : "20008052"
+    },
+    {
+      "id" : "kernel.ppl.loaded-trust-cache-result",
+      "offset" : 52746852,
+      "originalBytes" : "e0179f1a",
+      "replacementBytes" : "20008052"
+    },
+    {
+      "id" : "kernel.persona.uid-zero",
+      "offset" : 49264724,
+      "originalBytes" : "e8000034",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.persona.gid-zero",
+      "offset" : 49264732,
+      "originalBytes" : "a8000034",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.usb.restore-mode-result",
+      "offset" : 35102004,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "200080d2"
+    },
+    {
+      "id" : "kernel.usb.restore-mode-return",
+      "offset" : 35102008,
+      "originalBytes" : "ff4301d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.aks.start.sep-call",
+      "offset" : 28589972,
+      "originalBytes" : "10093fd7",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.0",
+      "offset" : 28633344,
+      "originalBytes" : "ff8306d1",
+      "replacementBytes" : "3f1c0071"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.1",
+      "offset" : 28633348,
+      "originalBytes" : "fc6f14a9",
+      "replacementBytes" : "c1010054"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.2",
+      "offset" : 28633352,
+      "originalBytes" : "fa6715a9",
+      "replacementBytes" : "e20100b4"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.3",
+      "offset" : 28633356,
+      "originalBytes" : "f85f16a9",
+      "replacementBytes" : "481040f9"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.4",
+      "offset" : 28633360,
+      "originalBytes" : "f65717a9",
+      "replacementBytes" : "a80100b4"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.5",
+      "offset" : 28633364,
+      "originalBytes" : "f44f18a9",
+      "replacementBytes" : "482840b9"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.6",
+      "offset" : 28633368,
+      "originalBytes" : "fd7b19a9",
+      "replacementBytes" : "1f050071"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.7",
+      "offset" : 28633372,
+      "originalBytes" : "fd430691",
+      "replacementBytes" : "41010054"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.8",
+      "offset" : 28633376,
+      "originalBytes" : "f50302aa",
+      "replacementBytes" : "492440f9"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.9",
+      "offset" : 28633380,
+      "originalBytes" : "f40301aa",
+      "replacementBytes" : "090100b4"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.10",
+      "offset" : 28633384,
+      "originalBytes" : "f60300aa",
+      "replacementBytes" : "485040b9"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.11",
+      "offset" : 28633388,
+      "originalBytes" : "b70302d1",
+      "replacementBytes" : "1f050071"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.12",
+      "offset" : 28633392,
+      "originalBytes" : "888cffd0",
+      "replacementBytes" : "a1000054"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.13",
+      "offset" : 28633396,
+      "originalBytes" : "08f940f9",
+      "replacementBytes" : "c80080d2"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.14",
+      "offset" : 28633400,
+      "originalBytes" : "080140f9",
+      "replacementBytes" : "280100f9"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.15",
+      "offset" : 28633404,
+      "originalBytes" : "a88319f8",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.16",
+      "offset" : 28633408,
+      "originalBytes" : "b8168052",
+      "replacementBytes" : "ff0f5fd6"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.17",
+      "offset" : 28633412,
+      "originalBytes" : "1845b072",
+      "replacementBytes" : "40588052"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.18",
+      "offset" : 28633416,
+      "originalBytes" : "ff3f0239",
+      "replacementBytes" : "0000bc72"
+    },
+    {
+      "id" : "kernel.aks.external-method.selector7.19",
+      "offset" : 28633420,
+      "originalBytes" : "998cffd0",
+      "replacementBytes" : "ff0f5fd6"
+    },
+    {
+      "id" : "kernel.aks.external-method.log-call",
+      "offset" : 28633908,
+      "originalBytes" : "295e5694",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.sep.panic-check.result",
+      "offset" : 28925112,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sep.panic-check.return",
+      "offset" : 28925116,
+      "originalBytes" : "f44fbea9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sep.did-timeout.result",
+      "offset" : 28911080,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sep.did-timeout.return",
+      "offset" : 28911084,
+      "originalBytes" : "ffc300d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sep.power-notification.result",
+      "offset" : 28913476,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sep.power-notification.return",
+      "offset" : 28913480,
+      "originalBytes" : "ff0305d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sep.set-power-a",
+      "offset" : 28928828,
+      "originalBytes" : "801200b4",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.sep.notify-active",
+      "offset" : 28924688,
+      "originalBytes" : "200d00b4",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.sep.set-power-b",
+      "offset" : 28928876,
+      "originalBytes" : "201100b4",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.sep.prng-reseed",
+      "offset" : 28930292,
+      "originalBytes" : "80010054",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.credential-manager.sepmanagermatchedthreadcallhandler.result",
+      "offset" : 28442400,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.sepmanagermatchedthreadcallhandler.return",
+      "offset" : 28442404,
+      "originalBytes" : "ff0301d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.callplatformfunction.result",
+      "offset" : 28443560,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.callplatformfunction.return",
+      "offset" : 28443564,
+      "originalBytes" : "ff8301d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.cmdcontextv2.result",
+      "offset" : 28444036,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.cmdcontextv2.return",
+      "offset" : 28444040,
+      "originalBytes" : "ffc301d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.cmdcontextv3.result",
+      "offset" : 28444268,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.cmdcontextv3.return",
+      "offset" : 28444272,
+      "originalBytes" : "ffc301d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.performcommandgated.result",
+      "offset" : 28444800,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.performcommandgated.return",
+      "offset" : 28444804,
+      "originalBytes" : "ff4303d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.performkernelcontrol.result",
+      "offset" : 28447300,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.performkernelcontrol.return",
+      "offset" : 28447304,
+      "originalBytes" : "ff4302d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.performcommand.result",
+      "offset" : 28448248,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.performcommand.return",
+      "offset" : 28448252,
+      "originalBytes" : "ffc302d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.processscrdresponsepayload.result",
+      "offset" : 28448800,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.processscrdresponsepayload.return",
+      "offset" : 28448804,
+      "originalBytes" : "ff8301d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.scheduledblclickdeferredack.result",
+      "offset" : 28449420,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.scheduledblclickdeferredack.return",
+      "offset" : 28449424,
+      "originalBytes" : "ff4301d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.performscrdinitialization.result",
+      "offset" : 28449708,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.performscrdinitialization.return",
+      "offset" : 28449712,
+      "originalBytes" : "ff8301d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.sendsepcommand.result",
+      "offset" : 28450224,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.sendsepcommand.return",
+      "offset" : 28450228,
+      "originalBytes" : "ff4304d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.setpropertiesgated.result",
+      "offset" : 28452584,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.setpropertiesgated.return",
+      "offset" : 28452588,
+      "originalBytes" : "ff0302d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.performdoubleclickquerygated.result",
+      "offset" : 28453744,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.performdoubleclickquerygated.return",
+      "offset" : 28453748,
+      "originalBytes" : "ff4301d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.performlogginglevelquerygated.result",
+      "offset" : 28453988,
+      "originalBytes" : "c10000b4",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.performlogginglevelquerygated.return",
+      "offset" : 28453992,
+      "originalBytes" : "00008052",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.lockitem.result",
+      "offset" : 28454444,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.lockitem.return",
+      "offset" : 28454448,
+      "originalBytes" : "ffc301d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.unlockitem.result",
+      "offset" : 28455000,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.unlockitem.return",
+      "offset" : 28455004,
+      "originalBytes" : "ff8301d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.handlesepmessage.result",
+      "offset" : 28456204,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.handlesepmessage.return",
+      "offset" : 28456208,
+      "originalBytes" : "ff0302d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.readfromsepbuffer.result",
+      "offset" : 28456948,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.readfromsepbuffer.return",
+      "offset" : 28456952,
+      "originalBytes" : "ff8301d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.writetosepbuffer.result",
+      "offset" : 28457300,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.writetosepbuffer.return",
+      "offset" : 28457304,
+      "originalBytes" : "ff4302d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.sendsepmessage.result",
+      "offset" : 28458236,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.sendsepmessage.return",
+      "offset" : 28458240,
+      "originalBytes" : "ff0302d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.clearsepbuffer.result",
+      "offset" : 28458804,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.clearsepbuffer.return",
+      "offset" : 28458808,
+      "originalBytes" : "ff8301d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.getsependpoint.result",
+      "offset" : 28459216,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.getsependpoint.return",
+      "offset" : 28459220,
+      "originalBytes" : "ff4302d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.poweroffactiongated.result",
+      "offset" : 28462352,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.poweroffactiongated.return",
+      "offset" : 28462356,
+      "originalBytes" : "ff0302d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.sepmanagermatchedgated.result",
+      "offset" : 28463044,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.sepmanagermatchedgated.return",
+      "offset" : 28463048,
+      "originalBytes" : "ff0302d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.credential-manager.setpowerstategated.result",
+      "offset" : 28512756,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "00008052"
+    },
+    {
+      "id" : "kernel.credential-manager.setpowerstategated.return",
+      "offset" : 28512760,
+      "originalBytes" : "ffc301d1",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-exec.target",
+      "offset" : 15491904,
+      "originalBytes" : "ccdf7d02",
+      "replacementBytes" : "242e7d02"
+    },
+    {
+      "id" : "kernel.sandbox.file-check-mmap.result",
+      "offset" : 41758244,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sandbox.file-check-mmap.return",
+      "offset" : 41758248,
+      "originalBytes" : "fc6fbda9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-mount.result",
+      "offset" : 41751628,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-mount.return",
+      "offset" : 41751632,
+      "originalBytes" : "fc6fbda9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-remount.result",
+      "offset" : 41751188,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-remount.return",
+      "offset" : 41751192,
+      "originalBytes" : "fc6fbca9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-unmount.result",
+      "offset" : 41750784,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-unmount.return",
+      "offset" : 41750788,
+      "originalBytes" : "fc6fbca9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-rename.result",
+      "offset" : 41728664,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-rename.return",
+      "offset" : 41728668,
+      "originalBytes" : "e923b96d",
+      "replacementBytes" : "c0035fd6"
+    }
+  ],
+  "expectedSize" : 59031552,
+  "resolver" : "kernel-boot-compatibility",
+  "sha256" : "eee662eba10dc9302a8999677361adf12ce86a61078ed387181ab9a183c334be",
+  "target" : {
+    "board" : "j171aap",
+    "build" : "23H30",
+    "component" : "kernelcache",
+    "device" : "iPad 8 (Wi-Fi)"
+  }
+}

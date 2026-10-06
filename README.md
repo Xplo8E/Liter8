@@ -41,6 +41,12 @@ PRs welcome on any of these, especially SEP. The Pro and Pro Max are open too, i
 
 "Run" means i did an erase restore, booted it normally, then rebooted and it came back up. "Experimental" means unverified. It resolves and you can use it with `--experimental`, but nobody has confirmed it on that phone. If you own one and are willing to try, share what happens and i'll change the tag.
 
+An experimental iPad 8 Wi-Fi (`iPad11,6`, `j171aap`) profile exists for
+**iPadOS 26.7.1 / 23H30**. Prior run notes report CFW restore and SSHRD SSH;
+normal iPadOS boot and finalization remain unverified. Every stage requires
+`--experimental`. See the [port note](docs/plans/IPAD8_26_7_1_PORT.md) and
+[runbook](docs/runs/IPAD8_J171AAP_23H30_RUNBOOK.md).
+
 There's a catch with that table though. `fw restore-cfw` pulls a fresh APTicket from Apple while the restore is happening, so once Apple drops signing for a build you can't install it anymore. The row stays in the table because i did test it, but that doesn't mean you can still use it today. Check signing first.
 
 Anything not in the table fails before it even gets extracted. The profiles don't carry offsets either, so adding a build isn't a matter of pasting numbers in. The resolvers work them out at runtime.

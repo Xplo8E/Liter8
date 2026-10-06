@@ -322,6 +322,18 @@ public struct KernelSandboxResolver: Sendable {
     }
 }
 
+/// The production boot-public plan uses the established MACF stubs without
+/// the later scoped vnode-open shim. Expose that exact subset for independent
+/// fixture generation and diagnosis on a new kernel build.
+public struct KernelSandboxCompatibilityResolver: Sendable {
+    public static let name = "kernel-sandbox-compatibility"
+    public init() {}
+
+    public func resolve(in image: BinaryImage) throws -> [PatchRecord] {
+        try KernelSandboxResolver(includeScopedVnodeOpen: false).resolve(in: image)
+    }
+}
+
 // MARK: - Stable instruction shapes and position-independent shim body
 
 private extension KernelSandboxResolver {

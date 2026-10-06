@@ -120,6 +120,16 @@ public struct MobileActivationDResolver: Sendable {
             )
         }
 
+        if candidate.kind == .dictionaryFallback {
+            return try resolveDictionaryFallback(
+                in: image,
+                metadata: metadata,
+                method: method,
+                candidate: candidate,
+                activatedObject: activatedObject
+            )
+        }
+
         guard let adrpAddress = metadata.layout.virtualAddress(
             forFileOffset: candidate.load
         ), let replacementADRP = ARM64.encodeADRP(
@@ -182,29 +192,137 @@ public struct MobileActivationDResolver: Sendable {
         ]
     }
 
+    /// On 23H30, the migration fallback creates a one-entry NSDictionary:
+    /// it loads the activation-state key, then the value, and passes both
+    /// stack slots to dictionaryWithObjects:forKeys:count:. Route every call
+    /// through that existing block and replace only its value load.
+    private func resolveDictionaryFallback(
+        in image: BinaryImage,
+        metadata: ObjCMetadata,
+        method: ObjCMethod,
+        candidate: StateLoadCandidate,
+        activatedObject: (offset: UInt64, address: UInt64)
+    ) throws -> [PatchRecord] {
+        guard let gateAddress = metadata.layout.virtualAddress(forFileOffset: candidate.gate),
+              let fallbackAddress = metadata.layout.virtualAddress(forFileOffset: candidate.fallback),
+              let loadAddress = metadata.layout.virtualAddress(forFileOffset: candidate.load),
+              let branch = ARM64.encodeDirectBranch(
+                link: false,
+                instructionOffset: gateAddress,
+                target: fallbackAddress
+              ),
+              let adrp = ARM64.encodeADRP(
+                register: 8,
+                instructionOffset: loadAddress,
+                target: activatedObject.address
+              ),
+              let add = ARM64.encodeAddImmediate(
+                destination: 8,
+                source: 8,
+                immediate: UInt32(activatedObject.address & 0xFFF)
+              ) else {
+            throw PatchfinderError.invalidPatch(
+                id: "\(Self.name).activation-state",
+                reason: "23H30 fallback branch or Activated CFString is not encodable"
+            )
+        }
+        let evidence = [
+            "unique getActivationStateWithCompletionBlock: implementation at \(method.implementationOffset.hex)",
+            "TBZ migration gate targets a one-entry dictionary fallback",
+            "key and value loads occupy distinct stack slots",
+            "unique Activated CFString object at \(activatedObject.offset.hex)",
+        ]
+        return [
+            PatchRecord(
+                id: "mobileactivationd.activation-state.migration-gate",
+                component: "mobileactivationd",
+                offset: candidate.gate,
+                original: try image.readUInt32(at: candidate.gate),
+                replacement: branch,
+                summary: "Route activation-state reporting through the dictionary fallback",
+                evidence: evidence
+            ),
+            PatchRecord(
+                id: "mobileactivationd.activation-state.adrp",
+                component: "mobileactivationd",
+                offset: candidate.load,
+                original: try image.readUInt32(at: candidate.load),
+                replacement: adrp,
+                summary: "Load the page containing the Activated CFString",
+                evidence: evidence
+            ),
+            PatchRecord(
+                id: "mobileactivationd.activation-state.add",
+                component: "mobileactivationd",
+                offset: candidate.load + 4,
+                original: try image.readUInt32(at: candidate.load + 4),
+                replacement: add,
+                summary: "Materialize the Activated CFString address in X8",
+                evidence: evidence
+            ),
+            PatchRecord(
+                id: "mobileactivationd.activation-state.dereference",
+                component: "mobileactivationd",
+                offset: candidate.load + 8,
+                original: try image.readUInt32(at: candidate.load + 8),
+                replacement: ARM64.nop,
+                summary: "Store the Activated object instead of loading a default state",
+                evidence: evidence
+            ),
+        ]
+    }
+
     private func findStateLoadCandidates(
         in image: BinaryImage,
         methodOffset: UInt64
-    ) throws -> [(gate: UInt64, load: UInt64)] {
-        var matches: [(UInt64, UInt64)] = []
+    ) throws -> [StateLoadCandidate] {
+        var matches: [StateLoadCandidate] = []
         let end = min(UInt64(image.count), methodOffset + 0x300)
         var gate = methodOffset
-        while gate + 0x6C <= end {
+        while gate + 4 <= end {
             let branch = try image.readUInt32(at: gate)
-            let loadOffset = gate + 0x60
-            let adrp = try image.readUInt32(at: loadOffset)
-            let add = try image.readUInt32(at: loadOffset + 4)
-            let load = try image.readUInt32(at: loadOffset + 8)
-
-            guard branch & 0xFFF8_001F == 0x3600_0016, // TBZ W22,#0,<target>
-                  adrp & 0x9F00_001F == 0x9000_0008,   // ADRP X8,<page>
-                  add & 0xFFC0_03FF == 0x9100_0108,    // ADD X8,X8,#imm
-                  load & 0xFFC0_03FF == 0xF940_0100    // LDR X0,[X8,#imm]
-            else {
+            guard branch & 0xFFF8_001F == 0x3600_0016 else {
                 gate += 4
                 continue
             }
-            matches.append((gate, loadOffset))
+            let loadOffset = gate + 0x60
+            var foundLegacy = false
+            if loadOffset + 12 <= end {
+                let adrp = try image.readUInt32(at: loadOffset)
+                let add = try image.readUInt32(at: loadOffset + 4)
+                let load = try image.readUInt32(at: loadOffset + 8)
+                if adrp & 0x9F00_001F == 0x9000_0008, // ADRP X8,<page>
+                   add & 0xFFC0_03FF == 0x9100_0108,  // ADD X8,X8,#imm
+                   load & 0xFFC0_03FF == 0xF940_0100 { // LDR X0,[X8,#imm]
+                    matches.append(.init(gate: gate, load: loadOffset, fallback: 0, kind: .legacy))
+                    foundLegacy = true
+                }
+            }
+
+            if !foundLegacy,
+               let fallback = ARM64.testBranchTarget(instruction: branch, at: gate),
+               fallback >= methodOffset, fallback + 0x38 <= end,
+               try image.readUInt32(at: fallback) & 0x9F00_001F == 0x9000_0008,
+               try image.readUInt32(at: fallback + 4) & 0xFFC0_03FF == 0x9100_0108,
+               try image.readUInt32(at: fallback + 8) == 0xF940_0108,
+               try image.readUInt32(at: fallback + 12) == 0xF900_0FE8,
+               try image.readUInt32(at: fallback + 16) & 0x9F00_001F == 0x9000_0008,
+               try image.readUInt32(at: fallback + 20) & 0xFFC0_03FF == 0x9100_0108,
+               try image.readUInt32(at: fallback + 24) == 0xF940_0108,
+               try image.readUInt32(at: fallback + 28) == 0xF900_13E8,
+               try image.readUInt32(at: fallback + 32) & 0x9F00_001F == 0x9000_0008,
+               try image.readUInt32(at: fallback + 36) & 0xFFC0_03FF == 0xF940_0100,
+               try image.readUInt32(at: fallback + 40) == 0x9100_83E2,
+               try image.readUInt32(at: fallback + 44) == 0x9100_63E3,
+               try image.readUInt32(at: fallback + 48) == 0x5280_0024,
+               try image.readUInt32(at: fallback + 52) & 0xFC00_0000 == 0x9400_0000 {
+                matches.append(.init(
+                    gate: gate,
+                    load: fallback + 16,
+                    fallback: fallback,
+                    kind: .dictionaryFallback
+                ))
+            }
             gate += 4
         }
         return matches
@@ -247,6 +365,14 @@ public struct MobileActivationDResolver: Sendable {
         }
         return match
     }
+}
+
+private struct StateLoadCandidate {
+    enum Kind { case legacy, dictionaryFallback }
+    let gate: UInt64
+    let load: UInt64
+    let fallback: UInt64
+    let kind: Kind
 }
 
 private extension Collection {
