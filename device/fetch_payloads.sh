@@ -42,7 +42,12 @@ cd "$BASE"
 # between the repo and research copies, so it is resolved once here.
 TOOLS="$BASE/../tools"
 
+# The bundled ldid links only system libraries, so a Homebrew upgrade
+# cannot break it, and its output is byte-identical. It is arm64 only,
+# so fall back to PATH where it cannot run, such as an Intel Mac.
+# See https://github.com/Xplo8E/Liter8/issues/2.
 LDID="$TOOLS/ldid_macosx_arm64"
+"$LDID" -v 2>&1 | grep -q "Link Identity Editor" || LDID=$(command -v ldid || true)
 IPSW_ROOT=${IPSW_ROOT:-/tmp/ios27-rootfs} # decrypted root filesystem, mounted
 OUT="$BASE/payload"
 WORK="$BASE/payload/.work"
@@ -68,10 +73,13 @@ ok()   { printf '    [+] %s\n' "$1"; }
 skip() { printf '    [=] %s\n' "$1"; }
 die()  { printf '    [!] %s\n' "$1"; exit 1; }
 
-[ -x "$LDID" ] || die "ldid not found at $LDID"
+# -x passes for an arm64 binary on an Intel Mac, so check that it runs and
+# identifies itself. ldid -v exits non-zero even when it works.
+"$LDID" -v 2>&1 | grep -q "Link Identity Editor" \
+    || die "ldid at $LDID cannot run on this host; brew install ldid-procursus"
 mkdir -p "$OUT" "$WORK"
 
-WANT="${*:-sileo helpers cache injection}"
+WANT="${*:-sileo helpers cache injection pairing}"
 wants() { case " $WANT " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 
@@ -114,8 +122,14 @@ blob = path.read_bytes()
 count = blob.count(old)
 if count != 1:
     raise SystemExit(f"expected exactly one Sileo marker pre-image, found {count}")
-path.write_bytes(blob.replace(old, new))
+group_old = b"mobile:mobile"
+# DependencyResolverAccelerator.init chowns sileolists via CommandPath.group; 000501 is decimal 501 padded to match mobile:mobile.
+group_new = b"000501:000501"
+if len(group_old) != len(group_new) or blob.count(group_old) != 1:
+    raise SystemExit("expected exactly one Sileo ownership pre-image")
+path.write_bytes(blob.replace(old, new).replace(group_old, group_new))
 print("        Sileo marker: .installed_xina15 -> .installed_usbl8r")
+print("        Sileo chown: mobile:mobile -> 000501:000501")
 PY
 
     # Sileo needs sandbox exemption to load dylibs out of /var/jb. Its own
@@ -171,8 +185,21 @@ plistlib.dump(d, open(cr, "wb"))
 print(f"        resealed {fixed} CodeResources entr{'y' if fixed==1 else 'ies'} for giveMeRoot")
 PY
 
+    codesign --force --sign - --entitlements "$WORK/sileo.ent" "$APP"
+    codesign -v "$APP" || die "Sileo bundle signature verification failed"
+    python3 - "$LDID" "$APP/Sileo" "$WORK/sileo.ent" <<'PY'
+import pathlib, plistlib, subprocess, sys
+
+ldid, binary, source = sys.argv[1:]
+signed = plistlib.loads(subprocess.check_output([ldid, "-e", binary]))
+expected = plistlib.loads(pathlib.Path(source).read_bytes())
+if signed != expected:
+    raise SystemExit("Sileo entitlements changed while signing the bundle")
+PY
+
     rm -rf "$OUT/Sileo.app" && cp -R "$APP" "$OUT/Sileo.app"
     chmod 4755 "$OUT/Sileo.app/giveMeRoot"
+    codesign -v "$OUT/Sileo.app" || die "copied Sileo bundle signature verification failed"
     ok "payload/Sileo.app ready ($(codesign -dv "$OUT/Sileo.app/Sileo" 2>&1 | grep -o 'flags=0x[0-9a-f]*([a-z]*)'))"
 fi
 
@@ -207,6 +234,26 @@ if wants injection; then
     ok "launchd, lhook, icon sandbox payload and token issuer ready"
 fi
 
+# ------------------------------------------------------------------ pairing
+if wants pairing; then
+    say "pairing, RemoteXPC and coreauthd fallbacks"
+    ( cd pairingfix && ./build.sh ) || die "pairing fallback build failed"
+    ( cd remotexpcfix && ./build.sh ) || die "RemoteXPC fallback build failed"
+    ( cd coreauthfix && ./build.sh ) || die "coreauthd fallback build failed"
+    cp pairingfix/l8pair.dylib "$OUT/l8pair.dylib"
+    cp remotexpcfix/l8remotepairing.dylib "$OUT/l8remotepairing.dylib"
+    cp coreauthfix/l8coreauth.dylib "$OUT/l8coreauth.dylib"
+    codesign -v "$OUT/l8pair.dylib" \
+        || die "pairing fallback signature verification failed"
+    codesign -v "$OUT/l8remotepairing.dylib" \
+        || die "RemoteXPC fallback signature verification failed"
+    codesign -v "$OUT/l8coreauth.dylib" \
+        || die "coreauthd fallback signature verification failed"
+    ok "marker-gated l8pair.dylib ready"
+    ok "remotepairingdeviced-only l8remotepairing.dylib ready"
+    ok "coreauthd-only l8coreauth.dylib ready"
+fi
+
 # ------------------------------------------------------------------- cache
 # Build the launchd service cache from the IPSW, not from the device. It used
 # to be pulled off a live phone, which meant you needed an already-provisioned
@@ -234,9 +281,17 @@ if wants cache; then
             --expected-pristine-daemons "$LAUNCHD_CACHE_DAEMONS" >/dev/null \
             || die "failed to add com.jbboot"
         ok "com.jbboot added"
+        ./add_ddi_services.py boot/work/launchd.plist --apply \
+            --expected-pristine-daemons "$LAUNCHD_CACHE_DAEMONS" >/dev/null \
+            || die "failed to add automatic DeveloperDiskImage service registration"
+        ok "DeveloperDiskImage service registration job added"
+        ./patch_watchdogd_job.py boot/work/launchd.plist --apply \
+            --expected-pristine-daemons "$LAUNCHD_CACHE_DAEMONS" >/dev/null \
+            || die "failed to mitigate the watchdogd launch loop"
+        ok "watchdogd automatic launch, restart and panic escalation disabled"
         n=$(python3 -c "import plistlib;print(len(plistlib.load(open('boot/work/launchd.plist','rb'))['LaunchDaemons']))")
-        [ "$n" = "$((LAUNCHD_CACHE_DAEMONS + 2))" ] \
-            || die "patched cache has $n daemons, expected $((LAUNCHD_CACHE_DAEMONS + 2))"
+        [ "$n" = "$((LAUNCHD_CACHE_DAEMONS + 3))" ] \
+            || die "patched cache has $n daemons, expected $((LAUNCHD_CACHE_DAEMONS + 3))"
         ok "boot/work/launchd.plist ready, $n daemons"
         echo "        the detached .sig on the device is left untouched; the loader"
         echo "        accepts a modified cache because of launchd_unsecure_cache=1"
@@ -265,6 +320,11 @@ if wants helpers; then
     else
         die "PosterBoard wallpaper repair tools build failed"
     fi
+    if ( cd ddiwatch && ./build.sh >/dev/null 2>&1 ); then
+        ok "DeveloperDiskImage service watcher built"
+    else
+        die "DeveloperDiskImage service watcher build failed"
+    fi
 
     uicache_asset="$WORK/uicache27-$UICACHE_VER"
     [ -f "$uicache_asset" ] \
@@ -281,10 +341,11 @@ fi
 say "summary"
 for p in "$OUT/Sileo.app/Sileo" "$OUT/Sileo.app/giveMeRoot" \
          "$OUT/launchd.orig" "$OUT/launchd.hooked" "$OUT/lhook.dylib" \
-         "$OUT/systemhook.dylib" "$OUT/sbextissue" \
+         "$OUT/systemhook.dylib" "$OUT/sbextissue" "$OUT/l8pair.dylib" \
+         "$OUT/l8remotepairing.dylib" "$OUT/l8coreauth.dylib" \
          "$OUT/uicache" \
          photodiag/photodiag spawnprobe/personaalloc appreg/appreg \
-         photoforce/pfruntimeprobe photoforce/pfwatch; do
+         photoforce/pfruntimeprobe photoforce/pfwatch ddiwatch/ddiwatch; do
     if [ -f "$p" ]; then
         # "$BASE" quoted separately inside ${..}: unquoted it is treated as a
         # glob pattern, so a path containing [ or * would strip the wrong prefix

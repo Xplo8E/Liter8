@@ -72,7 +72,11 @@ struct KernelIdentityResolver: Sendable {
                 || (byte >= 0x61 && byte <= 0x7A)
             if isAlnum { token.append(byte) } else { break }
         }
-        guard !token.isEmpty else {
+        // Do not accept a token truncated at the scan limit or input EOF.
+        // Supported Apple platform names have a T followed by decimal digits.
+        guard token.count >= 2, token.count < window.count,
+              token.first == 0x54,
+              token.dropFirst().allSatisfy({ $0 >= 0x30 && $0 <= 0x39 }) else {
             throw PatchfinderError.missingAnchor(prefix)
         }
         return String(decoding: token, as: UTF8.self)

@@ -237,3 +237,46 @@ private extension String {
         count >= width ? self : self + String(repeating: " ", count: width - count)
     }
 }
+
+extension Survey {
+    /// Measure the pre-boot guards a `DeviceWorkflowProfile` needs and print
+    /// one to paste.
+    ///
+    /// Separate from the resolver sweep because it is a different kind of
+    /// work: it decrypts and mounts the root filesystem, takes minutes, and is
+    /// run once per board rather than on every resolver change.
+    static func measureGuards(directory: URL, python: String?) throws {
+        let resources = try Liter8Resources.resolve()
+        let script = resources.scriptsDirectory
+            .appendingPathComponent("measure_guards.py")
+        guard FileManager.default.fileExists(atPath: script.path) else {
+            throw PatchfinderError.invalidFixture("missing script: \(script.path)")
+        }
+        let interpreter = try Liter8PythonRuntime.executable(
+            explicit: python,
+            resources: resources
+        )
+        let process = Process()
+        process.executableURL = interpreter
+        process.arguments = [script.path, directory.path]
+        // The helper shells out to ipsw, aea and hdiutil, so it needs the
+        // bundled tools on PATH exactly as the firmware workflow gives them.
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = [
+            interpreter.deletingLastPathComponent().path,
+            resources.toolsDirectory.path,
+            environment["PATH"] ?? "",
+        ].joined(separator: ":")
+        process.environment = environment
+        // Swift buffers stdout, the child writes to the same fd unbuffered.
+        // Without this the child's report appears above the survey table that
+        // was printed before it.
+        fflush(stdout)
+        try InterruptibleProcess.run(process)
+        guard process.terminationReason == .exit, process.terminationStatus == 0 else {
+            throw PatchfinderError.invalidFixture(
+                "measure_guards.py exited with status \(process.terminationStatus)"
+            )
+        }
+    }
+}

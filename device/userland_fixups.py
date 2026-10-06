@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import plistlib
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -70,18 +72,74 @@ def build_binary(
     if not pristine.is_file() or pristine.stat().st_size == 0:
         raise SystemExit(f"[!] pristine userland binary is missing: {pristine}")
 
-    # Save the semantic resolver output beside the built artifact. Besides
-    # documenting the selected sites, this makes a future failure answerable
-    # without repeating a device session.
-    resolved = run(
-        [liter8, "resolve", "userland", plan, pristine, "--json"],
-        capture=True,
-    ).stdout
     records.parent.mkdir(parents=True, exist_ok=True)
-    records.write_bytes(resolved)
-
     output.parent.mkdir(parents=True, exist_ok=True)
-    run([liter8, "apply", "userland", plan, pristine, output])
+
+    structural_loads = {
+        "lockdownd": ("/usr/lib/l8pair.dylib", "lockdownd.load-l8pair"),
+        "remotepairingdeviced": (
+            "/usr/lib/l8remotepairing.dylib",
+            "remotepairingdeviced.load-l8remotepairing",
+        ),
+    }
+    if plan in structural_loads:
+        # These daemons need no instruction patch. Add one weak dependency in
+        # the reviewed zero-padded Mach-O header so the process-local shim is
+        # present before its target framework binds the interposed call.
+        dylib_path, record_id = structural_loads[plan]
+        patcher = Path(__file__).resolve().parent / "launchdhook/patch_launchd.py"
+        run([
+            sys.executable,
+            patcher,
+            pristine,
+            "-o",
+            output,
+            "--path",
+            dylib_path,
+            "--apply",
+        ], capture=True)
+        records.write_text(json.dumps([{
+            "id": record_id,
+            "component": plan,
+            "operation": "LC_LOAD_WEAK_DYLIB",
+            "path": dylib_path,
+        }], indent=2) + "\n")
+    else:
+        # Save the semantic resolver output beside the built artifact. Besides
+        # documenting the selected sites, this makes a future failure answerable
+        # without repeating a device session.
+        resolved = run(
+            [liter8, "resolve", "userland", plan, pristine, "--json"],
+            capture=True,
+        ).stdout
+        resolved_records = json.loads(resolved)
+        if plan == "coreauthd":
+            instruction_patched = output.with_suffix(output.suffix + ".instructions")
+            run([liter8, "apply", "userland", plan, pristine, instruction_patched])
+            dylib_path = "/usr/lib/l8coreauth.dylib"
+            patcher = Path(__file__).resolve().parent / "launchdhook/patch_launchd.py"
+            try:
+                run([
+                    sys.executable,
+                    patcher,
+                    instruction_patched,
+                    "-o",
+                    output,
+                    "--path",
+                    dylib_path,
+                    "--apply",
+                ], capture=True)
+            finally:
+                instruction_patched.unlink(missing_ok=True)
+            resolved_records.append({
+                "id": "coreauthd.load-l8coreauth",
+                "component": "coreauthd",
+                "operation": "LC_LOAD_WEAK_DYLIB",
+                "path": dylib_path,
+            })
+        else:
+            run([liter8, "apply", "userland", plan, pristine, output])
+        records.write_text(json.dumps(resolved_records, indent=2) + "\n")
 
     original_identifier = signing_identifier(pristine)
     original_entitlements = entitlements(ldid, pristine)
@@ -148,7 +206,16 @@ def main() -> None:
     subcommands = parser.add_subparsers(dest="command", required=True)
 
     binary = subcommands.add_parser("binary")
-    binary.add_argument("plan", choices=("coreauthd", "mobileactivationd", "ctkd"))
+    binary.add_argument(
+        "plan",
+        choices=(
+            "coreauthd",
+            "mobileactivationd",
+            "ctkd",
+            "lockdownd",
+            "remotepairingdeviced",
+        ),
+    )
     binary.add_argument("pristine", type=Path)
     binary.add_argument("output", type=Path)
     binary.add_argument("records", type=Path)

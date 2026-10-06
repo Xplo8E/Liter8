@@ -54,6 +54,7 @@ final class ReleaseFixtureTests: XCTestCase {
         ("kernel-boot-policy-n104-24A435.json", "kernelcache.release.iphone12b.bin", 4),
         ("kernel-sep-n104-24A435.json", "kernelcache.release.iphone12b.bin", 32),
         ("kernel-sandbox-n104-24A435.json", "kernelcache.release.iphone12b.bin", 46),
+        ("kernel-valeria-n104-24A435.json", "kernelcache.release.iphone12b.bin", 15),
         ("kernel-credential-manager-n104-24A435.json", "kernelcache.release.iphone12b.bin", 52),
         ("restored-external-n104-24A435.json", "restored_external", 5),
         ("asr-n104-24A435.json", "asr", 1),
@@ -73,7 +74,7 @@ final class ReleaseFixtureTests: XCTestCase {
             XCTAssertEqual(records.count, expected, "\(fixture) record count")
             checked += records.count
         }
-        XCTAssertEqual(checked, 208, "every release record must be covered")
+        XCTAssertEqual(checked, 223, "every release record must be covered")
     }
 
     /// The same oracles for `24A437`, the shipping build of the same kernel.
@@ -95,7 +96,7 @@ final class ReleaseFixtureTests: XCTestCase {
             XCTAssertEqual(records.count, expected, "\(stableFixture) record count")
             checked += records.count
         }
-        XCTAssertEqual(checked, 208, "every stable record must be covered")
+        XCTAssertEqual(checked, 223, "every stable record must be covered")
     }
 
     /// The same oracles for iOS 27.2 `24B5084k`.
@@ -103,7 +104,7 @@ final class ReleaseFixtureTests: XCTestCase {
     /// Unlike `24A437`, this build is not a rebuild of `24A435`: it carries a
     /// different XNU, its own AppleCredentialManager signature family, and an
     /// iBSS whose boot-argument padding moved off a page boundary. Every one of
-    /// the 198 records still resolves, so this suite is what would catch a
+    /// the 223 records still resolve, so this suite is what would catch a
     /// resolver being quietly narrowed to fit one of the three builds.
     func testEveryTwoSevenTwoFixtureRediscoversItsSitesAndOutput() throws {
         var checked = 0
@@ -117,7 +118,7 @@ final class ReleaseFixtureTests: XCTestCase {
             XCTAssertEqual(records.count, expected, "\(name) record count")
             checked += records.count
         }
-        XCTAssertEqual(checked, 208, "every 27.2 record must be covered")
+        XCTAssertEqual(checked, 223, "every 27.2 record must be covered")
     }
 
     /// 27.2 must describe the same operations as the release builds.

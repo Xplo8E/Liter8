@@ -46,6 +46,7 @@ require_command pkg-config
 require_command tar
 require_command ipsw
 require_command aea
+require_command 7zz
 mkdir -p "$CACHE_DIR" "$TOOLS_DIR"
 : > "$LOG_FILE"
 
@@ -61,8 +62,14 @@ IDEVICERESTORE_COMMIT="$(git -C "$IDEVICERESTORE_SUBMODULE" rev-parse HEAD)"
 IDEVICERESTORE_VERSION="$(git -C "$IDEVICERESTORE_SUBMODULE" describe --always --tags)"
 
 IDEVICE_MARKER="$TOOLS_DIR/.idevicerestore-commit"
+# Run the cached binary before trusting it. The marker records only which
+# commit was built, so a Homebrew upgrade that moves a dependency's install
+# name leaves a binary that dyld cannot load. Reported as an abort trap on
+# the --version check below, with libplist-2.0.4.dylib missing. Rebuilding
+# costs a minute; the alternative is an abort with no stated cause.
 if [[ -x "$TOOLS_DIR/idevicerestore" ]] \
-    && [[ "$(cat "$IDEVICE_MARKER" 2>/dev/null || true)" == "$IDEVICERESTORE_COMMIT" ]]; then
+    && [[ "$(cat "$IDEVICE_MARKER" 2>/dev/null || true)" == "$IDEVICERESTORE_COMMIT" ]] \
+    && "$TOOLS_DIR/idevicerestore" --version >/dev/null 2>&1; then
     say "idevicerestore is already built at $IDEVICERESTORE_COMMIT"
 else
     IDEVICE_SOURCE="$CACHE_DIR/idevicerestore-source-$IDEVICERESTORE_COMMIT"

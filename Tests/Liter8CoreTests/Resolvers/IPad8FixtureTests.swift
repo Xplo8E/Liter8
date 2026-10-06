@@ -9,8 +9,8 @@ final class IPad8FixtureTests: XCTestCase {
     private var packageRoot: URL { liter8PackageRoot(from: #filePath) }
 
     func testT8020KernelRepackKeepsCompressionAndExactPAYPChild() throws {
-        let source = packageRoot.appendingPathComponent(
-            ".liter8-ipad8-23H30/CFW/kernelcache.release.ipad11b.bak"
+        let source = liter8PrivateFixtureRoot(from: #filePath).appendingPathComponent(
+            "offsets/23H30/kernelcache.im4p"
         )
         guard FileManager.default.fileExists(atPath: source.path) else {
             throw XCTSkip("local 23H30 kernel IM4P is absent")
@@ -38,28 +38,43 @@ final class IPad8FixtureTests: XCTestCase {
         XCTAssertEqual(try FirmwareArtifact(data: rebuilt).payload, artifact.payload)
     }
 
-    func testRecoveredBootAndUserlandPlans() throws {
-        let cases: [(String, String, Int)] = [
-            ("kernel-credential-manager-j171aap-23H30.json", "kernelcache", 50),
-            ("kernel-sandbox-public-j171aap-23H30.json", "kernelcache", 11),
-            ("kernel-boot-public-j171aap-23H30.json", "kernelcache", 118),
-            ("kernel-ppl-trust-cache-j171aap-23H30.json", "kernelcache", 1),
-            ("ibec-restore-j171aap-23H30.json", "iBEC.raw", 6),
-            ("mobileactivationd-j171aap-23H30.json", "mobileactivationd", 5),
-            ("asr-j171aap-23H30.json", "asr", 1),
-        ]
-        for (filename, binaryName, count) in cases {
-            let binary = liter8PrivateFixtureRoot(from: #filePath)
-                .appendingPathComponent("offsets/23H30/\(binaryName)")
-            guard FileManager.default.fileExists(atPath: binary.path) else {
-                throw XCTSkip("local 23H30 fixture is absent: \(binaryName)")
-            }
-            let manifest = try FixtureManifest.load(
-                from: packageRoot.appendingPathComponent(
-                    "fixtures/23H30/j171aap/\(filename)"
-                )
-            )
-            XCTAssertEqual(try manifest.verify(binaryAt: binary).count, count, filename)
+    func testCredentialManagerExactBuildOracle() throws {
+        try verify("kernel-credential-manager-j171aap-23H30.json", binaryName: "kernelcache", count: 50)
+    }
+
+    func testSandboxPublicExactBuildOracle() throws {
+        try verify("kernel-sandbox-public-j171aap-23H30.json", binaryName: "kernelcache", count: 11)
+    }
+
+    func testBootPublicExactBuildOracle() throws {
+        try verify("kernel-boot-public-j171aap-23H30.json", binaryName: "kernelcache", count: 118)
+    }
+
+    func testPPLTrustCacheExactBuildOracle() throws {
+        try verify("kernel-ppl-trust-cache-j171aap-23H30.json", binaryName: "kernelcache", count: 1)
+    }
+
+    func testIBECRestoreExactBuildOracle() throws {
+        try verify("ibec-restore-j171aap-23H30.json", binaryName: "iBEC.raw", count: 6)
+    }
+
+    func testMobileActivationDExactBuildOracle() throws {
+        try verify("mobileactivationd-j171aap-23H30.json", binaryName: "mobileactivationd", count: 5)
+    }
+
+    func testASRExactBuildOracle() throws {
+        try verify("asr-j171aap-23H30.json", binaryName: "asr", count: 1)
+    }
+
+    private func verify(_ filename: String, binaryName: String, count: Int) throws {
+        let binary = liter8PrivateFixtureRoot(from: #filePath)
+            .appendingPathComponent("offsets/23H30/\(binaryName)")
+        guard FileManager.default.fileExists(atPath: binary.path) else {
+            throw XCTSkip("local 23H30 fixture is absent: \(binaryName)")
         }
+        let manifest = try FixtureManifest.load(
+            from: packageRoot.appendingPathComponent("fixtures/23H30/j171aap/\(filename)")
+        )
+        XCTAssertEqual(try manifest.verify(binaryAt: binary).count, count, filename)
     }
 }

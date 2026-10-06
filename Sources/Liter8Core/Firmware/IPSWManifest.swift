@@ -122,14 +122,31 @@ public enum DeviceIBSSAdditionalPlan: String, Codable, Equatable, Sendable {
 /// Normal boot and SSHRD are separate because a future board may need the
 /// display handoff workaround in only one path. An explicit empty array means
 /// that the profile was reviewed and intentionally needs no extra operation.
+public enum DeviceBootTrustCache: String, Codable, Equatable, Sendable {
+    case restore = "RestoreTrustCache"
+    case `static` = "StaticTrustCache"
+}
+
 public struct DeviceBootPlan: Codable, Equatable, Sendable {
+    /// Required semantic components, not a best-effort filter of the manifest.
+    /// Missing firmware must fail before a boot set is built or uploaded.
+    public static let defaultFirmwareComponents = [
+        "RestoreLogo", "ANE", "AOP", "AVE", "Ap,SecurePageTableMonitor",
+        "GFX", "ISP", "PMP", "SIO", "WCHFirmwareUpdater", "SEP",
+    ]
+    public let firmwareComponents: [String]
+    public let normalTrustCache: DeviceBootTrustCache
     public let normalIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan]
     public let restoreIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan]
 
     public init(
         normalIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan],
-        restoreIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan]
+        restoreIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan],
+        firmwareComponents: [String] = DeviceBootPlan.defaultFirmwareComponents,
+        normalTrustCache: DeviceBootTrustCache = .restore
     ) {
+        self.firmwareComponents = firmwareComponents
+        self.normalTrustCache = normalTrustCache
         self.normalIBSSAdditionalPlans = normalIBSSAdditionalPlans
         self.restoreIBSSAdditionalPlans = restoreIBSSAdditionalPlans
     }
@@ -290,6 +307,30 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
             )
         ),
+        // iOS 27.2 beta 3, device-validated on an iPhone 11: erase restore and
+        // normal boot both passed. All four oracles were measured from this
+        // build's own root filesystem by `survey --guards`. The daemon count is
+        // 732, one fewer than both earlier 27.2 seeds, which is a read value
+        // rather than a carried one.
+        DeviceWorkflowProfile(
+            id: "iphone12,1-n104ap-24B5099f",
+            productVersion: "27.2",
+            build: "24B5099f",
+            productType: "iPhone12,1",
+            deviceClass: "n104ap",
+            chipID: 0x8030,
+            boardID: 0x04,
+            extractedDirectoryName: "iPhone12,1_27.2_24B5099f_Restore",
+            validationState: .reviewed,
+            launchdSHA256: "addb9ccb1b5650116ab5da59d1a53dc3f54e6a2a29cdcafa036c0c2376cd5ca2",
+            launchdCacheSHA256: "9fd8a69b3f0a364e5e599ccc5601cb21f101786cbc3e802438fa4bf297d296aa",
+            launchdCacheDaemonCount: 732,
+            setupControllerMethodCount: 65,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [.skipDisplayInitialization],
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
+            )
+        ),
         // iOS 27.0.1, device-validated on an iPhone 11: erase restore, SSHRD
         // provisioning, normal boot, repeat boot, Procursus finalization,
         // Dropbear, persona 99, icon token and PosterBoard repair all passed.
@@ -334,30 +375,96 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
             )
         ),
-        // iPad 8 Wi-Fi (iPad11,6 / j171aap / A12 T8020) iPadOS 26.7.1.
-        //
-        // EXPERIMENTAL and intentionally not usable end to end yet. The four
-        // pre-boot guards below are measured from this exact build's mounted
-        // System volume (141-38001-023.dmg, ProductBuildVersion 23H30), so
-        // provisioning's identity checks are real, not placeholders:
-        //   launchd            sha256(/sbin/launchd)
-        //   launchd cache      sha256(/System/Library/xpc/launchd.plist)
-        //   daemon count       |LaunchDaemons| in that plist
-        //   Setup controllers  device/patch_setup.py count on /Applications/
-        //                      Setup.app/Setup (parsed cleanly on iOS 26 arm64e)
-        //
-        // What is NOT proven, and why nothing here may be promoted to
-        // .reviewed yet (see docs/plans/IPAD8_26_7_1_PORT.md):
-        //   - kernel credential-manager and sandbox resolvers are unresolved;
-        //     the iBoot bootargs/restore/pinot resolvers produce no candidate,
-        //     so make-cfw cannot complete.
-        //   - bootPlan is unvalidated. The ibss-skip-display-init resolver
-        //     produces no candidate on this iBSS, so the n104 workaround is not
-        //     carried over. Empty arrays are an explicit "no additions until a
-        //     device proves otherwise", not a reviewed boot policy.
-        //   - This is A12/T8020 with no SPTM/TXM and Cryptex1 volumes, so the
-        //     boot firmware sequence and provisioning still need porting.
-        // The transport stays usbliter8ctl; yoloDFU is only an offset reference.
+        // Same IPSW as the D431 entry below, so the guards are shared: one root
+        // filesystem for both boards. They are copied, not measured here, and
+        // the cache hash fails closed if that ever stops being true.
+        DeviceWorkflowProfile(
+            id: "iphone12,3-d421ap-24A446",
+            productVersion: "27.0.1",
+            build: "24A446",
+            productType: "iPhone12,3",
+            deviceClass: "d421ap",
+            chipID: 0x8030,
+            boardID: 0x06,
+            extractedDirectoryName: "iPhone12,3,iPhone12,5_27.0.1_24A446_Restore",
+            validationState: .experimental,
+            launchdSHA256: "c640246d38aaeb2d2372aff1e5aa0de59dec267f53c0dfc155f7837e717af68b",
+            launchdCacheSHA256: "d207fd6fc7ab9bfb77455aa9e8e7da2c0db94519243862154e63b1839aaf7762",
+            launchdCacheDaemonCount: 729,
+            setupControllerMethodCount: 66,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
+        // D431 booted on hardware; SEP and repeat-boot stability remain unresolved.
+        DeviceWorkflowProfile(
+            id: "iphone12,5-d431ap-24A446",
+            productVersion: "27.0.1",
+            build: "24A446",
+            productType: "iPhone12,5",
+            deviceClass: "d431ap",
+            chipID: 0x8030,
+            boardID: 0x02,
+            extractedDirectoryName: "iPhone12,3,iPhone12,5_27.0.1_24A446_Restore",
+            validationState: .experimental,
+            launchdSHA256: "c640246d38aaeb2d2372aff1e5aa0de59dec267f53c0dfc155f7837e717af68b",
+            launchdCacheSHA256: "d207fd6fc7ab9bfb77455aa9e8e7da2c0db94519243862154e63b1839aaf7762",
+            launchdCacheDaemonCount: 729,
+            setupControllerMethodCount: 66,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
+        // iPhone 11 Pro and Pro Max on 27.0, resolver-verified, no device run
+        // on either board. The guards are identical because the IPSW ships one
+        // root filesystem for both; they were measured from it, not carried
+        // over from n104. Empty boot plans follow the d431 24A446 entry above
+        // rather than any 24A437 measurement.
+        DeviceWorkflowProfile(
+            id: "iphone12,3-d421ap-24A437",
+            productVersion: "27.0",
+            build: "24A437",
+            productType: "iPhone12,3",
+            deviceClass: "d421ap",
+            chipID: 0x8030,
+            boardID: 0x06,
+            extractedDirectoryName: "iPhone12,3,iPhone12,5_27.0_24A437_Restore",
+            validationState: .experimental,
+            launchdSHA256: "c640246d38aaeb2d2372aff1e5aa0de59dec267f53c0dfc155f7837e717af68b",
+            launchdCacheSHA256: "d763c9c0a7c6581cce5296cfa8e2ad7e1d5e9e389aca4b3343021dcc86c57c98",
+            launchdCacheDaemonCount: 729,
+            setupControllerMethodCount: 66,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
+        DeviceWorkflowProfile(
+            id: "iphone12,5-d431ap-24A437",
+            productVersion: "27.0",
+            build: "24A437",
+            productType: "iPhone12,5",
+            deviceClass: "d431ap",
+            chipID: 0x8030,
+            boardID: 0x02,
+            extractedDirectoryName: "iPhone12,3,iPhone12,5_27.0_24A437_Restore",
+            validationState: .experimental,
+            launchdSHA256: "c640246d38aaeb2d2372aff1e5aa0de59dec267f53c0dfc155f7837e717af68b",
+            launchdCacheSHA256: "d763c9c0a7c6581cce5296cfa8e2ad7e1d5e9e389aca4b3343021dcc86c57c98",
+            launchdCacheDaemonCount: 729,
+            setupControllerMethodCount: 66,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
+        // iPad 8 Wi-Fi, 23H30. Guards measured from 141-38001-023.dmg.
+        // Restore and SSHRD passed in the recorded run; normal boot,
+        // finalization and repeat boot are unverified. Keep experimental.
+        // No n104 display workaround, SPTM/TXM, PMP or WCH on this identity.
+        // See docs/plans/IPAD8_26_7_1_PORT.md and the device runbook.
         DeviceWorkflowProfile(
             id: "ipad11,6-j171aap-23H30",
             productVersion: "26.7.1",
@@ -374,18 +481,66 @@ public enum DeviceWorkflowRegistry {
             setupControllerMethodCount: 58,
             bootPlan: DeviceBootPlan(
                 normalIBSSAdditionalPlans: [],
-                restoreIBSSAdditionalPlans: []
+                restoreIBSSAdditionalPlans: [],
+                firmwareComponents: [
+                    "RestoreLogo", "ANE", "AOP", "AVE", "GFX", "ISP", "SIO", "SEP",
+                ],
+                normalTrustCache: .static
             )
         ),
     ]
 
-    public static func profile(
+    /// Every profile this IPSW could be restored with.
+    ///
+    /// A dual-device IPSW lists both boards, so several profiles match and the
+    /// archive cannot say which phone is attached. `board` is how the operator
+    /// resolves that.
+    public static func matchingProfiles(
         for identity: IPSWIdentity,
-        includeExperimental: Bool = false
-    ) -> DeviceWorkflowProfile? {
-        profiles.first {
+        includeExperimental: Bool = false,
+        board: String? = nil
+    ) -> [DeviceWorkflowProfile] {
+        profiles.filter {
             $0.supports(identity)
                 && ($0.validationState == .reviewed || includeExperimental)
+                && (board == nil || $0.deviceClass == board)
         }
+    }
+
+    /// The single profile for this IPSW, or nil when none or several match.
+    /// Use `matchingProfiles` to tell those two cases apart.
+    public static func profile(
+        for identity: IPSWIdentity,
+        includeExperimental: Bool = false,
+        board: String? = nil
+    ) -> DeviceWorkflowProfile? {
+        let matches = matchingProfiles(
+            for: identity,
+            includeExperimental: includeExperimental,
+            board: board
+        )
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    /// Shared so `prepare` and the device stages word this the same way.
+    public static func ambiguityMessage(
+        _ matches: [DeviceWorkflowProfile]
+    ) -> String {
+        """
+        this IPSW supports several boards and Liter8 cannot tell which \
+        phone you are using: \(boardList(matches)). Rerun with --board <device-class>
+        """
+    }
+
+    /// For a `--board` that matched nothing while the IPSW itself is known.
+    public static func unknownBoardMessage(
+        _ board: String,
+        offered: [DeviceWorkflowProfile]
+    ) -> String {
+        "no profile for --board \(board); this IPSW supports \(boardList(offered))"
+    }
+
+    private static func boardList(_ profiles: [DeviceWorkflowProfile]) -> String {
+        Set(profiles.map(\.deviceClass)).sorted().joined(separator: ", ")
     }
 }

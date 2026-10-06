@@ -7,6 +7,9 @@
 # firmware that must never be committed.
 .ios27/
 .setup-cache/
+.irecovery
+__pycache__/
+*.pyc
 tools/idevicerestore
 tools/.idevicerestore-commit
 tools/*.setup-new
@@ -15,8 +18,24 @@ tools/*.setup-new
 # the reviewed Objective-C sources before copying them to the phone.
 device/photoforce/pfruntimeprobe
 device/photoforce/pfwatch
+device/ddiwatch/ddiwatch
 .ios272/
 .ios272b2/
 
 # macOS Finder metadata. Not content, and it churns on every directory view.
 .DS_Store
+# Built by device/launchdhook/build.sh, reproduced from source each run.
+device/launchdhook/lhook.dylib
+device/launchdhook/systemhook.dylib
+device/launchdhook/sbextissue
+# Built by device/pairingfix/build.sh, reproduced from source each run.
+device/pairingfix/l8pair.dylib
+# Built by device/coreauthfix/build.sh, reproduced from source each run.
+device/coreauthfix/l8coreauth.dylib
+# Built by device/remotexpcfix/build.sh, reproduced from source each run.
+device/remotexpcfix/l8remotepairing.dylib
+# Host-built/downloaded device payloads; always reproduced by fetch_payloads.sh.
+device/payload/
+
+# Private iPad firmware work directory used by the documented runbook.
+.liter8-ipad8-*/

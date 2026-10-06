@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from boot_artifacts import has_txm, selected_passthrough
-from liter8_workflow import Context, WorkflowError, main_guard, run
+from liter8_workflow import Context, DEFAULT_BOOT_FIRMWARE, WorkflowError, main_guard, run
 
 
 # The order and pauses come from the beta-4 sequence that was reliable on the
@@ -36,11 +36,17 @@ FIRMWARE_SEQUENCE = [
 
 
 def selected_firmware_sequence(
-    components: dict[str, str], mode: str, profile_id: str = ""
+    components: dict[str, str], mode: str,
+    firmware_components: tuple[str, ...] = DEFAULT_BOOT_FIRMWARE,
+    normal_trust_cache: str = "RestoreTrustCache",
 ) -> list[tuple[str, str, int]]:
-    """Keep the established upload order, omitting firmware absent on this board."""
-    available = {name for _, name, _ in selected_passthrough(components, mode, profile_id)}
-    if has_txm(components, mode):
+    """Keep the established upload order for the profile's required firmware."""
+    available = {
+        name for _, name, _ in selected_passthrough(
+            components, mode, firmware_components, normal_trust_cache
+        )
+    }
+    if has_txm(components, mode, firmware_components):
         available.add("TXM.img4")
     # SEP is uploaded separately after DeviceTree.
     return [entry for entry in FIRMWARE_SEQUENCE if entry[0] in available]
@@ -54,8 +60,10 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def require_executable(value: str | None, *, name: str, path_fallback: bool) -> str:
-    """Resolve an explicitly selected transport without hiding substitutions."""
+def require_executable(
+    value: str | None, *, name: str, path_fallback: bool, missing: str = ""
+) -> str:
+    """Resolve a transport, preferring an explicit selection over the PATH."""
     if value:
         path = Path(value).expanduser().resolve()
         if path.is_file() and os.access(path, os.X_OK):
@@ -65,7 +73,7 @@ def require_executable(value: str | None, *, name: str, path_fallback: bool) -> 
         found = shutil.which(name)
         if found:
             return found
-    raise WorkflowError(f"{name} is required")
+    raise WorkflowError(missing or f"{name} is required")
 
 
 def validate_boot_set(context: Context, expected_mode: str) -> Path:
@@ -88,7 +96,10 @@ def validate_boot_set(context: Context, expected_mode: str) -> Path:
 
     required = ["iBSS.raw", "iBEC.img4", "DeviceTree.img4", "SEP.img4", "Kernelcache.img4"]
     required += [
-        name for name, _, _ in selected_firmware_sequence(context.components, expected_mode, context.profile_id)
+        name for name, _, _ in selected_firmware_sequence(
+            context.components, expected_mode,
+            context.boot_firmware_components, context.normal_trust_cache
+        )
     ]
     if expected_mode == "restore":
         required.append("RestoreRamdisk.img4")
@@ -123,10 +134,17 @@ def boot() -> None:
         raise WorkflowError(f"unexpected device boot action: {action}")
     root = validate_boot_set(context, mode)
 
-    # The project-specific irecovery source is not selected yet. Requiring an
-    # explicit path prevents accidental use of the official system binary.
+    # --irecovery still wins when given, so a non-standard build stays
+    # selectable; the PATH copy is the default rather than the only option.
     irecovery = require_executable(
-        os.environ.get("LITER8_IRECOVERY"), name="irecovery", path_fallback=False
+        os.environ.get("LITER8_IRECOVERY"),
+        name="irecovery",
+        path_fallback=True,
+        missing=(
+            "irecovery was not found on PATH.\n"
+            "  install it with: brew install libirecovery\n"
+            "  or pass the one you want: --irecovery /path/to/irecovery"
+        ),
     )
     usbliter8ctl = require_executable(None, name="usbliter8ctl", path_fallback=True)
 
@@ -145,7 +163,9 @@ def boot() -> None:
 
     print("[*] stage 3: display and firmware", flush=True)
     run([irecovery, "-c", "bgcolor 0 191 255"])
-    for name, command, pause_after in selected_firmware_sequence(context.components, mode, context.profile_id):
+    for name, command, pause_after in selected_firmware_sequence(
+        context.components, mode, context.boot_firmware_components, context.normal_trust_cache
+    ):
         send(irecovery, root, name, command)
         if pause_after:
             time.sleep(pause_after)

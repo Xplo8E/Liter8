@@ -19,12 +19,14 @@ Swift decides, Python plumbs. Swift picks the firmware profile, parses the binar
 | `scripts` | the Python: mounting, staging, signing, tool calls, device sequencing |
 | `device` | what gets installed on the phone from SSHRD, and the scripts that do it |
 | `payloads` | `ssh.tar.gz` and the sftp entitlements, both hash-pinned |
-| `tools` | imported host binaries (`img4`, `ldid`, `usbliter8ctl`, `gtar`), plus the `idevicerestore` `make setup` builds |
+| `tools` | `usbliter8ctl`, plus `ldid`/`gtar`/`sshpass` fallbacks for hosts without them, plus the `idevicerestore` `make setup` builds |
 | `docs` | porting procedure, design notes, device evidence |
 
 ## Where a command goes
 
 `Sources/Liter8CLI/main.swift` reads the first argument and branches. `resolve`, `apply`, `verify`, `survey` and `inspect` load a `BinaryImage` and go straight into `Liter8Core`. Anything under `fw` goes through `FirmwareWorkflowRunner`, which writes a semantic context file and then hands off to the matching Python helper.
+
+`survey --guards` is the one exception: it runs the sweep in Swift, then calls `scripts/measure_guards.py` to read the pre-boot guards off the root filesystem, because the decrypt and mount already live in `rootfs.py`.
 
 `fw prepare` is the exception. It never touches Python.
 
@@ -56,21 +58,30 @@ Swift decides, Python plumbs. Swift picks the firmware profile, parses the binar
 
 ## Supported builds
 
-Five `DeviceWorkflowProfile` entries, all `.reviewed`, all iPhone 11 `n104ap`:
+Reviewed iPhone 11 `n104ap` workflow profiles:
 
 | Build | Version |
 | --- | --- |
 | `24A5390f` | 27.0 beta 4 |
-| `24A435` | 27.0 |
+| `24A435` | 27.0 RC |
+| `24A437` | 27.0 |
 | `24A446` | 27.0.1 |
 | `24B5084k` | 27.2 beta 1 |
 | `24B5089g` | 27.2 beta 2 |
+| `24B5099f` | 27.2 beta 3 |
 
 `supports()` requires an exact build match, so anything else fails at `fw prepare`.
 
 Resolver profiles are a separate list and do not line up one to one. `ios27-24A435-n104ap` covers `24A435`, `24A437` and `24A446` because the kernels share an XNU fingerprint. `ios27-beta2-24A5370h-d421ap` exists only as a credential-manager signature reference for `d421ap`/`d431ap`, with no workflow behind it. A resolver profile existing says nothing about whether the device workflow is supported.
 
-Nothing is currently marked `.experimental`. The flag and the gate are wired up and waiting for the next port.
+Experimental workflow profiles cover the Pro boards on `24A437` / `24A446`
+and iPad 8 Wi-Fi `j171aap` on `23H30`. They require `--experimental`; exact
+support status is in the README and device run notes.
+
+`DeviceBootPlan` exports required firmware components and the normal trust
+cache in context schema 3, alongside the iBSS additions. Python rejects old
+contexts and missing required firmware. The iPad selects StaticTrustCache for
+normal boot and has no SPTM/TXM; existing iPhone policy remains unchanged.
 
 ## Flags and environment
 
@@ -79,7 +90,7 @@ Nothing is currently marked `.experimental`. The flag and the gate are wired up 
 - `--experimental`: opt into a profile that has not finished device validation.
 - `--serial`: add `serial=3` to the artifact being built, moving the kernel console to UART. Per artifact, because the literal is baked in at build time.
 - `--ticket`: supply an IM4M instead of using the captured one.
-- `--irecovery`: the project's custom build, required for every boot command.
+- `--irecovery`: override the compatible irecovery found on PATH.
 - `--idevicerestore`: override the pinned binary. Development only.
 - `--rootfs`: a root filesystem you mounted yourself.
 - `--records-out`: write the records from this same guarded apply.

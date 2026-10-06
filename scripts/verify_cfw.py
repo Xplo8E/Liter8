@@ -21,7 +21,7 @@ def verify() -> None:
         "kernel-restore": context.component("RestoreKernelCache", in_cfw=True),
         "restore-ramdisk": context.component("RestoreRamDisk", in_cfw=True),
     }
-    if has_txm(context.components, "restore"):
+    if has_txm(context.components, "restore", context.boot_firmware_components):
         targets["txm-restore"] = context.component(
             "Ap,RestoreTrustedExecutionMonitor", in_cfw=True
         )

@@ -40,16 +40,6 @@ final class RestoreComponentResolverTests: XCTestCase {
         XCTAssertEqual(records[0].replacementWord, 0xD503201F)
     }
 
-    func testIPad8ASRExactBuildOracle() throws {
-        let manifest = try FixtureManifest.load(
-            from: packageRoot.appendingPathComponent(
-                "fixtures/23H30/j171aap/asr-j171aap-23H30.json"
-            )
-        )
-        let binary = try fixture("offsets/23H30/asr")
-        XCTAssertEqual(try manifest.verify(binaryAt: binary).count, 1)
-    }
-
     func testRestoreComponentManifestsVerifyCompleteOutputs() throws {
         let cases = [
             ("fixtures/24A5390f/n104ap/restored-external-n104-24A5390f.json", "offsets/rd/b4_n104/restored_external"),

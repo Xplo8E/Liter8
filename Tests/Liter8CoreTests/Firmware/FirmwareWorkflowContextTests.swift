@@ -19,9 +19,42 @@ struct FirmwareWorkflowContextTests {
         #expect(context.components["iBSS"] == "release/iBSS.im4p")
         #expect(context.components["RestoreKernelCache"] == "kernelcache.test")
         #expect(context.components["OS"] == "rootfs.dmg.aea")
-        #expect(context.schema == 2)
+        #expect(context.schema == 3)
         #expect(context.bootPlan.normalIBSSAdditionalPlans == [.skipDisplayInitialization])
         #expect(context.bootPlan.restoreIBSSAdditionalPlans == [.skipDisplayInitialization])
+        #expect(context.bootPlan.firmwareComponents == DeviceBootPlan.defaultFirmwareComponents)
+        #expect(context.bootPlan.normalTrustCache == .restore)
+    }
+
+    @Test func ipad8PolicyRequiresExperimentalOptInAndStaticNormalTrustCache() throws {
+        let profile = try #require(DeviceWorkflowRegistry.profiles.first {
+            $0.id == "ipad11,6-j171aap-23H30"
+        })
+        let target = IPSWIdentity(
+            productVersion: "26.7.1", build: "23H30", productTypes: ["iPad11,6", "iPad11,7"],
+            buildIdentities: [.init(deviceClass: "j171aap", chipID: 0x8020, boardID: 0x24)]
+        )
+        #expect(DeviceWorkflowRegistry.profile(for: target) == nil)
+        #expect(DeviceWorkflowRegistry.profile(for: target, includeExperimental: true) == profile)
+        #expect(profile.validationState == .experimental)
+        #expect(profile.bootPlan.firmwareComponents == [
+            "RestoreLogo", "ANE", "AOP", "AVE", "GFX", "ISP", "SIO", "SEP",
+        ])
+        #expect(profile.bootPlan.normalTrustCache == .static)
+        #expect(profile.bootPlan.normalIBSSAdditionalPlans.isEmpty)
+        #expect(profile.bootPlan.restoreIBSSAdditionalPlans.isEmpty)
+
+        var erase = identity(variant: "Customer Erase Install (IPSW)", ibss: "Firmware/iBSS.im4p")
+        erase["ApChipID"] = "0x8020"
+        erase["ApBoardID"] = "0x24"
+        erase["Info"] = ["DeviceClass": "j171aap", "Variant": "Customer Erase Install (IPSW)"]
+        let source = try firmwareDirectory(identities: [erase])
+        defer { try? FileManager.default.removeItem(at: source) }
+        let context = try FirmwareWorkflowContext.load(profile: profile, sourceRoot: source)
+        let encoded = try JSONEncoder().encode(context)
+        let decoded = try JSONDecoder().decode(FirmwareWorkflowContext.self, from: encoded)
+        #expect(decoded.bootPlan == profile.bootPlan)
+        #expect(decoded.schema == 3)
     }
 
     @Test func rejectsTraversalInManifestComponent() throws {

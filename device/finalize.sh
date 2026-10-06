@@ -15,11 +15,17 @@
 set -e
 cd "${0:A:h}"
 
+# Allow the device's ECDSA key and AES-CTR cipher without dropping SSH defaults.
 SSHOPT=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
-        -o LogLevel=ERROR -o ConnectTimeout=25 -p 2222)
-DEV=root@localhost
+        -o LogLevel=ERROR -o ConnectTimeout=25
+        -o HostKeyAlgorithms=+ecdsa-sha2-nistp521 -o Ciphers=+aes128-ctr
+        -p "${LITER8_SSH_PORT:-2222}")
+DEV="root@${LITER8_SSH_HOST:-localhost}"
 PW=alpine
-SSHPASS=../tools/sshpass
+# Prefer a native sshpass. The bundled one is x86_64, so it needs Rosetta
+# on Apple Silicon. See https://github.com/Xplo8E/Liter8/issues/2.
+SSHPASS=$(command -v sshpass || true)
+"$SSHPASS" -V >/dev/null 2>&1 || SSHPASS=../tools/sshpass
 CHECK_ONLY=0
 [[ "${1:-}" == "--check" ]] && CHECK_ONLY=1
 
@@ -33,7 +39,8 @@ die()  { printf '    [!] %s\n' "$1"; exit 1 }
 
 sh_dev() { "$SSHPASS" -p "$PW" ssh "${SSHOPT[@]}" "$DEV" "$@" }
 
-[[ -x "$SSHPASS" ]] || die "sshpass is missing at $SSHPASS"
+"$SSHPASS" -V >/dev/null 2>&1 \
+    || die "sshpass at $SSHPASS cannot run on this host; brew install sshpass"
 [[ -x setup_shell.sh ]] || die "setup_shell.sh is missing beside finalize.sh"
 
 say "normal-boot connection"
@@ -41,16 +48,18 @@ say "normal-boot connection"
 # Reuse an operator-owned forward when one exists. Otherwise Liter8 owns this
 # temporary process and reliably stops it on every exit path.
 if ! sh_dev 'exit 0' >/dev/null 2>&1; then
+    [[ "$DEV" == root@localhost && "${LITER8_SSH_PORT:-2222}" == 2222 ]] \
+        || die "cannot reach $DEV on port ${LITER8_SSH_PORT:-2222}"
     command -v iproxy >/dev/null 2>&1 \
         || die "iproxy not found (brew install libimobiledevice)"
-    iproxy 2222 22 >/dev/null 2>&1 &
+    iproxy 2222:22 >/dev/null 2>&1 &
     IPROXY_PID=$!
     trap 'kill "$IPROXY_PID" 2>/dev/null' EXIT
     sleep 2
 fi
 
 if ! MOUNTS=$(sh_dev '/sbin/mount' 2>/dev/null); then
-    die "SSH handshake on port 2222 failed; if Dropbear sends a banner but closes during key exchange, rerun fw provision from SSHRD to generate its host keys"
+    die "SSH handshake with $DEV failed; if Dropbear sends a banner but closes during key exchange, rerun fw provision from SSHRD to generate its host keys"
 fi
 if print -r -- "$MOUNTS" | grep -q 'md0 on /'; then
     die "device is in SSHRD; finalize requires a normal boot"

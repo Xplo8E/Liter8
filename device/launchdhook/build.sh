@@ -4,15 +4,39 @@
 set -eu
 BASE="$(cd "$(dirname "$0")" && pwd)"
 TOOLS="$BASE/../../tools"
+# The bundled ldid links only system libraries, so a Homebrew upgrade
+# cannot break it, and its output is byte-identical. It is arm64 only,
+# so fall back to PATH where it cannot run, such as an Intel Mac.
+# See https://github.com/Xplo8E/Liter8/issues/2.
 LDID="$TOOLS/ldid_macosx_arm64"
-SDK="${LITER8_IOS_SDK:-$(xcrun --sdk iphoneos --show-sdk-path)}"
-[ -d "$SDK" ] || { echo "[!] iOS SDK missing: $SDK" >&2; exit 1; }
+"$LDID" -v 2>&1 | grep -q "Link Identity Editor" || LDID=$(command -v ldid || true)
+SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 OUT="$BASE/lhook.dylib"
 
-[ -x "$LDID" ] || { echo "[!] ldid missing at $LDID" >&2; exit 1; }
+# -x passes for an arm64 binary on an Intel Mac, so check that it runs and
+# identifies itself. ldid -v exits non-zero even when it works.
+"$LDID" -v 2>&1 | grep -q "Link Identity Editor" \
+    || { echo "[!] ldid at $LDID cannot run here; brew install ldid-procursus" >&2; exit 1; }
+
+# Name the slice. Without -arch, an Intel host matches neither arm64 nor
+# arm64e, so otool prints both with a header each and the second header reads
+# as a dependency. See https://github.com/Xplo8E/Liter8/issues/2.
+verify_deps() {
+    binary=$1
+    label=$2
+    expected=$3
+    for slice in arm64 arm64e; do
+        actual=$(otool -arch "$slice" -L "$binary" | awk 'NR > 1 {print $1}')
+        [ "$actual" = "$expected" ] || {
+            printf '[!] %s (%s) has unexpected dependencies:\n%s\n' \
+                "$label" "$slice" "$actual" >&2
+            exit 1
+        }
+    done
+}
 
 for arch in arm64 arm64e; do
-    xcrun clang -arch "$arch" -miphoneos-version-min=15.0 \
+    xcrun -sdk iphoneos clang -arch "$arch" -miphoneos-version-min=15.0 \
         -isysroot "$SDK" -dynamiclib -O2 -Wall -Wextra \
         -Wl,-not_for_dyld_shared_cache -install_name /usr/lib/lhook \
         -o "$BASE/lhook_$arch.dylib" "$BASE/lhook.c"
@@ -32,10 +56,8 @@ strings -a "$OUT" | grep -q '^/var/jb/usr/lib/TweakLoader.dylib$' \
     || { echo "[!] TweakLoader payload path missing" >&2; exit 1; }
 [ -z "$("$LDID" -e "$OUT")" ] \
     || { echo "[!] lhook unexpectedly carries entitlements" >&2; exit 1; }
-deps=$(otool -L "$OUT" | awk 'NR > 1 {print $1}')
-[ "$deps" = "/usr/lib/lhook
-/usr/lib/libSystem.B.dylib" ] \
-    || { printf '[!] lhook has unexpected dependencies:\n%s\n' "$deps" >&2; exit 1; }
+verify_deps "$OUT" lhook "/usr/lib/lhook
+/usr/lib/libSystem.B.dylib"
 
 echo "[+] $OUT ($archs, $interpose interpose section)"
 
@@ -48,7 +70,7 @@ build_universal() {
         [ "$kind" = dylib ] && extra="-dynamiclib -Wl,-not_for_dyld_shared_cache -install_name /usr/lib/systemhook.dylib"
         # extra is intentionally word-split: it is a fixed, source-controlled linker option set.
         # shellcheck disable=SC2086
-        xcrun clang -arch "$arch" -miphoneos-version-min=15.0 \
+        xcrun -sdk iphoneos clang -arch "$arch" -miphoneos-version-min=15.0 \
             -isysroot "$SDK" -O2 -Wall -Wextra $extra \
             -o "$BASE/${name}_$arch" "$BASE/$source"
     done
@@ -66,11 +88,7 @@ build_universal() {
 build_universal systemhook.dylib systemhook_icon.c dylib
 build_universal sbextissue sbextissue.c executable
 
-system_deps=$(otool -L "$BASE/systemhook.dylib" | awk 'NR > 1 {print $1}')
-[ "$system_deps" = "/usr/lib/systemhook.dylib
-/usr/lib/libSystem.B.dylib" ] \
-    || { printf '[!] systemhook has unexpected dependencies:\n%s\n' "$system_deps" >&2; exit 1; }
+verify_deps "$BASE/systemhook.dylib" systemhook "/usr/lib/systemhook.dylib
+/usr/lib/libSystem.B.dylib"
 
-issuer_deps=$(otool -L "$BASE/sbextissue" | awk 'NR > 1 {print $1}')
-[ "$issuer_deps" = "/usr/lib/libSystem.B.dylib" ] \
-    || { printf '[!] sbextissue has unexpected dependencies:\n%s\n' "$issuer_deps" >&2; exit 1; }
+verify_deps "$BASE/sbextissue" sbextissue "/usr/lib/libSystem.B.dylib"

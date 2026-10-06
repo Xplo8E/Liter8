@@ -27,19 +27,14 @@ public struct KernelPPLTrustCacheResolver: Sendable {
         // Copy all 20 CDHash bytes into a local buffer, query loadable trust
         // caches (type 2), convert KERN_SUCCESS into a boolean. Keep the query,
         // stack canary, authenticated frame and return intact.
-        let pattern = MaskedInstructionPattern(name: "PPL loaded trust-cache helper", referenceWords: [
-            0xd503237f, 0xd100c3ff, 0xa9027bfd, 0x910083fd,
-            0x90000008, 0x91000108, 0xf9400108, 0xf81f83a8,
-            0x3dc00000, 0x3d8003e0, 0xb9401008, 0xb90013e8,
-            0x910003e1, 0x52800040, 0xd2800002, 0x94000000,
-            0x7100001f, 0x1a9f17e0,
-            0xf85f83a8, 0x90000009, 0x91000129, 0xf9400129,
-            0xeb08013f, 0x54000081, 0xa9427bfd, 0x9100c3ff, 0xd65f0fff,
-        ])
-        let entry = try pattern.uniqueMatch(in: image, layout: layout)
+        let entry = try KernelPPLTrustCacheSignatures.loadedTrustCacheV1.uniqueMatch(in: image, layout: layout)
         guard let entryVA = layout.virtualAddress(forFileOffset: entry) else {
             throw PatchfinderError.noCandidate("mapped PPL trust-cache entry")
         }
+        // BL helper; TBZ W0,#0,+12; MOV W8,#9; B <success>.
+        // The false path skips the trust-level assignment; the true path
+        // produces PMAP_CS_IN_LOADED_TRUST_CACHE. Keep branch polarity and
+        // registers fixed while allowing only the final B destination to drift.
         // Independently verify the caller gives success trust level 9
         // (PMAP_CS_IN_LOADED_TRUST_CACHE), not a different trust decision.
         var callers: [UInt64] = []

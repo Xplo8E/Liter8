@@ -6,9 +6,12 @@ import Foundation
 /// full IPSW extraction; macOS `unzip` remains only for reading one small plist
 /// and `zipinfo` supplies the independent safety inventory.
 public enum IPSWUnzip {
+    // `unzip` and `zipinfo` ship with macOS, so their absolute paths are fixed.
+    // 7-Zip comes from Homebrew and is resolved at run time instead.
     private static let unzipExecutable = URL(fileURLWithPath: "/usr/bin/unzip")
     private static let zipinfoExecutable = URL(fileURLWithPath: "/usr/bin/zipinfo")
-    private static let defaultSevenZipExecutable = URL(fileURLWithPath: "/opt/homebrew/bin/7zz")
+    private static let sevenZipName = "7zz"
+    private static let sevenZipInstallHint = "brew install sevenzip"
 
     // These are sanity limits, not estimates of one particular firmware. They
     // leave ample room for Apple IPSWs while refusing archive metadata that
@@ -70,12 +73,7 @@ public enum IPSWUnzip {
         // Inspect metadata before writing anything. This restores the strict
         // path, duplicate, size and symlink checks from the native ZIP reader.
         let archiveInventory = try inventory(of: ipsw)
-        let sevenZip = sevenZipExecutable()
-        guard FileManager.default.isExecutableFile(atPath: sevenZip.path) else {
-            throw PatchfinderError.invalidFixture(
-                "7-Zip is required for IPSW extraction: \(sevenZip.path) is not executable"
-            )
-        }
+        let sevenZip = try sevenZipExecutable()
         let diagnostics = try temporaryCaptureFile()
         defer {
             try? diagnostics.handle.close()
@@ -156,14 +154,9 @@ public enum IPSWUnzip {
         return total
     }
 
-    /// Production uses the requested Homebrew binary. Tests may point at a
-    /// compatible local shim without installing packages into the host.
-    private static func sevenZipExecutable() -> URL {
-        if let override = ProcessInfo.processInfo.environment["LITER8_7ZZ"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override).standardizedFileURL
-        }
-        return defaultSevenZipExecutable
+    /// Resolve 7-Zip wherever this machine's Homebrew installed it.
+    public static func sevenZipExecutable() throws -> URL {
+        try HostTool.require(sevenZipName, installHint: sevenZipInstallHint)
     }
 
     /// Recheck a completed extraction against the archive supplied now.

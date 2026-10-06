@@ -21,6 +21,13 @@ import Foundation
 /// `idevicerestore`, `irecovery` and `7zz`, and they inherit its group. Killing
 /// only the Python process would orphan those in turn, which is the same bug
 /// one level down.
+///
+/// `run(_:foregroundTerminal:)` is the exception, used by `fw get-rd` so that
+/// `sudo` can prompt. It hands the terminal to the child's group, so Ctrl-C is
+/// delivered there directly and Liter8 never sees it. Nothing is orphaned,
+/// because the child and its grandchildren share that group, but the
+/// forwarding and the SIGTERM-then-SIGKILL escalation below do not run on that
+/// path.
 public enum InterruptibleProcess: Sendable {
     /// How long a child gets to exit on SIGTERM before it is killed.
     ///
@@ -45,37 +52,34 @@ public enum InterruptibleProcess: Sendable {
     /// that runs several children in sequence is unaffected by this one.
     public static func run(_ process: Process, foregroundTerminal: Bool = false) throws {
         try supervising(process) {
-            // A workflow may prompt through /dev/tty (sudo, ssh), even when
-            // stdin is redirected. Only lend a terminal that we currently own.
-            let terminal = foregroundTerminal ? open("/dev/tty", O_RDWR | O_NOCTTY) : -1
-            defer { if terminal >= 0 { close(terminal) } }
-            let parentGroup = getpgrp()
-            let ownsTerminal = terminal >= 0 && tcgetpgrp(terminal) == parentGroup
             try process.run()
-            if ownsTerminal {
-                let childGroup = process.processIdentifier
-                let previousTTOU = signal(SIGTTOU, SIG_IGN)
-                let result = tcsetpgrp(terminal, childGroup)
-                let failure = errno
-                signal(SIGTTOU, previousTTOU)
-                if result != 0 && process.isRunning {
-                    kill(-childGroup, SIGKILL)
-                    process.waitUntilExit()
-                    throw POSIXError(POSIXErrorCode(rawValue: failure) ?? .EIO)
-                }
-                // A fast tty read can stop the group before tcsetpgrp runs.
-                if result == 0 { kill(-childGroup, SIGCONT) }
-            }
-            defer {
-                if ownsTerminal {
-                    // Liter8 is now in the background; restoring the terminal
-                    // without suppressing SIGTTOU would stop Liter8 itself.
-                    let previousTTOU = signal(SIGTTOU, SIG_IGN)
-                    tcsetpgrp(terminal, parentGroup)
-                    signal(SIGTTOU, previousTTOU)
-                }
-            }
+            let restoreTerminal = foregroundTerminal
+                ? foregroundTerminalForChild(process)
+                : nil
+            defer { restoreTerminal?() }
             process.waitUntilExit()
+        }
+    }
+
+    private static func foregroundTerminalForChild(_ process: Process) -> (() -> Void)? {
+        let descriptor = STDIN_FILENO
+        guard isatty(descriptor) != 0 else { return nil }
+        let originalGroup = tcgetpgrp(descriptor)
+        let childGroup = process.processIdentifier
+        guard originalGroup > 0,
+              originalGroup == getpgrp(),
+              childGroup > 0,
+              getpgid(childGroup) == childGroup else { return nil }
+
+        let previousTTOU = signal(SIGTTOU, SIG_IGN)
+        let foregrounded = tcsetpgrp(descriptor, childGroup) == 0
+        signal(SIGTTOU, previousTTOU)
+        guard foregrounded else { return nil }
+
+        return {
+            let previousTTOU = signal(SIGTTOU, SIG_IGN)
+            _ = tcsetpgrp(descriptor, originalGroup)
+            signal(SIGTTOU, previousTTOU)
         }
     }
 

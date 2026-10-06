@@ -8,8 +8,9 @@ private func usage() -> Never {
       liter8 resolve <component> <plan> <input> [options]
       liter8 apply <component> <plan> <input> <output> [options]
       liter8 fw <actions|prepare|prepare-rootfs|unmount-rootfs|make-cfw|capture-ticket|get-rd|get-boot|verify-cfw|restore-cfw|boot-rd|boot|bootstrap|provision|finalize|setup-shell> [options]
-      liter8 survey <extracted-firmware-directory>
+      liter8 survey <extracted-firmware-directory> [--guards]
       liter8 acm-probe <kernelcache> <signature-variant>
+      liter8 preflight
       liter8 profile <binary>
       liter8 profiles
       liter8 fixture <component> <plan> <input> <manifest.json>
@@ -26,6 +27,7 @@ private func usage() -> Never {
       liter8 verify <manifest.json> <binary>
       liter8 im4p <info|extract|repack> ...
       liter8 img4 create <input.im4p> <ticket.im4m> <output.img4> [--fourcc <type>]
+      liter8 img4 extract-manifest <input.img4> <output.im4m>
       liter8 setup [--resource-dir <directory>]
 
     components and plans:
@@ -33,7 +35,8 @@ private func usage() -> Never {
                   ibss-ramdisk, ibss-skip-display-init,
                   ibec-ignore-pinot-failure, ibec-force-pinot-id
       kernel      restore, ppl-trust-cache, boot-policy, aks, sep-silence, sep,
-              credential-manager, sandbox, sandbox-public, boot, boot-public, diagnostic
+                  credential-manager, sandbox, sandbox-public, valeria,
+                  boot, boot-public, diagnostic
       txm         restore, boot
       userland    restored-fdr, asr, coreauthd, ctkd, mobileactivationd
       devicetree  restore, normal
@@ -42,9 +45,11 @@ private func usage() -> Never {
       --json  --boot-args <literal>  --pinot-id <value>
       --file <firmware.ipsw>  --work-dir <directory>  --python <executable>
       --experimental  opt in to a firmware workflow that still needs device validation
+      --board <device-class>  pick the board when one IPSW supports several,
+                for example d421ap or d431ap on an iPhone 11 Pro/Pro Max IPSW
       --resource-dir <directory>  --ticket <apticket.im4m>
       --sshrd-payload <ssh.tar.gz>
-      --irecovery <custom-irecovery>  --idevicerestore <executable>
+      --irecovery <executable>  --idevicerestore <executable>
       --rootfs <mounted-root-filesystem>  --check
       --serial  add serial=3 to the boot arguments of the artifact being built
                 (make-cfw, get-rd, get-boot). Off by default: it moves the
@@ -88,6 +93,7 @@ let resolverGroups: [String: [String: String]] = [
         "credential-manager": KernelCredentialManagerResolver.name,
         "sandbox": KernelSandboxResolver.name,
         "sandbox-public": KernelSandboxCompatibilityResolver.name,
+        "valeria": KernelValeriaResolver.name,
         "boot": KernelBootResolver.name,
         // Keep the public CLI spelling stable while the Swift type describes
         // the plan's real cross-build compatibility contract.
@@ -223,6 +229,7 @@ func resolveRecords(
         guard options.bootArguments == nil, options.panelID == nil else { usage() }
         return try KernelRestoreResolver().resolve(in: image)
     case KernelPPLTrustCacheResolver.name:
+        guard options.bootArguments == nil, options.panelID == nil else { usage() }
         return try KernelPPLTrustCacheResolver().resolve(in: image)
     case KernelBootPolicyResolver.name:
         guard options.bootArguments == nil, options.panelID == nil else { usage() }
@@ -245,6 +252,9 @@ func resolveRecords(
     case KernelSandboxCompatibilityResolver.name:
         guard options.bootArguments == nil, options.panelID == nil else { usage() }
         return try KernelSandboxCompatibilityResolver().resolve(in: image)
+    case KernelValeriaResolver.name:
+        guard options.bootArguments == nil, options.panelID == nil else { usage() }
+        return try KernelValeriaResolver().resolve(in: image)
     case KernelBootResolver.name:
         guard options.bootArguments == nil, options.panelID == nil else { usage() }
         return try KernelBootResolver().resolve(in: image)
@@ -380,6 +390,49 @@ do {
     guard let command = arguments.first else { usage() }
 
     switch command {
+    case "preflight":
+        // Report every missing tool at once. Resolving them one at a time as
+        // the workflow reaches them means a missing SSHRD tool is discovered
+        // after the restore has already erased the phone.
+        guard arguments.count == 1 else { usage() }
+        let results = Preflight.run()
+        let width = results.map(\.tool.displayName.count).max() ?? 0
+        // A tool shipped with Liter8 reads better as `tools/gtar` than as the
+        // absolute path to wherever this checkout happens to live.
+        let resourceRoot = (try? Liter8Resources.resolve().base.path).map { $0 + "/" }
+        let display: (URL) -> String = { url in
+            guard let resourceRoot, url.path.hasPrefix(resourceRoot) else { return url.path }
+            return String(url.path.dropFirst(resourceRoot.count))
+        }
+        for stage in Preflight.Stage.allCases {
+            let inStage = results.filter { $0.tool.stage == stage }
+            guard !inStage.isEmpty else { continue }
+            print("\(stage.rawValue):")
+            for result in inStage {
+                let name = result.tool.displayName.padding(
+                    toLength: width, withPad: " ", startingAt: 0
+                )
+                if let resolved = result.resolved {
+                    print("  ok      \(name)  \(display(resolved))")
+                } else {
+                    print("  MISSING \(name)  \(result.tool.purpose)")
+                    print("          \(String(repeating: " ", count: width))  \(result.tool.installHint)")
+                }
+            }
+        }
+        let missing = results.filter { !$0.isSatisfied }
+        guard missing.isEmpty else {
+            // Flush first: stdout is buffered and stderr is not, so without
+            // this the summary prints above the report it summarises.
+            fflush(stdout)
+            let names = missing.map(\.tool.displayName).joined(separator: ", ")
+            FileHandle.standardError.write(
+                Data("\n\(missing.count) required tool(s) missing: \(names)\n".utf8)
+            )
+            exit(1)
+        }
+        print("\nall required host tools resolved")
+
     case "setup":
         var resourceDirectory: URL?
         if arguments.count == 3, arguments[1] == "--resource-dir" {
@@ -417,6 +470,7 @@ do {
         var irecoveryArgument: String?
         var idevicerestoreArgument: String?
         var rootfsArgument: String?
+        var boardArgument: String?
         var checkOnly = false
         var includeExperimental = false
         var serialConsole = false
@@ -457,6 +511,8 @@ do {
                 idevicerestoreArgument = arguments[index + 1]
             case "--rootfs":
                 rootfsArgument = arguments[index + 1]
+            case "--board":
+                boardArgument = arguments[index + 1]
             default:
                 usage()
             }
@@ -495,7 +551,8 @@ do {
             try FirmwareWorkflowRunner.run(
                 file: URL(fileURLWithPath: file).standardizedFileURL,
                 workDirectory: workDirectoryURL,
-                includeExperimental: includeExperimental
+                includeExperimental: includeExperimental,
+                board: boardArgument
             )
         } else {
             guard fileArgument == nil else { usage() }
@@ -591,6 +648,7 @@ do {
                     URL(fileURLWithPath: $0).standardizedFileURL
                 },
                 includeExperimental: includeExperimental,
+                board: boardArgument,
                 workflowEnvironment: workflowEnvironment
             )
         }
@@ -616,10 +674,18 @@ do {
         try printRecords(records, json: options.json)
 
     case "survey":
-        guard arguments.count == 2 else { usage() }
-        let status = try Survey.run(
-            directory: URL(fileURLWithPath: arguments[1]).standardizedFileURL
-        )
+        let wantsGuards = arguments.contains("--guards")
+        let positional = arguments.dropFirst().filter { !$0.hasPrefix("--") }
+        guard positional.count == 1, arguments.count == (wantsGuards ? 3 : 2) else { usage() }
+        let surveyDirectory = URL(fileURLWithPath: positional[positional.startIndex])
+            .standardizedFileURL
+        let status = try Survey.run(directory: surveyDirectory)
+        // Resolution is a read of files already on disk. Measuring the guards
+        // decrypts and mounts an 8 GB root filesystem, so it stays opt-in
+        // rather than slowing down the command people run constantly.
+        if wantsGuards {
+            try Survey.measureGuards(directory: surveyDirectory, python: nil)
+        }
         exit(status)
 
     case "acm-probe":
@@ -910,6 +976,16 @@ do {
         }
 
     case "img4":
+        if arguments.count == 4, arguments[1] == "extract-manifest" {
+            let container = URL(fileURLWithPath: arguments[2]).standardizedFileURL
+            let manifest = URL(fileURLWithPath: arguments[3]).standardizedFileURL
+            let im4m = try IMG4Signing.extractManifest(
+                from: Data(contentsOf: container)
+            )
+            try im4m.write(to: manifest, options: .atomic)
+            print("extracted IM4M (\(im4m.count) bytes): \(manifest.path)")
+            break
+        }
         guard arguments.count == 5 || arguments.count == 7,
               arguments[1] == "create" else { usage() }
         var fourcc: String?

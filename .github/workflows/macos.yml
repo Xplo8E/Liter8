@@ -1,0 +1,37 @@
+name: macOS validation
+
+on:
+  push:
+    branches: [main, ipad8-support]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install workflow dependencies
+        run: |
+          brew install sevenzip
+          python3 -m pip install -r requirements.txt
+      - name: Run Swift and workflow checks
+        run: |
+          set -o pipefail
+          swift --version
+          make check 2>&1 | tee validation.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-validation
+          path: validation.log

@@ -10,7 +10,7 @@ from liter8_workflow import Context, WorkflowError, main_guard, run
 
 def build() -> None:
     context = Context.load()
-    patch_txm = has_txm(context.components, "restore")
+    patch_txm = has_txm(context.components, "restore", context.boot_firmware_components)
     context.prepare_cfw()
     # Keep the erase-restore transport payload separate from get-boot/get-rd,
     # which replace the Ramdisk directory with their own iBSS.raw.

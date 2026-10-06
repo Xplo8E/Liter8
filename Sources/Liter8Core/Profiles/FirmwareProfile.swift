@@ -47,6 +47,9 @@ public struct KernelResolverProfile: Equatable, Sendable {
     public let boards: [String]
     public let component: String
     public let embeddedFingerprint: String
+    /// The Valeria repair needs a separately validated executable cave.
+    /// iPad 8 has no such evidence; its experimental public plan omits it.
+    public let includesValeriaRepair: Bool
     public let resolverVariants: [String: ResolverVariantProfile]
 
     public init(
@@ -56,7 +59,8 @@ public struct KernelResolverProfile: Equatable, Sendable {
         boards: [String],
         component: String,
         embeddedFingerprint: String,
-        resolverVariants: [String: ResolverVariantProfile]
+        resolverVariants: [String: ResolverVariantProfile],
+        includesValeriaRepair: Bool = true
     ) {
         self.id = id
         self.productVersion = productVersion
@@ -65,6 +69,7 @@ public struct KernelResolverProfile: Equatable, Sendable {
         self.component = component
         self.embeddedFingerprint = embeddedFingerprint
         self.resolverVariants = resolverVariants
+        self.includesValeriaRepair = includesValeriaRepair
     }
 
     /// Whether this profile covers a specific Apple build ID.
@@ -132,7 +137,7 @@ public enum KernelResolverProfileRegistry {
             // by the ten kernel plans match 24A437 on id, offset, original bytes
             // and replacement bytes.
             builds: ["24A435", "24A437", "24A446"],
-            boards: ["n104ap"],
+            boards: ["n104ap", "d421ap", "d431ap"],
             component: "kernelcache.release.iphone12b",
             embeddedFingerprint: "xnu-13432.2.10~2/RELEASE_ARM64_T8030",
             resolverVariants: [
@@ -187,21 +192,28 @@ public enum KernelResolverProfileRegistry {
             ]
         ),
         KernelResolverProfile(
-            // iPad 8 (iPad11,6 / iPad11,7, j171aap / j172aap, A12 / T8020)
-            // iPadOS 26.7.1. This is a new SoC family (T8020, not T8030) and a
-            // new XNU major (Darwin 25.6.0) for Liter8. It is registered so the
-            // artifact is identified rather than labelled "unidentified", but
-            // The credential-manager family is an exact-build 25-entry roster.
-            // Other kernel patch families still need device validation.
-            //
-            // Discovery status (resolve against the clean kernelcache):
-            //   boot-policy, aks, sep, sep-silence  -> candidates produced
-            //   restore, boot, boot-public, diagnostic -> now reach past the
-            //       SoC-string anchor; downstream anchors still need review
-            //   credential-manager -> 25 unique entries, fixture-bound
-            //   sandbox-public -> 11 records, fixture-bound
-            //   sandbox scoped shim -> no cave found
-            // See docs/plans/IPAD8_26_7_1_PORT.md for the full Phase A table.
+            // Third 27.2 seed, third XNU string, so a third profile.
+            id: "ios272b3-24B5099f-n104ap",
+            productVersion: "27.2 beta 3",
+            builds: ["24B5099f"],
+            boards: ["n104ap"],
+            component: "kernelcache.release.iphone12b",
+            embeddedFingerprint: "xnu-13432.40.177.0.3~16/RELEASE_ARM64_T8030",
+            resolverVariants: [
+                // Shape-identical to both earlier seeds, recorded separately
+                // for the same reason beta 2 was. See
+                // KernelCredentialManagerSignatures.release24B5099fV1.
+                "kernel-credential-manager": ResolverVariantProfile(
+                    signature: "ios272b3-24B5099f-acm-v1",
+                    payload: "acm-return-success-v1"
+                ),
+            ]
+        ),
+        KernelResolverProfile(
+            // Exact 23H30 A12 kernel. Only j171aap has a workflow profile.
+            // ACM has 25 distinct entries; updateAnalytics is not recovered.
+            // The public plan has 118 records. Scoped sandbox and Valeria
+            // caves are unverified. See docs/plans/IPAD8_26_7_1_PORT.md.
             id: "ios26-23H30-j171aap",
             productVersion: "26.7.1",
             builds: ["23H30"],
@@ -221,7 +233,8 @@ public enum KernelResolverProfileRegistry {
                     signature: "ios26-23H30-acm-v1",
                     payload: "acm-return-success-v1"
                 ),
-            ]
+            ],
+            includesValeriaRepair: false
         ),
     ]
 

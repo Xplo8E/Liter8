@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Focused tests for the generic Python/Swift workflow boundary."""
 
+import copy
 import json
 import hashlib
 import io
 import os
 import plistlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -18,7 +20,8 @@ from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
-from liter8_workflow import Context, WorkflowError, run  # noqa: E402
+from liter8_workflow import Context, DEFAULT_BOOT_FIRMWARE, WorkflowError, run  # noqa: E402
+import measure_guards  # noqa: E402
 from boot_artifacts import (  # noqa: E402
     PASSTHROUGH_IMG4,
     has_txm,
@@ -40,7 +43,7 @@ from device_provision import (  # noqa: E402
 import sshrd  # noqa: E402
 from sshrd import REVIEWED_PAYLOAD_SHA256, build_sshrd, sha256_file  # noqa: E402
 from restore_cfw import managed_tss_proxy, restore_log_path, stage  # noqa: E402
-from tss_proxy import inject_euicc  # noqa: E402
+from tss_proxy import TSSProxyHandler, TSSProxyServer, inject_euicc  # noqa: E402
 from apticket import (  # noqa: E402
     capture_from_debug_log,
     ticket_from_tss_response,
@@ -59,7 +62,167 @@ from userland_fixups import (  # noqa: E402
     signing_identifier,
 )
 from patch_setup import discover_targets  # noqa: E402
+from patch_watchdogd_job import (  # noqa: E402
+    CACHE_KEY as WATCHDOGD_CACHE_KEY,
+    EXPECTED_MACH_SERVICES,
+    REMOVED_POLICY,
+    JobShapeError,
+    apply_mitigation,
+    policy_state,
+    remove_mitigation,
+    watchdogd_job_is_mitigated,
+)
+from add_ddi_services import (  # noqa: E402
+    CACHE_KEY as DDI_CACHE_KEY,
+    DDI_SERVICES_JOB,
+    DDI_WATCHER,
+    JobShapeError as DDIJobShapeError,
+    apply_job as apply_ddi_job,
+    remove_job as remove_ddi_job,
+    validate_document as validate_ddi_document,
+)
+
+
+class DeveloperDiskImageJobTests(unittest.TestCase):
+    def document(self):
+        return {
+            "VersionNumber": 7,
+            "AppExtensions": {},
+            "SystemLibraryTreeState": {},
+            "LaunchDaemons": {
+                "/System/Library/LaunchDaemons/com.apple.fixture.plist": {
+                    "Label": "com.apple.fixture"
+                },
+            },
+        }
+
+    def test_job_bootstraps_the_fixed_system_domain_directory_on_mount(self):
+        self.assertEqual(
+            DDI_SERVICES_JOB["ProgramArguments"],
+            [DDI_WATCHER],
+        )
+        self.assertTrue(DDI_SERVICES_JOB["RunAtLoad"])
+        self.assertEqual(DDI_SERVICES_JOB["KeepAlive"], {"SuccessfulExit": False})
+        self.assertNotIn("StartOnMount", DDI_SERVICES_JOB)
+
+    def test_apply_and_remove_preserve_unrelated_jobs(self):
+        document = self.document()
+        before = copy.deepcopy(document)
+        validate_ddi_document(document, expected_pristine=1)
+        self.assertTrue(apply_ddi_job(document))
+        self.assertEqual(document["LaunchDaemons"][DDI_CACHE_KEY], DDI_SERVICES_JOB)
+        self.assertEqual(
+            document["LaunchDaemons"]["/System/Library/LaunchDaemons/com.apple.fixture.plist"],
+            before["LaunchDaemons"]["/System/Library/LaunchDaemons/com.apple.fixture.plist"],
+        )
+        validate_ddi_document(document, expected_pristine=1)
+        self.assertFalse(apply_ddi_job(document))
+        self.assertTrue(remove_ddi_job(document))
+        self.assertEqual(document, before)
+
+    def test_existing_modified_job_fails_closed(self):
+        document = self.document()
+        document["LaunchDaemons"][DDI_CACHE_KEY] = {"Label": "unexpected"}
+        with self.assertRaisesRegex(DDIJobShapeError, "unexpected job definition"):
+            apply_ddi_job(document)
+
+    def test_unknown_extra_job_fails_profile_count_guard(self):
+        document = self.document()
+        document["LaunchDaemons"]["/tmp/unreviewed.plist"] = {"Label": "unreviewed"}
+        with self.assertRaisesRegex(DDIJobShapeError, "expected 1"):
+            validate_ddi_document(document, expected_pristine=1)
+
+    def test_cache_build_and_device_verification_require_the_job(self):
+        builder = (DEVICE / "fetch_payloads.sh").read_text()
+        provisioner = (DEVICE / "sshrd_provision.sh").read_text()
+        watcher = (DEVICE / "ddiwatch/ddiwatch.c").read_text()
+        self.assertIn("./add_ddi_services.py", builder)
+        self.assertIn("cd ddiwatch", builder)
+        self.assertIn("LAUNCHD_CACHE_DAEMONS + 3", builder)
+        self.assertIn("com.liter8.ddi-services", provisioner)
+        self.assertIn("ddiwatch readback hash mismatch", provisioner)
+        self.assertIn("LAUNCHD_CACHE_DAEMONS + 3", provisioner)
+        self.assertIn("com.apple.coredevice.dtdeviceinfod.plist", watcher)
+        self.assertIn("usleep(250000)", watcher)
+        self.assertIn("services_registered()", watcher)
+
+
+class WatchdogdJobPatchTests(unittest.TestCase):
+    def job(self):
+        return {
+            "Label": "com.apple.watchdogd",
+            "ProgramArguments": ["/usr/libexec/watchdogd"],
+            "MachServices": {
+                **EXPECTED_MACH_SERVICES,
+                "com.apple.future-service": {"ResetAtClose": True},
+            },
+            "AlwaysSIGTERMOnShutdown": True,
+            "EnablePressuredExit": False,
+            "EnableTransactions": True,
+            "ExitTimeOut": 15,
+            "POSIXSpawnType": "Interactive",
+            **copy.deepcopy(REMOVED_POLICY),
+        }
+
+    def document(self):
+        return {
+            "VersionNumber": 7,
+            "LaunchDaemons": {
+                WATCHDOGD_CACHE_KEY: self.job(),
+                "/System/Library/LaunchDaemons/com.apple.logd.plist": {
+                    "Label": "com.apple.logd"
+                },
+            },
+        }
+
+    def test_apply_removes_only_the_three_crash_loop_policies(self):
+        document = self.document()
+        before = copy.deepcopy(document)
+        self.assertTrue(apply_mitigation(document))
+
+        job = document["LaunchDaemons"][WATCHDOGD_CACHE_KEY]
+        for key in REMOVED_POLICY:
+            self.assertNotIn(key, job)
+        self.assertEqual(
+            job["MachServices"],
+            before["LaunchDaemons"][WATCHDOGD_CACHE_KEY]["MachServices"],
+        )
+        self.assertEqual(
+            document["LaunchDaemons"]["/System/Library/LaunchDaemons/com.apple.logd.plist"],
+            before["LaunchDaemons"]["/System/Library/LaunchDaemons/com.apple.logd.plist"],
+        )
+        self.assertTrue(watchdogd_job_is_mitigated(document))
+        self.assertFalse(apply_mitigation(document))
+
+    def test_remove_restores_the_reviewed_stock_policy(self):
+        document = self.document()
+        original = copy.deepcopy(document)
+        apply_mitigation(document)
+        self.assertTrue(remove_mitigation(document))
+        self.assertEqual(document, original)
+        self.assertEqual(
+            policy_state(document["LaunchDaemons"][WATCHDOGD_CACHE_KEY]), "stock"
+        )
+
+    def test_mixed_or_unknown_policy_fails_closed(self):
+        document = self.document()
+        del document["LaunchDaemons"][WATCHDOGD_CACHE_KEY]["KeepAlive"]
+        with self.assertRaisesRegex(JobShapeError, "neither reviewed stock nor mitigated"):
+            apply_mitigation(document)
+
+    def test_wrong_program_fails_closed(self):
+        document = self.document()
+        document["LaunchDaemons"][WATCHDOGD_CACHE_KEY]["ProgramArguments"] = [
+            "/tmp/not-watchdogd"
+        ]
+        with self.assertRaisesRegex(JobShapeError, "ProgramArguments"):
+            apply_mitigation(document)
+
 from apfs_role import volume_for_role  # noqa: E402
+
+
+IPAD_BOOT_FIRMWARE = tuple(name for name in DEFAULT_BOOT_FIRMWARE
+                           if name not in {"Ap,SecurePageTableMonitor", "PMP", "WCHFirmwareUpdater"})
 
 
 class APFSRoleTests(unittest.TestCase):
@@ -98,11 +261,13 @@ class ContextTests(unittest.TestCase):
         self.liter8.touch()
         self.context_file = self.work / "context.json"
         self.context_file.write_text(json.dumps({
-            "schema": 2,
+            "schema": 3,
             "profileID": "fixture-profile",
             "sourceRoot": str(self.source),
             "components": {"iBSS": "Firmware/dfu/iBSS.im4p"},
             "bootPlan": {
+                "firmwareComponents": list(DEFAULT_BOOT_FIRMWARE),
+                "normalTrustCache": "RestoreTrustCache",
                 "normalIBSSAdditionalPlans": ["ibss-skip-display-init"],
                 "restoreIBSSAdditionalPlans": ["ibss-skip-display-init"],
             },
@@ -163,6 +328,24 @@ class ContextTests(unittest.TestCase):
         finally:
             os.chdir(previous)
 
+    def test_rejects_stale_or_malformed_boot_firmware_policy(self):
+        original = json.loads(self.context_file.read_text())
+        invalid = [None, [], ["RestoreLogo", "SEP", "unknown"],
+                   ["RestoreLogo", "SEP", "SEP"], ["RestoreLogo", 1]]
+        for value in invalid:
+            document = copy.deepcopy(original)
+            document["bootPlan"]["firmwareComponents"] = value
+            self.context_file.write_text(json.dumps(document))
+            with self.subTest(value=value), patch.dict(os.environ, self.environment, clear=True):
+                with self.assertRaises(WorkflowError):
+                    Context.load()
+        document = copy.deepcopy(original)
+        document["schema"] = 2
+        self.context_file.write_text(json.dumps(document))
+        with patch.dict(os.environ, self.environment, clear=True):
+            with self.assertRaisesRegex(WorkflowError, "unsupported Liter8 context schema"):
+                Context.load()
+
     def test_rejects_context_path_that_escapes_firmware_tree(self):
         document = json.loads(self.context_file.read_text())
         document["components"]["iBSS"] = "../outside.im4p"
@@ -198,6 +381,7 @@ class ContextTests(unittest.TestCase):
         finally:
             os.chdir(previous)
 
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS APFS clone support")
     def test_cfw_uses_an_atomic_writable_clone(self):
         """A CFW tree must not require a second physical 10-GB copy."""
         source_file = self.source / "large-firmware-image"
@@ -485,6 +669,12 @@ class ContextTests(unittest.TestCase):
         with self.assertRaises(ProcessLookupError):
             os.kill(pid, 0)
 
+    def test_loopback_tss_startup_does_not_depend_on_reverse_dns(self):
+        with patch("socket.getfqdn", side_effect=AssertionError("unexpected DNS lookup")):
+            with TSSProxyServer(("127.0.0.1", 0), TSSProxyHandler) as server:
+                self.assertEqual(server.server_name, "127.0.0.1")
+                self.assertGreater(server.server_port, 0)
+
     def test_restore_log_paths_are_durable_and_stage_output_is_visible(self):
         context = Context(
             profile_id="fixture-profile",
@@ -712,16 +902,157 @@ class ContextTests(unittest.TestCase):
 
     def test_userland_provisioning_is_wired_into_device_verification(self):
         provisioner = (DEVICE / "sshrd_provision.sh").read_text()
-        self.assertIn("ticket setup userland screentime injection", provisioner)
+        self.assertIn("ticket setup userland pairing screentime injection", provisioner)
         self.assertIn("mount -u -o rw /dev/disk1s2", provisioner)
         self.assertIn("Data volume NOT writable", provisioner)
         self.assertIn("verify_userland_patch coreauthd", provisioner)
+        self.assertIn("verify_userland_patch lockdownd", provisioner)
+        self.assertIn("verify_userland_patch remotepairingdeviced", provisioner)
+        self.assertIn("deploy_pairing_library", provisioner)
+        self.assertIn("deploy_remotepairing_library", provisioner)
+        self.assertIn("deploy_coreauth_library", provisioner)
+        self.assertIn("deploy_userland_daemon coreauthd", provisioner)
+        self.assertIn("if ! wants userland", provisioner)
+        self.assertIn(".liter8-pairing-fallback", provisioner)
+        self.assertIn('note "l8pair dylib"', provisioner)
+        self.assertIn('note "l8remotepairing dylib"', provisioner)
+        self.assertIn('note "l8coreauth dylib"', provisioner)
         self.assertIn('note "ScreenTime overrides"', provisioner)
         self.assertIn('note "Setup CodeDirectory/id"', provisioner)
         self.assertIn('note "System /bin/sh"', provisioner)
         self.assertIn('""|*ABSENT*|*MISSING*', provisioner)
         self.assertIn("verify.Setup.orig", provisioner)
         self.assertIn('-I"$setup_identifier"', provisioner)
+        self.assertIn("SSH_ATTEMPTS=5", provisioner)
+        self.assertIn("liter8-ssh-out.XXXXXX", provisioner)
+        self.assertIn("liter8-ssh-put.XXXXXX", provisioner)
+
+    def test_provisioning_help_needs_no_device_environment_or_host_tools(self):
+        environment = os.environ.copy()
+        for name in (
+            "LITER8_LAUNCHD_SHA",
+            "LITER8_LAUNCHD_CACHE_SHA",
+            "LITER8_LAUNCHD_CACHE_DAEMONS",
+            "LITER8_SETUP_METHODS",
+        ):
+            environment.pop(name, None)
+        environment["PATH"] = "/usr/bin:/bin"
+
+        result = subprocess.run(
+            [DEVICE / "sshrd_provision.sh", "--list"],
+            capture_output=True,
+            text=True,
+            env=environment,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("steps: mounts ticket setup userland pairing", result.stdout)
+        self.assertIn("coreauthd companion guard", result.stdout)
+
+    def test_pairing_fallback_is_narrow_and_marker_gated(self):
+        source = (DEVICE / "pairingfix/l8pair.c").read_text()
+        auth_source = (DEVICE / "pairingfix/l8pair_auth.m").read_text()
+        builder = (DEVICE / "pairingfix/build.sh").read_text()
+        payload_builder = (DEVICE / "fetch_payloads.sh").read_text()
+        fixups = (DEVICE / "userland_fixups.py").read_text()
+        remotexpc_source = (DEVICE / "remotexpcfix/l8remotepairing.c").read_text()
+        remotexpc_builder = (DEVICE / "remotexpcfix/build.sh").read_text()
+
+        self.assertIn("lockdown-identities", source)
+        self.assertIn("com.apple.lockdown.pairingkeypair", source)
+        self.assertIn("kSecUseSystemKeychain", source)
+        self.assertIn("fallback_enabled()", source)
+        self.assertIn("O_NOFOLLOW", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemCopyMatching", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemAdd", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemDelete", source)
+        self.assertIn("kLocationBasedTrustComputerPolicy = 1028", auth_source)
+        self.assertIn('strcmp(program, "lockdownd")', auth_source)
+        self.assertIn("pairing_fallback_enabled()", auth_source)
+        self.assertIn("error.code != -1000", auth_source)
+        self.assertIn('@"LocationBasedTrustComputer"', auth_source)
+        self.assertIn('@"failed: -3"', auth_source)
+        self.assertIn("gOriginalEvaluatePolicy(", auth_source)
+        self.assertIn("method_setImplementation", auth_source)
+
+        # Exact 24A446 lockdownd evidence: Copy/Delete carry kSecClassKey, but
+        # SecItemAdd relies on the SecKeyRef in kSecValueRef and omits class.
+        identity_matcher = source.split(
+            "static bool is_pairing_identity_dictionary", 1
+        )[1].split("static CFDataRef read_key_data", 1)[0]
+        add_hook = source.split("static OSStatus l8_SecItemAdd", 1)[1].split(
+            "static OSStatus l8_SecItemDelete", 1
+        )[0]
+        copy_hook = source.split(
+            "static OSStatus l8_SecItemCopyMatching", 1
+        )[1].split("static OSStatus l8_SecItemAdd", 1)[0]
+        self.assertNotIn("kSecClass", identity_matcher)
+        self.assertIn("kSecValueRef", add_hook)
+        self.assertIn("item_class != NULL", add_hook)
+        self.assertIn("kSecClassKey", copy_hook)
+
+        self.assertIn("-install_name /usr/lib/l8pair.dylib", builder)
+        self.assertIn('"$BASE/l8pair_auth.m"', builder)
+        self.assertIn("sileo helpers cache injection pairing", payload_builder)
+        self.assertIn('"lockdownd": ("/usr/lib/l8pair.dylib"', fixups)
+
+        self.assertIn('strcmp(program, "remotepairingdeviced")', remotexpc_source)
+        self.assertIn("fallback_marker_status()", remotexpc_source)
+        self.assertIn("options != NULL", remotexpc_source)
+        self.assertIn("state != 0", remotexpc_source)
+        self.assertIn("formatted = MKBDeviceFormattedForContentProtection()", remotexpc_source)
+        self.assertIn("unlocked = MKBDeviceUnlockedSinceBoot()", remotexpc_source)
+        self.assertIn("formatted != 0", remotexpc_source)
+        self.assertIn("unlocked != 1", remotexpc_source)
+        self.assertIn("return 3", remotexpc_source)
+        self.assertIn("/usr/lib/.liter8-remotepairing-fallback", remotexpc_source)
+        self.assertIn("guard state=%d", remotexpc_source)
+        self.assertIn("com.apple.RemotePairing", remotexpc_source)
+        self.assertIn("Remote Pairing Identity", remotexpc_source)
+        self.assertIn("Remote Pairing Paired Peer", remotexpc_source)
+        self.assertIn("Liter8RemotePairingKeychainItems", remotexpc_source)
+        self.assertIn("CFPreferencesAppSynchronize", remotexpc_source)
+        self.assertIn(
+            "DYLD_INTERPOSE(l8_MKBGetDeviceLockState, MKBGetDeviceLockState)",
+            remotexpc_source,
+        )
+        self.assertIn(
+            "DYLD_INTERPOSE(l8_SecItemCopyMatching, SecItemCopyMatching)",
+            remotexpc_source,
+        )
+        self.assertIn(
+            "DYLD_INTERPOSE(l8_SecItemAdd, SecItemAdd)",
+            remotexpc_source,
+        )
+        self.assertIn(
+            "DYLD_INTERPOSE(l8_SecItemUpdate, SecItemUpdate)",
+            remotexpc_source,
+        )
+        self.assertIn(
+            "DYLD_INTERPOSE(l8_SecItemDelete, SecItemDelete)",
+            remotexpc_source,
+        )
+        self.assertNotIn("LAContext", remotexpc_source)
+        self.assertIn(
+            "-install_name /usr/lib/l8remotepairing.dylib",
+            remotexpc_builder,
+        )
+        self.assertIn("-framework Security", remotexpc_builder)
+        self.assertIn("exactly five interposers", remotexpc_builder)
+        self.assertIn("remotexpcfix/l8remotepairing.dylib", payload_builder)
+        self.assertIn('"/usr/lib/l8remotepairing.dylib"', fixups)
+        self.assertIn(
+            '"remotepairingdeviced.load-l8remotepairing"',
+            fixups,
+        )
+
+        coreauth_source = (DEVICE / "coreauthfix/l8coreauth.m").read_text()
+        self.assertIn("LACDTORatchetSEPStateParser", coreauth_source)
+        self.assertIn("ratchetStateFromState:", coreauth_source)
+        self.assertIn("kRatchetStateBytes = 0x14b", coreauth_source)
+        self.assertIn("length >= kRatchetStateBytes", coreauth_source)
+        self.assertIn("method_setImplementation", coreauth_source)
+        self.assertIn('dylib_path = "/usr/lib/l8coreauth.dylib"', fixups)
 
     def test_userland_builder_preserves_identity_and_entitlements(self):
         liter8 = SCRIPTS.parent / ".build/debug/liter8"
@@ -730,7 +1061,7 @@ class ContextTests(unittest.TestCase):
         if not liter8.is_file() or not ldid.is_file() or not fixtures.is_dir():
             self.skipTest("local beta-4 userland fixture or debug tools are absent")
 
-        expected_records = {"coreauthd": 1, "mobileactivationd": 5, "ctkd": 2}
+        expected_records = {"coreauthd": 2, "mobileactivationd": 5, "ctkd": 2}
         for name, count in expected_records.items():
             fixture = fixtures / name
             if not fixture.is_file():
@@ -751,13 +1082,9 @@ class ContextTests(unittest.TestCase):
             self.assertEqual(entitlements(ldid, output), entitlements(ldid, fixture))
             self.assertEqual(len(json.loads(records.read_text())), count)
 
-        # This exact artifact was deployed successfully in the earlier beta-4
-        # research, so the orchestration must continue reproducing it.
-        coreauth_digest = hashlib.sha256((self.root / "coreauthd.patched").read_bytes()).hexdigest()
-        self.assertEqual(
-            coreauth_digest,
-            "51531edb37ebef37c23d4ce9127e61e2fa1908c408f02de074958a34ee892a7d",
-        )
+        coreauth_records = json.loads((self.root / "coreauthd.records.json").read_text())
+        self.assertEqual(coreauth_records[-1]["id"], "coreauthd.load-l8coreauth")
+        self.assertEqual(coreauth_records[-1]["path"], "/usr/lib/l8coreauth.dylib")
 
     def test_boot_manifest_rejects_wrong_mode_and_modified_artifacts(self):
         fixture_context = self.make_boot_set("restore")
@@ -779,15 +1106,15 @@ class ContextTests(unittest.TestCase):
                 "RestoreTrustCache", "SIO", "SEP",
             )
         }
-        fixture_context = self.make_boot_set("restore", components)
-        sequence = selected_firmware_sequence(components, "restore")
+        fixture_context = self.make_boot_set("restore", components, firmware_components=IPAD_BOOT_FIRMWARE)
+        sequence = selected_firmware_sequence(components, "restore", IPAD_BOOT_FIRMWARE)
         self.assertEqual(
             [name for name, _, _ in sequence],
             ["RestoreLogo.img4", "ANE.img4", "AOP.img4", "AVE.img4",
              "GFX.img4", "ISP.img4", "RestoreTrustCache.img4", "SIO.img4"],
         )
         self.assertEqual(validate_boot_set(fixture_context, "restore"), self.work / "Ramdisk")
-        self.assertFalse(has_txm(components, "restore"))
+        self.assertFalse(has_txm(components, "restore", IPAD_BOOT_FIRMWARE))
 
     def test_ipad_normal_boot_uses_static_trust_cache(self):
         components = {
@@ -796,9 +1123,9 @@ class ContextTests(unittest.TestCase):
                 "StaticTrustCache", "RestoreTrustCache", "SIO", "SEP",
             )
         }
-        profile = "ipad11,6-j171aap-23H30"
-        normal = [name for name, _, _ in selected_firmware_sequence(components, "normal", profile)]
-        restore = [name for name, _, _ in selected_firmware_sequence(components, "restore", profile)]
+        firmware = IPAD_BOOT_FIRMWARE
+        normal = [name for name, _, _ in selected_firmware_sequence(components, "normal", firmware, "StaticTrustCache")]
+        restore = [name for name, _, _ in selected_firmware_sequence(components, "restore", firmware, "StaticTrustCache")]
         self.assertIn("StaticTrustCache.img4", normal)
         self.assertNotIn("RestoreTrustCache.img4", normal)
         self.assertIn("RestoreTrustCache.img4", restore)
@@ -809,7 +1136,47 @@ class ContextTests(unittest.TestCase):
         del components["Ap,SecurePageTableMonitor"]
         components["Ap,RestoreTrustedExecutionMonitor"] = "txm.im4p"
         with self.assertRaisesRegex(WorkflowError, "incomplete restore SPTM/TXM pair"):
+            selected_firmware_sequence(components, "restore", IPAD_BOOT_FIRMWARE)
+
+    def test_iphone_boot_preserves_the_complete_firmware_order(self):
+        components = {name: name for name, _, _ in PASSTHROUGH_IMG4}
+        components["Ap,RestoreTrustedExecutionMonitor"] = "txm.im4p"
+        sequence = selected_firmware_sequence(components, "restore")
+        self.assertEqual([name for name, _, _ in sequence], [
+            "RestoreLogo.img4", "ANE.img4", "AOP.img4", "AVE.img4", "SPTM.img4",
+            "TXM.img4", "GFX.img4", "ISP.img4", "PMP.img4", "RestoreTrustCache.img4",
+            "SIO.img4", "WCH.img4",
+        ])
+
+    def test_missing_iphone_peripheral_is_not_silently_omitted(self):
+        for missing in DEFAULT_BOOT_FIRMWARE:
+            components = {name: name for name, _, _ in PASSTHROUGH_IMG4}
+            components["Ap,RestoreTrustedExecutionMonitor"] = "txm.im4p"
+            del components[missing]
+            with self.subTest(component=missing), self.assertRaises(WorkflowError):
+                selected_firmware_sequence(components, "restore")
+
+    def test_absent_monitor_pair_requires_explicit_profile_policy(self):
+        components = {name: name for name in IPAD_BOOT_FIRMWARE}
+        components["RestoreTrustCache"] = "cache.im4p"
+        with self.assertRaisesRegex(WorkflowError, "disagrees with the boot profile"):
             selected_firmware_sequence(components, "restore")
+
+    def test_missing_static_cache_is_not_replaced_by_restore_cache(self):
+        components = {name: name for name in IPAD_BOOT_FIRMWARE}
+        components["RestoreTrustCache"] = "cache.im4p"
+        with self.assertRaisesRegex(WorkflowError, "StaticTrustCache"):
+            selected_firmware_sequence(components, "normal", IPAD_BOOT_FIRMWARE, "StaticTrustCache")
+
+    def test_unknown_boot_mode_fails_before_upload(self):
+        with self.assertRaisesRegex(WorkflowError, "unknown boot mode"):
+            selected_firmware_sequence({}, "unknown")
+
+    def test_normal_boot_manifest_records_the_public_kernel_plan(self):
+        fixture_context = self.make_boot_set("normal", kernel_plan="boot-public")
+        manifest = json.loads((self.work / "Ramdisk/liter8-boot.json").read_text())
+        self.assertEqual(manifest["kernelPlan"], "boot-public")
+        self.assertEqual(validate_boot_set(fixture_context, "normal"), self.work / "Ramdisk")
 
     def test_restore_boot_sequence_sends_ramdisk_before_devicetree(self):
         fixture_context = self.make_boot_set("restore")
@@ -835,7 +1202,8 @@ class ContextTests(unittest.TestCase):
             ["/custom/irecovery", "-c", "bootx"],
         )
 
-    def make_boot_set(self, mode, components=None):
+    def make_boot_set(self, mode, components=None, *, kernel_plan=None,
+                      firmware_components=DEFAULT_BOOT_FIRMWARE, normal_trust_cache="RestoreTrustCache"):
         staging = self.work / "boot-staging"
         staging.mkdir()
         if components is None:
@@ -846,7 +1214,7 @@ class ContextTests(unittest.TestCase):
             ] = "txm.im4p"
         names = {
             "iBSS.raw", "iBEC.img4", "DeviceTree.img4", "SEP.img4", "Kernelcache.img4",
-            *(name for name, _, _ in selected_firmware_sequence(components, mode)),
+            *(name for name, _, _ in selected_firmware_sequence(components, mode, firmware_components, normal_trust_cache)),
         }
         if mode == "restore":
             names.add("RestoreRamdisk.img4")
@@ -859,10 +1227,134 @@ class ContextTests(unittest.TestCase):
             "profile_id": "fixture-profile",
             "work": self.work,
             "components": components,
+            "boot_firmware_components": firmware_components,
+            "normal_trust_cache": normal_trust_cache,
         })()
-        write_boot_manifest(fixture_context, staging, mode)
+        write_boot_manifest(fixture_context, staging, mode, kernel_plan=kernel_plan)
         publish_directory(staging, self.work / "Ramdisk")
         return fixture_context
+
+
+class MeasureGuardsTests(unittest.TestCase):
+    """`survey --guards` turns an extracted IPSW into a profile to paste.
+
+    The decrypt and mount are macOS tools on an 8 GB image, so these cover the
+    parts that decide what the printed profile says.
+    """
+
+    @staticmethod
+    def manifest(identities):
+        return {
+            "ProductVersion": "27.0",
+            "ProductBuildVersion": "24A437",
+            "SupportedProductTypes": ["iPhone12,3", "iPhone12,5"],
+            "BuildIdentities": identities,
+        }
+
+    @staticmethod
+    def identity(device_class, board, product, behavior="Erase", os_path="OS.dmg.aea"):
+        return {
+            "ApBoardID": board,
+            "ApChipID": "0x8030",
+            "Ap,ProductType": product,
+            "Info": {"DeviceClass": device_class, "RestoreBehavior": behavior},
+            "Manifest": {"OS": {"Info": {"Path": os_path}}},
+        }
+
+    def test_boards_deduplicates_each_board(self):
+        # Erase and Update are separate identities for the same hardware.
+        manifest = self.manifest([
+            self.identity("d421ap", "0x06", "iPhone12,3"),
+            self.identity("d421ap", "0x06", "iPhone12,3", behavior="Update"),
+            self.identity("d431ap", "0x02", "iPhone12,5"),
+        ])
+        found = measure_guards.boards(manifest)
+        self.assertEqual(
+            sorted(b["deviceClass"] for b in found), ["d421ap", "d431ap"]
+        )
+        self.assertEqual(sorted(b["boardID"] for b in found), ["0x02", "0x06"])
+
+    def test_boards_ignores_non_erase_identities(self):
+        manifest = self.manifest([
+            self.identity("d421ap", "0x06", "iPhone12,3", behavior="Update"),
+        ])
+        self.assertEqual(measure_guards.boards(manifest), [])
+
+    def test_product_type_comes_from_the_build_identity(self):
+        # SupportedProductTypes lists both, so only Ap,ProductType can say
+        # which board is which.
+        manifest = self.manifest([
+            self.identity("d421ap", "0x06", "iPhone12,3"),
+            self.identity("d431ap", "0x02", "iPhone12,5"),
+        ])
+        self.assertEqual(
+            measure_guards.product_type_for(manifest, "d421ap"), "iPhone12,3"
+        )
+        self.assertEqual(
+            measure_guards.product_type_for(manifest, "d431ap"), "iPhone12,5"
+        )
+
+    def test_product_type_refuses_an_unknown_board(self):
+        manifest = self.manifest([self.identity("d421ap", "0x06", "iPhone12,3")])
+        with self.assertRaises(WorkflowError):
+            measure_guards.product_type_for(manifest, "n104ap")
+
+    def test_emit_prints_one_profile_per_board_sharing_the_guards(self):
+        manifest = self.manifest([
+            self.identity("d421ap", "0x06", "iPhone12,3"),
+            self.identity("d431ap", "0x02", "iPhone12,5"),
+        ])
+        guards = {
+            "launchdSHA256": "a" * 64,
+            "launchdCacheSHA256": "b" * 64,
+            "launchdCacheDaemonCount": 729,
+            "setupControllerMethodCount": 66,
+        }
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            measure_guards.emit(manifest, Path("/x/iPhone12,3,iPhone12,5_27.0_24A437_Restore"), guards)
+        output = buffer.getvalue()
+
+        self.assertEqual(output.count("DeviceWorkflowProfile("), 2)
+        self.assertIn('id: "iphone12,3-d421ap-24A437"', output)
+        self.assertIn('id: "iphone12,5-d431ap-24A437"', output)
+        self.assertIn("boardID: 0x06", output)
+        self.assertIn("boardID: 0x02", output)
+        # One root filesystem serves both boards, so the guards repeat.
+        self.assertEqual(output.count(f'launchdCacheSHA256: "{"b" * 64}"'), 2)
+        self.assertEqual(output.count("launchdCacheDaemonCount: 729"), 2)
+        # Neither of these is measurable from the firmware files.
+        self.assertEqual(output.count("validationState: .experimental"), 2)
+        self.assertEqual(output.count("normalIBSSAdditionalPlans: []"), 2)
+        self.assertIn(
+            'extractedDirectoryName: "iPhone12,3,iPhone12,5_27.0_24A437_Restore"', output
+        )
+
+    def test_measure_reads_the_launchd_guards_off_a_mount(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            mount = Path(scratch)
+            (mount / "sbin").mkdir()
+            (mount / "System/Library/xpc").mkdir(parents=True)
+            (mount / "Applications/Setup.app").mkdir(parents=True)
+            (mount / "sbin/launchd").write_bytes(b"launchd")
+            cache = {"LaunchDaemons": {f"d{i}": {"Label": f"l{i}"} for i in range(3)}}
+            (mount / "System/Library/xpc/launchd.plist").write_bytes(plistlib.dumps(cache))
+            (mount / "Applications/Setup.app/Setup").write_bytes(b"setup")
+
+            with patch.object(measure_guards, "setup_controller_count", return_value=66):
+                guards = measure_guards.measure(mount)
+
+            self.assertEqual(
+                guards["launchdSHA256"], hashlib.sha256(b"launchd").hexdigest()
+            )
+            self.assertEqual(guards["launchdCacheDaemonCount"], 3)
+            self.assertEqual(guards["setupControllerMethodCount"], 66)
+
+    def test_measure_names_the_file_a_root_filesystem_is_missing(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            with self.assertRaises(WorkflowError) as raised:
+                measure_guards.measure(Path(scratch))
+            self.assertIn("sbin/launchd", str(raised.exception))
 
 
 if __name__ == "__main__":

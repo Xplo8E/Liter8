@@ -40,7 +40,7 @@ Tests that need a binary you do not have will skip. If one skips, say so in the 
 
 You do not need a phone to work on a resolver.
 
-`survey <extracted-dir>` runs every plan over an extracted firmware at once. Start there on a new build.
+`survey <extracted-dir>` runs every plan over an extracted firmware at once. Start there on a new build. Add `--guards` when you are ready to write a profile and it prints one, measured off the root filesystem. That part takes minutes and about 9 GB, so it is not the default.
 
 `resolve` reports what a plan would do and leaves the input alone. `--json` for records.
 

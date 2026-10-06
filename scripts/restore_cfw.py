@@ -14,8 +14,30 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+import usb.core
+
 from apticket import TICKET_NAME, capture_from_debug_log, tickets_from_debug_log
 from liter8_workflow import Context, WorkflowError, main_guard, run
+
+# libirecovery.h: IRECV_K_RECOVERY_MODE_1 through _4.
+RECOVERY_PRODUCT_IDS = (0x1280, 0x1281, 0x1282, 0x1283)
+
+
+def wait_for_recovery(timeout: float = 30.0) -> None:
+    """Block until the booted iBSS re-enumerates in recovery mode.
+
+    usbliter8ctl returns when the USB transition starts, not when it finishes,
+    so idevicerestore could open the device mid-re-enumeration and fail with
+    "Unable to discover device type" despite a healthy iBSS.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if any(usb.core.find(idProduct=pid) for pid in RECOVERY_PRODUCT_IDS):
+            return
+        time.sleep(0.2)
+    raise WorkflowError(
+        f"device did not reach recovery mode within {timeout:.0f}s of the iBSS boot"
+    )
 
 
 def stage(number: int, title: str) -> None:
@@ -144,6 +166,9 @@ def restore() -> None:
         result = subprocess.run([usbliter8ctl, "boot", str(ibss)])
         if result.returncode:
             print("  usbliter8ctl returned after the expected USB transition", flush=True)
+        print("[*] waiting for the device to re-enumerate in recovery mode", flush=True)
+        wait_for_recovery()
+        print("[+] device is in recovery mode", flush=True)
 
         stage(4, "personalize, transfer, ASR-restore, and finalize the CFW")
         print(f"[*] detailed idevicerestore log: {log_path}", flush=True)

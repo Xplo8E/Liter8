@@ -13,9 +13,10 @@ enum KernelBootPlanComposer {
         bootPolicy: [PatchRecord],
         sep: [PatchRecord],
         credentialManager: [PatchRecord],
-        sandbox: [PatchRecord]
+        sandbox: [PatchRecord],
+        valeria: [PatchRecord]
     ) -> [PatchRecord] {
-        restore + bootPolicy + sep + credentialManager + sandbox
+        restore + bootPolicy + sep + credentialManager + sandbox + valeria
     }
 }
 
@@ -35,7 +36,8 @@ public struct KernelBootResolver: Sendable {
             bootPolicy: KernelBootPolicyResolver().resolve(in: image),
             sep: KernelSEPResolver().resolve(in: image),
             credentialManager: KernelCredentialManagerResolver().resolve(in: image),
-            sandbox: KernelSandboxResolver().resolve(in: image)
+            sandbox: KernelSandboxResolver().resolve(in: image),
+            valeria: KernelValeriaResolver().resolve(in: image)
         )
     }
 }
@@ -43,9 +45,9 @@ public struct KernelBootResolver: Sendable {
 /// Device-reviewed compatibility plan for the public Liter8 boot workflow.
 ///
 /// This deliberately omits the later 35-record scoped vnode-open shim. It is
-/// the plan shipped by the public Python `kc-boot` table and subsequently
-/// validated on both iOS 27 beta 4 and 24A435. The compatibility contract is
-/// the selected patch set, not either firmware build.
+/// the normal-boot plan. Valeria is selected by the exact kernel profile.
+/// The compatibility contract is the selected patch set, not one firmware
+/// build or a table of fixed offsets.
 public struct KernelBootCompatibilityResolver: Sendable {
     public static let name = "kernel-boot-compatibility"
     public init() {}
@@ -56,7 +58,8 @@ public struct KernelBootCompatibilityResolver: Sendable {
             bootPolicy: KernelBootPolicyResolver().resolve(in: image),
             sep: KernelSEPResolver().resolve(in: image),
             credentialManager: KernelCredentialManagerResolver().resolve(in: image),
-            sandbox: KernelSandboxCompatibilityResolver().resolve(in: image)
+            sandbox: KernelSandboxCompatibilityResolver().resolve(in: image),
+            valeria: KernelValeriaResolver.requiredRecords(in: image)
         )
     }
 }

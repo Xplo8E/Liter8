@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from liter8_workflow import Context, WorkflowError, run
+from liter8_workflow import Context, DEFAULT_BOOT_FIRMWARE, WorkflowError, run, validate_boot_firmware
 
 
 # Output names are the stable interface consumed by the device boot command.
@@ -30,27 +30,34 @@ PASSTHROUGH_IMG4 = [
     ("SEP", "SEP.img4", "rsep"),
 ]
 
-REQUIRED_PASSTHROUGH = {"RestoreLogo", "RestoreTrustCache", "SEP"}
-
-
 def selected_passthrough(
-    components: dict[str, str], mode: str = "restore", profile_id: str = ""
+    components: dict[str, str], mode: str = "restore",
+    firmware_components: tuple[str, ...] = DEFAULT_BOOT_FIRMWARE,
+    normal_trust_cache: str = "RestoreTrustCache",
 ) -> list[tuple[str, str, str]]:
-    """Use the reviewed firmware set in the selected BuildManifest identity."""
-    # The j171aap manifest has distinct normal and restore trust caches. Its
-    # normal boot must receive the static System-volume cache (trst); SSHRD
-    # still needs the restore cache (rtsc). Keep the older n104 recipe intact.
-    use_static = mode == "normal" and profile_id == "ipad11,6-j171aap-23H30"
-    trust_cache = "StaticTrustCache" if use_static else "RestoreTrustCache"
-    missing = sorted((REQUIRED_PASSTHROUGH - {"RestoreTrustCache"} | {trust_cache}) - components.keys())
+    """BuildManifest supplies paths; the Swift profile supplies required policy."""
+    if mode not in {"normal", "restore"}:
+        raise WorkflowError(f"unknown boot mode: {mode}")
+    if normal_trust_cache not in {"RestoreTrustCache", "StaticTrustCache"}:
+        raise WorkflowError("invalid normal trust cache selection")
+    required = set(validate_boot_firmware(list(firmware_components)))
+    trust_cache = normal_trust_cache if mode == "normal" else "RestoreTrustCache"
+    required.add(trust_cache)
+    # Validate the monitor pair even before checking the other peripherals.
+    has_txm(components, mode, firmware_components)
+    missing = sorted(required - components.keys())
     if missing:
         raise WorkflowError(f"BuildManifest is missing required boot firmware: {', '.join(missing)}")
-    return [entry for entry in PASSTHROUGH_IMG4 if entry[0] in components and
-            (entry[0] not in {"StaticTrustCache", "RestoreTrustCache"} or entry[0] == trust_cache)]
+    return [entry for entry in PASSTHROUGH_IMG4 if entry[0] in required]
 
 
-def has_txm(components: dict[str, str], mode: str) -> bool:
-    """Reject a partial SPTM/TXM pair instead of producing an incomplete chain."""
+def has_txm(
+    components: dict[str, str], mode: str,
+    firmware_components: tuple[str, ...] = DEFAULT_BOOT_FIRMWARE,
+) -> bool:
+    """Reject a partial or profile-inconsistent SPTM/TXM chain."""
+    if mode not in {"normal", "restore"}:
+        raise WorkflowError(f"unknown boot mode: {mode}")
     txm_name = (
         "Ap,TrustedExecutionMonitor" if mode == "normal"
         else "Ap,RestoreTrustedExecutionMonitor"
@@ -59,6 +66,9 @@ def has_txm(components: dict[str, str], mode: str) -> bool:
     has_monitor = txm_name in components
     if has_sptm != has_monitor:
         raise WorkflowError(f"BuildManifest has an incomplete {mode} SPTM/TXM pair")
+    expects_pair = "Ap,SecurePageTableMonitor" in firmware_components
+    if has_monitor != expects_pair:
+        raise WorkflowError(f"BuildManifest {mode} SPTM/TXM pair disagrees with the boot profile")
     return has_monitor
 
 
@@ -106,7 +116,13 @@ def publish_directory(staging: Path, destination: Path) -> None:
         shutil.rmtree(previous)
 
 
-def write_boot_manifest(context: Context, staging: Path, mode: str) -> None:
+def write_boot_manifest(
+    context: Context,
+    staging: Path,
+    mode: str,
+    *,
+    kernel_plan: str | None = None,
+) -> None:
     """Bind a device command to the exact artifact family it is about to send."""
     artifacts = {}
     for path in sorted(staging.iterdir()):
@@ -120,19 +136,26 @@ def write_boot_manifest(context: Context, staging: Path, mode: str) -> None:
             "bytes": path.stat().st_size,
             "sha256": digest.hexdigest(),
         }
-    (staging / "liter8-boot.json").write_text(json.dumps({
+    document = {
         "schema": 1,
         "profileID": context.profile_id,
         "mode": mode,
         "artifacts": artifacts,
-    }, indent=2, sort_keys=True) + "\n")
+    }
+    if kernel_plan is not None:
+        document["kernelPlan"] = kernel_plan
+    (staging / "liter8-boot.json").write_text(
+        json.dumps(document, indent=2, sort_keys=True) + "\n"
+    )
 
 
 def build_normal_boot() -> None:
     context = Context.load()
     ticket = ticket_from_environment()
-    firmware = selected_passthrough(context.components, "normal", context.profile_id)
-    patch_txm = has_txm(context.components, "normal")
+    firmware = selected_passthrough(
+        context.components, "normal", context.boot_firmware_components, context.normal_trust_cache
+    )
+    patch_txm = has_txm(context.components, "normal", context.boot_firmware_components)
 
     # Build beside .liter8 first. A failed resolver or signing step leaves the
     # operator's previous Ramdisk directory intact.
@@ -193,7 +216,8 @@ def build_normal_boot() -> None:
         print("[*] normal boot: patching kernelcache", flush=True)
         kernel = staging / ".Kernelcache.im4p"
         shutil.copy2(context.component("KernelCache"), kernel)
-        context.apply("kernel", "boot-public", kernel, record_name="boot-kernel")
+        kernel_plan = "boot-public"
+        context.apply("kernel", kernel_plan, kernel, record_name="boot-kernel")
         create_img4(
             context, kernel, ticket, staging / "Kernelcache.img4", fourcc="rkrn"
         )
@@ -201,7 +225,7 @@ def build_normal_boot() -> None:
         # Dot-prefixed intermediates are not part of the public boot artifact set.
         for intermediate in staging.glob(".*"):
             intermediate.unlink()
-        write_boot_manifest(context, staging, "normal")
+        write_boot_manifest(context, staging, "normal", kernel_plan=kernel_plan)
         publish_directory(staging, context.work / "Ramdisk")
 
     print("[+] normal boot artifacts are ready in Ramdisk", flush=True)
@@ -211,8 +235,10 @@ def build_restore_boot() -> None:
     """Build the ticketed SSH restore-ramdisk artifact set."""
     context = Context.load()
     ticket = ticket_from_environment()
-    firmware = selected_passthrough(context.components, "restore", context.profile_id)
-    patch_txm = has_txm(context.components, "restore")
+    firmware = selected_passthrough(
+        context.components, "restore", context.boot_firmware_components, context.normal_trust_cache
+    )
+    patch_txm = has_txm(context.components, "restore", context.boot_firmware_components)
 
     with tempfile.TemporaryDirectory(prefix="rd-staging-", dir=context.state) as directory:
         staging = Path(directory)

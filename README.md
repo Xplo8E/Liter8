@@ -23,22 +23,29 @@ Normal boot to the home screen, root SSH, apt and Sileo, TrollStore, apps launch
 - cellular
 - Apple services
 - xTweak injection. It injects, but it's nowhere near as solid as vphone
-- 11 Pro and Pro Max. no device to test on
+- 11 Pro and Pro Max. profiles exist but no device to test on
 
 PRs welcome on any of these, especially SEP. The Pro and Pro Max are open too, if you own one and want to take the port on, i'll help where i can. Or if you'd rather help on the hardware side, there's a [coffee link](https://buymeacoffee.com/xplo8e) and that's what it'd go towards. Either route is fine, and so is neither.
 
-## Builds i've actually run
+## Builds and devices
 
-| Firmware        | Build      |
-| --------------- | ---------- |
-| iOS 27.0 beta 4 | `24A5390f` |
-| iOS 27.0 RC     | `24A435`   |
-| iOS 27.0        | `24A437`   |
-| iOS 27.0.1      | `24A446`   |
-| iOS 27.2 beta 1 | `24B5084k` |
-| iOS 27.2 beta 2 | `24B5089g` |
+| Firmware        | Build      | iPhone 11 | 11 Pro       | 11 Pro Max   |
+| --------------- | ---------- | --------- | ------------ | ------------ |
+| iOS 27.0 beta 4 | `24A5390f` | run       | -            | -            |
+| iOS 27.0 RC     | `24A435`   | run       | -            | -            |
+| iOS 27.0        | `24A437`   | run       | experimental | experimental |
+| iOS 27.0.1      | `24A446`   | run       | experimental | experimental |
+| iOS 27.2 beta 1 | `24B5084k` | run       | -            | -            |
+| iOS 27.2 beta 2 | `24B5089g` | run       | -            | -            |
+| iOS 27.2 beta 3 | `24B5099f` | run       | -            | -            |
 
-All on the same iPhone 11. "Run" means i did an erase restore, booted it normally, then rebooted and it came back up. On the actual phone.
+"Run" means i did an erase restore, booted it normally, then rebooted and it came back up. "Experimental" means unverified. It resolves and you can use it with `--experimental`, but nobody has confirmed it on that phone. If you own one and are willing to try, share what happens and i'll change the tag.
+
+An experimental iPad 8 Wi-Fi (`iPad11,6`, `j171aap`) profile exists for
+**iPadOS 26.7.1 / 23H30**. Prior run notes report CFW restore and SSHRD SSH;
+normal iPadOS boot and finalization remain unverified. Every stage requires
+`--experimental`. See the [port note](docs/plans/IPAD8_26_7_1_PORT.md) and
+[runbook](docs/runs/IPAD8_J171AAP_23H30_RUNBOOK.md).
 
 There's a catch with that table though. `fw restore-cfw` pulls a fresh APTicket from Apple while the restore is happening, so once Apple drops signing for a build you can't install it anymore. The row stays in the table because i did test it, but that doesn't mean you can still use it today. Check signing first.
 
@@ -50,7 +57,7 @@ You need macOS 14 or newer, Xcode command line tools with Swift 6, and Homebrew.
 
 ```sh
 brew install \
-  sevenzip blacktop/tap/ipsw gnu-tar coreutils zstd autoconf automake libtool pkg-config \
+  sevenzip blacktop/tap/ipsw gnu-tar coreutils zstd ldid-procursus sshpass autoconf automake libtool pkg-config \
   libimobiledevice libimobiledevice-glue libirecovery libusbmuxd libplist libtatsu libzip curl
 ```
 
@@ -62,8 +69,6 @@ make release
 ```
 
 Binary ends up at `.build/release/liter8`.
-
-One thing that will catch you out: booting needs this project's `irecovery`, not whatever brew gave you. You pass it with `--irecovery` on every boot command. Yes, every one.
 
 ## Using it
 
@@ -108,7 +113,7 @@ Back to pwn DFU.
 
 ```sh
 .build/release/liter8 fw get-rd
-.build/release/liter8 fw boot-rd --irecovery /path/to/custom/irecovery
+.build/release/liter8 fw boot-rd
 ```
 
 Step 3 already dropped the ticket at `$WORK_DIR/apticket.im4m`, so skip `--ticket` here.
@@ -132,7 +137,7 @@ pwn DFU again.
 
 ```sh
 .build/release/liter8 fw get-boot
-.build/release/liter8 fw boot --irecovery /path/to/custom/irecovery
+.build/release/liter8 fw boot
 ```
 
 ### 7. Finish the bootstrap
@@ -186,7 +191,15 @@ It's all one Swift target. The folders are there so i can find things, nothing m
 
 `fw get-rd` and `fw get-boot` rebuild far more than they need to. It's slow and i know it, it's on the list.
 
-Normal Apple pairing still isn't lined up with the Wi-Fi and Dropbear SSH path that actually works. Written up in the docs.
+USB lockdown pairing, same-boot RemoteXPC reconnect and QuickTime capture now
+work on the validated iPhone 11 `24A446` SEP-less profile. CoreDevice process
+listing and screenshots also work after starting the DeveloperDiskImage jobs.
+The provisioning workflow now adds a System-volume watcher to perform that
+registration when the image appears. Automatic registration and CoreDevice
+process enumeration are validated on the same device; the normal Xcode/LLDB
+flow remains open. These are scoped compatibility fixes, not replacements for
+SEP, keybags or content protection. MobileBackup2 still stops at missing persona
+state. The failure chains and fixes are written up in the docs.
 
 ## Docs
 
@@ -194,6 +207,7 @@ Normal Apple pairing still isn't lined up with the Wi-Fi and Dropbear SSH path t
 - [Firmware and device support guide](docs/FIRMWARE_SUPPORT_GUIDE.md)
 - [iOS 27 `24A435` resolver and device evidence](docs/plans/IOS_27_24A435_RC_PATCHES.md)
 - [iPhone 11 beta 4 device run](docs/runs/IOS_27_BETA4_IPHONE11.md)
+- [iPhone 11 `24A446` pairing and watchdog research](docs/runs/IOS_27_24A446_PAIRING_AND_WATCHDOG.md)
 - [Bootstrap and provisioning status](docs/design/BOOTSTRAP_JB_STATUS.md)
 - [Normal boot handoff](docs/design/NORMAL_BOOT_HANDOFF.md)
 - [Performance backlog](docs/BACKLOG.md)

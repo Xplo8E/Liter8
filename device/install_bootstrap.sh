@@ -5,7 +5,7 @@
 #
 #   ./install_bootstrap.sh            install
 #   ./install_bootstrap.sh --check    report current state, change nothing
-# Reuses `iproxy 2222 22` when running, or starts its own fallback.
+# Reuses `iproxy 2222:22` when running, or starts its own fallback.
 #
 # Source: bootstrap_1900.tar.zst here, byte-identical to ../work-27.0b2/bootstrap_1900.tar.zst
 #   20.7 MB compressed, 103 MB extracted, 6529 entries, all uid 0.
@@ -41,14 +41,19 @@ LAUNCHCTL=launchctl/launchctl
 LAUNCHCTL_SHA=c46e143151f4d56fd9e3c088d74e231f4b6f4ff7477aad080359454821ec0125
 STAGE=${TMPDIR:-/tmp}/bootstrap-stage-$$
 TGZ=$STAGE/bootstrap.tar.gz
-SSHPASS=../tools/sshpass
+# Prefer a native sshpass. The bundled one is x86_64, so it needs Rosetta
+# on Apple Silicon. See https://github.com/Xplo8E/Liter8/issues/2.
+SSHPASS=$(command -v sshpass || true)
+"$SSHPASS" -V >/dev/null 2>&1 || SSHPASS=../tools/sshpass
 
 DEV_TGZ=/mnt2/_bootstrap.tar.gz     # transferred archive, removed on success
 DEV_STAGE=/mnt2/_bsstage            # unpack target, removed on success
 DEV_JB=/mnt2/jb                     # final location == /var/jb on the device
 
+# Allow the device's ECDSA key and AES-CTR cipher without dropping SSH defaults.
 COMMON=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
-        -o LogLevel=ERROR -o ConnectTimeout=10)
+        -o LogLevel=ERROR -o ConnectTimeout=10
+        -o HostKeyAlgorithms=+ecdsa-sha2-nistp521 -o Ciphers=+aes128-ctr)
 SSH_OPTS=("${COMMON[@]}" -p 2222)
 SCP_OPTS=("${COMMON[@]}" -P 2222)
 
@@ -91,7 +96,7 @@ command -v zstd >/dev/null || { print -u2 "[!] zstd not installed on the Mac (br
 
 if ! sshdev true 2>/dev/null; then
     command -v iproxy >/dev/null || { print -u2 "[!] iproxy not installed (brew install libimobiledevice)"; exit 1; }
-    iproxy 2222 22 >/dev/null 2>&1 &
+    iproxy 2222:22 >/dev/null 2>&1 &
     IPROXY_PID=$!
     trap 'kill $IPROXY_PID 2>/dev/null' EXIT
     sleep 2
@@ -125,6 +130,8 @@ if (( CHECK_ONLY )); then
     printf "  %-24s %s\n" ".installed_usbl8r" \
         "$(sshdev "[ -f '$DEV_JB/.installed_usbl8r' ] && echo present || echo ABSENT" 2>/dev/null)"
     printf "  %-24s %s\n" "repo trust config" "$(trust_state)"
+    printf "  %-24s %s\n" "Sileo lists owner" \
+        "$(sshdev "stat -f %u '$DEV_JB/var/lib/apt/sileolists'" 2>/dev/null || print ABSENT)"
     for p in "$DEV_TGZ" "$DEV_STAGE"; do
         sshdev "[ -e '$p' ]" 2>/dev/null && printf "  %-24s leftover from a previous run\n" "$p"
     done
@@ -250,6 +257,14 @@ sshdev "/bin/mkdir -p '$DEV_JB/var/cache/apt/archives/partial' && \
                                 '$DEV_JB/var/cache/apt/archives/partial'" \
     || print -u2 "[!] chown of the apt archive dir failed; Sileo installs will fail until it is fixed"
 
+print "[*] making Sileo's repository lists writable by mobile"
+sshdev "/bin/mkdir -p '$DEV_JB/var/lib/apt/sileolists/partial' && \
+        /usr/sbin/chown 501:501 '$DEV_JB/var/lib/apt/sileolists' \
+                                '$DEV_JB/var/lib/apt/sileolists/partial' && \
+        /bin/chmod 0755 '$DEV_JB/var/lib/apt/sileolists' \
+                        '$DEV_JB/var/lib/apt/sileolists/partial'" \
+    || { print -u2 "[!] could not prepare Sileo's repository lists"; exit 1; }
+
 # ---------------------------------------------------------------- repo trust
 # Jailbreak repos are unsigned, so apt needs to be told to trust them or it
 # refuses with "There were unauthenticated packages". The usual way is
@@ -299,6 +314,8 @@ chk "apt present"                 "[ -x '$DEV_JB/usr/bin/apt' ] && echo yes || e
 # numeric id anyway, and -O only ever tests against the effective uid, which is root.
 chk "apt archives uid 501 (mobile)" "stat -f %u '$DEV_JB/var/cache/apt/archives'"                "501"
 chk "apt partial uid 501 (mobile)"  "stat -f %u '$DEV_JB/var/cache/apt/archives/partial'"        "501"
+chk "Sileo lists uid 501 (mobile)" "stat -f %u '$DEV_JB/var/lib/apt/sileolists'"                  "501"
+chk "Sileo partial uid 501 (mobile)" "stat -f %u '$DEV_JB/var/lib/apt/sileolists/partial'"         "501"
 trust_got=$(trust_state)
 if [[ "$trust_got" == "exact" ]]; then
     printf "  OK    %-42s %s\n" "repo trust config exact" "$trust_got"

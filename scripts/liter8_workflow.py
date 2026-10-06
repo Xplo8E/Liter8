@@ -45,6 +45,22 @@ def validate_ibss_additional_plans(value: object, mode: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+DEFAULT_BOOT_FIRMWARE = (
+    "RestoreLogo", "ANE", "AOP", "AVE", "Ap,SecurePageTableMonitor",
+    "GFX", "ISP", "PMP", "SIO", "WCHFirmwareUpdater", "SEP",
+)
+
+
+def validate_boot_firmware(value: object) -> tuple[str, ...]:
+    """A missing peripheral is an error unless the profile explicitly omits it."""
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise WorkflowError("Liter8 context has an invalid boot firmware list")
+    if (set(value) - set(DEFAULT_BOOT_FIRMWARE) or len(value) != len(set(value))
+            or not {"RestoreLogo", "SEP"} <= set(value)):
+        raise WorkflowError("Liter8 context has unsupported, repeated or missing boot firmware")
+    return tuple(value)
+
+
 @dataclass(frozen=True)
 class Context:
     profile_id: str
@@ -58,12 +74,14 @@ class Context:
     build: str = ""
     normal_ibss_additional_plans: tuple[str, ...] = ()
     restore_ibss_additional_plans: tuple[str, ...] = ()
+    boot_firmware_components: tuple[str, ...] = DEFAULT_BOOT_FIRMWARE
+    normal_trust_cache: str = "RestoreTrustCache"
 
     @classmethod
     def load(cls) -> "Context":
         context_path = required_environment_path("LITER8_CONTEXT")
         document = json.loads(context_path.read_text())
-        if document.get("schema") != 2:
+        if document.get("schema") != 3:
             raise WorkflowError(f"unsupported Liter8 context schema: {document.get('schema')}")
 
         # Boot policy is required context, even when its arrays are empty. A
@@ -78,6 +96,11 @@ class Context:
         restore_plans = validate_ibss_additional_plans(
             boot_plan.get("restoreIBSSAdditionalPlans"), "restore"
         )
+
+        firmware = validate_boot_firmware(boot_plan.get("firmwareComponents"))
+        trust_cache = boot_plan.get("normalTrustCache")
+        if not isinstance(trust_cache, str) or trust_cache not in {"RestoreTrustCache", "StaticTrustCache"}:
+            raise WorkflowError("Liter8 context has an invalid normal trust cache")
 
         work = Path.cwd().resolve()
         source = Path(document["sourceRoot"]).resolve()
@@ -95,6 +118,8 @@ class Context:
             build=str(document.get("build", "")),
             normal_ibss_additional_plans=normal_plans,
             restore_ibss_additional_plans=restore_plans,
+            boot_firmware_components=firmware,
+            normal_trust_cache=trust_cache,
         )
 
     def component(self, name: str, *, in_cfw: bool = False) -> Path:
