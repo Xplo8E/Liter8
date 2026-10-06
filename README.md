@@ -37,6 +37,7 @@ PRs welcome on any of these, especially SEP. The Pro and Pro Max are open too, i
 | iOS 27.0.1      | `24A446`   | run       | experimental | experimental |
 | iOS 27.2 beta 1 | `24B5084k` | run       | -            | -            |
 | iOS 27.2 beta 2 | `24B5089g` | run       | -            | -            |
+| iOS 27.2 beta 3 | `24B5099f` | run       | -            | -            |
 
 "Run" means i did an erase restore, booted it normally, then rebooted and it came back up. "Experimental" means unverified. It resolves and you can use it with `--experimental`, but nobody has confirmed it on that phone. If you own one and are willing to try, share what happens and i'll change the tag.
 
@@ -62,8 +63,6 @@ make release
 ```
 
 Binary ends up at `.build/release/liter8`.
-
-One thing that will catch you out: booting needs this project's `irecovery`, not whatever brew gave you. You pass it with `--irecovery` on every boot command. Yes, every one.
 
 ## Using it
 
@@ -108,7 +107,7 @@ Back to pwn DFU.
 
 ```sh
 .build/release/liter8 fw get-rd
-.build/release/liter8 fw boot-rd --irecovery /path/to/irecovery
+.build/release/liter8 fw boot-rd
 ```
 
 Step 3 already dropped the ticket at `$WORK_DIR/apticket.im4m`, so skip `--ticket` here.
@@ -132,7 +131,7 @@ pwn DFU again.
 
 ```sh
 .build/release/liter8 fw get-boot
-.build/release/liter8 fw boot --irecovery /path/to/irecovery
+.build/release/liter8 fw boot
 ```
 
 ### 7. Finish the bootstrap

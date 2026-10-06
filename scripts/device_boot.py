@@ -41,8 +41,10 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def require_executable(value: str | None, *, name: str, path_fallback: bool) -> str:
-    """Resolve an explicitly selected transport without hiding substitutions."""
+def require_executable(
+    value: str | None, *, name: str, path_fallback: bool, missing: str = ""
+) -> str:
+    """Resolve a transport, preferring an explicit selection over the PATH."""
     if value:
         path = Path(value).expanduser().resolve()
         if path.is_file() and os.access(path, os.X_OK):
@@ -52,7 +54,7 @@ def require_executable(value: str | None, *, name: str, path_fallback: bool) -> 
         found = shutil.which(name)
         if found:
             return found
-    raise WorkflowError(f"{name} is required")
+    raise WorkflowError(missing or f"{name} is required")
 
 
 def validate_boot_set(context: Context, expected_mode: str) -> Path:
@@ -104,10 +106,17 @@ def boot() -> None:
         raise WorkflowError(f"unexpected device boot action: {action}")
     root = validate_boot_set(context, mode)
 
-    # The project-specific irecovery source is not selected yet. Requiring an
-    # explicit path prevents accidental use of the official system binary.
+    # --irecovery still wins when given, so a non-standard build stays
+    # selectable; the PATH copy is the default rather than the only option.
     irecovery = require_executable(
-        os.environ.get("LITER8_IRECOVERY"), name="irecovery", path_fallback=False
+        os.environ.get("LITER8_IRECOVERY"),
+        name="irecovery",
+        path_fallback=True,
+        missing=(
+            "irecovery was not found on PATH.\n"
+            "  install it with: brew install libirecovery\n"
+            "  or pass the one you want: --irecovery /path/to/irecovery"
+        ),
     )
     usbliter8ctl = require_executable(None, name="usbliter8ctl", path_fallback=True)
 

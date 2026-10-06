@@ -54,8 +54,6 @@ public enum Preflight {
     /// macOS system binaries such as `hdiutil`, `codesign` and `unzip` are not
     /// listed: they ship with the OS at a fixed path and cannot go missing
     /// without the host being broken in ways this check cannot help with.
-    /// `irecovery` is also absent, because it is supplied per command with
-    /// `--irecovery` rather than found on the path.
     public static let tools: [Tool] = [
         Tool(
             names: ["7zz"],
@@ -112,6 +110,15 @@ public enum Preflight {
             stage: .device,
             purpose: "bounding device commands that can hang",
             installHint: "brew install coreutils"
+        ),
+        Tool(
+            // Reported from the PATH, which is where fw boot and fw boot-rd
+            // now take it. A --irecovery argument overrides that per command,
+            // so this answers "is there a default", not "which one will run".
+            names: ["irecovery"],
+            stage: .device,
+            purpose: "sending boot artifacts in recovery mode",
+            installHint: "brew install libirecovery, or pass --irecovery"
         ),
     ]
 

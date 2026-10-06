@@ -49,7 +49,7 @@ private func usage() -> Never {
                 for example d421ap or d431ap on an iPhone 11 Pro/Pro Max IPSW
       --resource-dir <directory>  --ticket <apticket.im4m>
       --sshrd-payload <ssh.tar.gz>
-      --irecovery <custom-irecovery>  --idevicerestore <executable>
+      --irecovery <executable>  --idevicerestore <executable>
       --rootfs <mounted-root-filesystem>  --check
       --serial  add serial=3 to the boot arguments of the artifact being built
                 (make-cfw, get-rd, get-boot). Off by default: it moves the
