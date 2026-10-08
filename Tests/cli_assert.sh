@@ -64,6 +64,17 @@ expect_help() {
     ok "$desc"
 }
 
+# expect_no_match <desc> <needle> <args...>
+# For checks where the command is expected to fail later anyway, and all that
+# matters is that it did NOT fail at the parsing layer.
+expect_no_match() {
+    local desc=$1 needle=$2; shift 2
+    "$BIN" "$@" >/tmp/.a_out 2>/tmp/.a_err
+    if grep -qF -- "$needle" /tmp/.a_out /tmp/.a_err; then
+        bad "$desc (parser rejected it)"
+    else ok "$desc"; fi
+}
+
 # expect_contains <desc> <needle> <args...>  (stdout or stderr)
 expect_contains() {
     local desc=$1 needle=$2; shift 2
@@ -153,6 +164,18 @@ if have "$KC"; then
 else
     skip "inspect post-mode help"
 fi
+
+print -r -- ""; print -r -- "== option values that begin with a dash =="
+# This device boots `-v debug=0x2014e launchd_unsecure_cache=1 wdt=-1 serial=3`,
+# so a boot-args literal normally starts with a dash. Without
+# `parsing: .unconditional` ArgumentParser reports "Missing value for
+# '--boot-args'" and the option is unusable for its main purpose.
+expect_no_match "--boot-args accepts a leading dash" "Missing value" \
+    resolve iboot ibss-bootargs /dev/null --boot-args "-v debug=0x2014e"
+expect_no_match "--boot-args accepts a bare -v" "Missing value" \
+    resolve iboot ibss-bootargs /dev/null --boot-args "-v"
+expect_no_match "apply --boot-args leading dash" "Missing value" \
+    apply iboot ibss-bootargs /dev/null /tmp/liter8-assert-out.bin --boot-args "-v x"
 
 print -r -- ""; print -r -- "== errors name the valid values =="
 # Validation happens before any file is read, so a placeholder path is fine here.

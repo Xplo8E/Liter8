@@ -60,7 +60,14 @@ struct Inspect: ParsableCommand {
         // parameters", and `inspect <binary> dis 0x1000 --help` ignored the flag
         // and disassembled. The strategy is kept because a parameter may legally
         // begin with a dash, so the request is detected here instead.
-        if parameters.contains(where: { $0 == "--help" || $0 == "-h" }) {
+        //
+        // Only scanned before an explicit `--`, so a token after the separator is
+        // never mistaken for a help request. The separator itself is still passed
+        // through to the mode handlers, which reject it on parameter count exactly
+        // as the previous parser did, so `--` remains unsupported here rather than
+        // newly broken.
+        let beforeSeparator = parameters.prefix { $0 != "--" }
+        if beforeSeparator.contains(where: { $0 == "--help" || $0 == "-h" }) {
             throw CleanExit.helpRequest(self)
         }
         guard Self.modes.contains(mode) else {

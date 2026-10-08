@@ -92,8 +92,14 @@ struct PanelID: ExpressibleByArgument {
 /// `--boot-args` and `--pinot-id`, shared by the commands that run a resolver.
 /// Which resolvers actually accept them is enforced in `resolveRecords`.
 struct ResolverTuningOptions: ParsableArguments {
+    // `.unconditional` because a boot-argument literal normally begins with a
+    // dash: this device boots `-v debug=0x2014e launchd_unsecure_cache=1 wdt=-1
+    // serial=3`. Without it ArgumentParser treats the value as the next flag and
+    // reports "Missing value for '--boot-args'", which breaks the option's main
+    // use. The old parser took the next argument unconditionally.
     @Option(
         name: .customLong("boot-args"),
+        parsing: .unconditional,
         help: ArgumentHelp(
             "Boot-argument literal, for the iBoot boot-args resolver.",
             valueName: "literal"
