@@ -17,6 +17,12 @@ let package = Package(
             url: "https://github.com/Lakr233/libcapstone-spm.git",
             revision: "ea98aa0a31693d7ea2930c4372f9b5858b0bc7a3"
         ),
+        // Scoped help. The hand-rolled parser printed one global usage block for
+        // every --help, so `liter8 fw boot --help` could not describe fw boot.
+        .package(
+            url: "https://github.com/apple/swift-argument-parser",
+            from: "1.8.2"
+        ),
     ],
     targets: [
         .target(
@@ -28,7 +34,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "Liter8CLI",
-            dependencies: ["Liter8Core"]
+            dependencies: [
+                "Liter8Core",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ]
         ),
         .testTarget(
             name: "Liter8CoreTests",
