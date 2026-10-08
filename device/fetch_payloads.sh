@@ -74,26 +74,37 @@ UICACHE_VER=v1.0.0-ios27
 UICACHE_URL="https://github.com/Xplo8E/uikittools-ng/releases/download/${UICACHE_VER}/uicache27"
 UICACHE_SHA=2a59540d47cff7631470a98dd230bb233a3f081dc0ad37860970bf8a17f6f16a
 
-# debugserver and the two LLVM libraries it links. Pinned from the Procursus
-# 1900 Packages index (Version/Size/SHA256/Filename), not from a device, so a
-# fresh clone reproduces them without the phone being half-configured.
+# debugserver's own deb, pinned from the Procursus 1900 Packages index
+# (Version/Size/SHA256/Filename). This is the SIGNING SOURCE only: the Mac needs
+# the exact stock binary to re-sign, and pinning it means the thing we sign is
+# byte-verified rather than whatever a device happened to have.
 #
-# libiosexec1, libncursesw6, libedit0 and libffi8 are the remaining
-# dependencies and are already in bootstrap_1900.tar.zst, which is why only
-# these three are fetched.
+# Its dependencies are deliberately NOT pinned here. libllvm16 and
+# libclang-cpp16 are installed by apt on the device at the matching version, so
+# the dependency closure stays apt's problem. Hand-maintaining it means a
+# Procursus bump that adds a dependency fails as an unmet-dependency error on
+# someone else's phone.
 PROCURSUS_LLVM="https://apt.procurs.us/pool/main/iphoneos-arm64-rootless/1900/llvm"
 LLVM_VER="16.0.0~5.9.2~RELEASE-1"
 DEBUGSERVER_DEB="debugserver-16_${LLVM_VER}_iphoneos-arm64.deb"
 DEBUGSERVER_SHA=81f58c62f933a96912a7416aa4b73915bfd05ab4c1340f89a336337afe67e748
-LIBLLVM_DEB="libllvm16_${LLVM_VER}_iphoneos-arm64.deb"
-LIBLLVM_SHA=4b43765c93d5be997b662dc98936866045a5f63e54aac89ec505620e0e69ebd8
-LIBCLANGCPP_DEB="libclang-cpp16_${LLVM_VER}_iphoneos-arm64.deb"
-LIBCLANGCPP_SHA=2c715648701def60e9794d392fc5a889a6f7dde46f6098575d9f660446bdb51a
 
 # The stock binary ships ad-hoc with exactly this many entitlements. Asserting
 # it means a Procursus rebuild that changes the set stops here instead of
 # silently shipping a debugger signed against different assumptions.
 DEBUGSERVER_STOCK_ENTS=205
+
+# TrollStore Lite helper, patched for iOS 27 registration. Pinned by SHA256
+# because it is a GitHub release rather than an apt package, so nothing else
+# verifies it. Its own dependencies (ldid, and libplist3 beneath that) come from
+# apt on the device for the same reason as above.
+#
+# Nothing is re-signed here: the deb ships the patched helper and its postinst
+# installs the bundled TrollStoreLite.ipa itself.
+TROLLSTORE_VER="2.1.1-ios27+2"
+TROLLSTORE_DEB="com.opa334.trollstorehelper27_${TROLLSTORE_VER}_iphoneos-arm64.deb"
+TROLLSTORE_URL="https://github.com/Xplo8E/TrollStore27/releases/download/v2.1.1-ios27.2/${TROLLSTORE_DEB}"
+TROLLSTORE_SHA=e8ea96c560268430fd437aa50cb9a97b774ee70c242a34fef12b38ef8b099c0d
 
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 ok()   { printf '    [+] %s\n' "$1"; }
@@ -397,24 +408,16 @@ if wants debugserver; then
     say "debugserver $LLVM_VER"
     rm -rf "$WORK/debugserver" && mkdir -p "$WORK/debugserver"
 
-    for spec in "$DEBUGSERVER_DEB:$DEBUGSERVER_SHA" \
-                "$LIBLLVM_DEB:$LIBLLVM_SHA" \
-                "$LIBCLANGCPP_DEB:$LIBCLANGCPP_SHA"; do
-        deb_name=${spec%%:*}
-        deb_sha=${spec##*:}
-        deb="$WORK/$deb_name"
-        [ -f "$deb" ] || curl -sL --fail -o "$deb" "$PROCURSUS_LLVM/$deb_name" \
-            || die "download failed: $PROCURSUS_LLVM/$deb_name"
-        got=$(shasum -a 256 "$deb" | awk '{print $1}')
-        [ "$got" = "$deb_sha" ] \
-            || die "$deb_name sha256 mismatch: got $got expected $deb_sha"
-        cp "$deb" "$OUT/$deb_name"
-        ok "$deb_name hash-verified"
-    done
+    deb="$WORK/$DEBUGSERVER_DEB"
+    [ -f "$deb" ] || curl -sL --fail -o "$deb" "$PROCURSUS_LLVM/$DEBUGSERVER_DEB" \
+        || die "download failed: $PROCURSUS_LLVM/$DEBUGSERVER_DEB"
+    got=$(shasum -a 256 "$deb" | awk '{print $1}')
+    [ "$got" = "$DEBUGSERVER_SHA" ] \
+        || die "$DEBUGSERVER_DEB sha256 mismatch: got $got expected $DEBUGSERVER_SHA"
+    ok "$DEBUGSERVER_DEB hash-verified"
 
-    # Procursus ships these zstd-compressed, unlike Sileo's xz.
-    ( cd "$WORK/debugserver" && ar x "$WORK/$DEBUGSERVER_DEB" \
-        && zstd -dc data.tar.zst | tar xf - )
+    # Procursus ships this zstd-compressed, unlike Sileo's xz.
+    ( cd "$WORK/debugserver" && ar x "$deb" && zstd -dc data.tar.zst | tar xf - )
     ds="$WORK/debugserver/var/jb/usr/lib/llvm-16/bin/debugserver"
     [ -f "$ds" ] || die "debugserver not found in $DEBUGSERVER_DEB"
 
@@ -454,7 +457,38 @@ if wants debugserver; then
     done
     cp "$ds" "$OUT/debugserver"
     chmod 0755 "$OUT/debugserver"
+    # The deb goes along too: apt installs it on the device so the dependency
+    # closure is resolved there, then the re-signed binary replaces the one it
+    # unpacked.
+    cp "$deb" "$OUT/$DEBUGSERVER_DEB"
     ok "debugserver re-signed, $merged entitlements, all three present"
+fi
+
+
+# --------------------------------------------------------------- trollstore
+# Not in the default WANT set. Nothing is re-signed: the deb ships the iOS 27
+# patched helper, and its postinst installs the bundled TrollStoreLite.ipa.
+#
+#   ./fetch_payloads.sh trollstore
+if wants trollstore; then
+    say "TrollStore helper $TROLLSTORE_VER"
+    deb="$WORK/$TROLLSTORE_DEB"
+    [ -f "$deb" ] || curl -sL --fail -o "$deb" "$TROLLSTORE_URL" \
+        || die "download failed: $TROLLSTORE_URL"
+    got=$(shasum -a 256 "$deb" | awk '{print $1}')
+    [ "$got" = "$TROLLSTORE_SHA" ] \
+        || die "$TROLLSTORE_DEB sha256 mismatch: got $got expected $TROLLSTORE_SHA"
+
+    # Confirm it is the package we think it is before shipping it to a device.
+    rm -rf "$WORK/trollstore" && mkdir -p "$WORK/trollstore"
+    ( cd "$WORK/trollstore" && ar x "$deb" && xz -dc control.tar.xz | tar xf - )
+    grep -q '^Package: com.opa334.trollstorehelper27$' "$WORK/trollstore/control" \
+        || die "unexpected package name in $TROLLSTORE_DEB"
+    grep -q "^Version: ${TROLLSTORE_VER}\$" "$WORK/trollstore/control" \
+        || die "unexpected version in $TROLLSTORE_DEB"
+
+    cp "$deb" "$OUT/$TROLLSTORE_DEB"
+    ok "$TROLLSTORE_DEB hash-verified, package and version confirmed"
 fi
 
 say "summary"
@@ -465,7 +499,7 @@ for p in "$OUT/Sileo.app/Sileo" "$OUT/Sileo.app/giveMeRoot" \
          "$OUT/uicache" \
          photodiag/photodiag spawnprobe/personaalloc appreg/appreg \
          photoforce/pfruntimeprobe photoforce/pfwatch ddiwatch/ddiwatch \
-         debugserver; do
+         "$OUT/debugserver"; do
     if [ -f "$p" ]; then
         # "$BASE" quoted separately inside ${..}: unquoted it is treated as a
         # glob pattern, so a path containing [ or * would strip the wrong prefix

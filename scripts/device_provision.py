@@ -145,7 +145,7 @@ def provision() -> None:
             workflow / "fetch_payloads.sh",
             check_only=False,
             environment=environment,
-            arguments=["debugserver"],
+            arguments=["debugserver", "trollstore"],
         )
         execute(workflow / "setup_debugger.sh", check_only=check_only, environment=environment)
         return

@@ -53,21 +53,22 @@ put()    { "$SSHPASS" -p "$PW" ssh "${SSHOPT[@]}" "$DEV" "cat > $2" < "$1" }
 
 RPATH='export PATH=/var/jb/usr/bin:/var/jb/bin:/var/jb/usr/sbin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin'
 
-# Must match the pins in fetch_payloads.sh. Asserted below so a bumped payload
-# with a stale installer, or the reverse, stops here.
+# Must match the pins in fetch_payloads.sh.
 LLVM_VER="16.0.0~5.9.2~RELEASE-1"
-DEBS=(
-    "debugserver-16_${LLVM_VER}_iphoneos-arm64.deb"
-    "libllvm16_${LLVM_VER}_iphoneos-arm64.deb"
-    "libclang-cpp16_${LLVM_VER}_iphoneos-arm64.deb"
-)
+DEBUGSERVER_DEB="debugserver-16_${LLVM_VER}_iphoneos-arm64.deb"
+TROLLSTORE_VER="2.1.1-ios27+2"
+TROLLSTORE_DEB="com.opa334.trollstorehelper27_${TROLLSTORE_VER}_iphoneos-arm64.deb"
 DS_PATH=/var/jb/usr/lib/llvm-16/bin/debugserver
 
+# apt resolves each deb's dependencies on the device, so this script never has
+# to know about libllvm16, libclang-cpp16, ldid or libplist3. That needs working
+# internet on the phone, which is checked before anything is installed.
+PROBE_URL=https://apt.procurs.us/dists/1900/InRelease
+
 say "checking payloads"
-[[ -f payload/debugserver ]] \
-    || die "payload/debugserver missing. Run ./fetch_payloads.sh debugserver first."
-for d in "${DEBS[@]}"; do
-    [[ -f "payload/$d" ]] || die "payload/$d missing. Run ./fetch_payloads.sh debugserver first."
+for f in debugserver "$DEBUGSERVER_DEB" "$TROLLSTORE_DEB"; do
+    [[ -f "payload/$f" ]] \
+        || die "payload/$f missing. Run ./fetch_payloads.sh debugserver trollstore first."
 done
 for k in set-exception-port thread-set-state cs.debugger; do
     ../tools/ldid_macosx_arm64 -e payload/debugserver 2>/dev/null \
@@ -98,6 +99,23 @@ ok "normal boot"
 
 sh_dev "$RPATH; command -v dpkg >/dev/null" \
     || die "dpkg not found. Run ./install_bootstrap.sh first."
+sh_dev "$RPATH; command -v apt-get >/dev/null" \
+    || die "apt-get not found. Run ./install_bootstrap.sh first."
+
+# The device needs internet because apt resolves the dependencies there. Probe
+# the repo itself rather than a generic host: a captive portal or a DNS-only
+# answer would pass a ping and then fail the install halfway through.
+#
+# wget, not curl: the bootstrap ships wget and has no curl.
+say "checking device internet"
+IFACE_STATE=$(sh_dev "$RPATH; ifconfig en0 2>/dev/null | grep -c 'status: active'" | tr -d '\r')
+if ! sh_dev "$RPATH; wget -q --spider --timeout=10 --tries=1 $PROBE_URL" >/dev/null 2>&1; then
+    if [[ "$IFACE_STATE" == "0" ]]; then
+        die "the device has no Wi-Fi connection. Connect it to Wi-Fi and run this again."
+    fi
+    die "the device is on Wi-Fi but cannot reach apt.procurs.us. Check its internet connection and run this again."
+fi
+ok "device can reach apt.procurs.us"
 
 # The device has no shasum and no openssl, so the file is read back and hashed
 # on the Mac. Same approach as the uicache staging check in sshrd_provision.sh.
@@ -124,23 +142,29 @@ if (( CHECK_ONLY )); then
     say "check only, nothing changed"
     # dpkg-query -f uses ${variable} substitution, not printf conversions.
     sh_dev "$RPATH; dpkg-query -W -f='    \${Package} \${Version} \${db:Status-Status}\n' \
-        debugserver-16 libllvm16 libclang-cpp16 2>&1" || true
+        debugserver-16 libllvm16 libclang-cpp16 ldid com.opa334.trollstorehelper27 2>&1" || true
+    TS_APP=$(sh_dev "$RPATH
+        find /var/containers/Bundle/Application -maxdepth 2 -name 'TrollStoreLite.app' -print -quit 2>/dev/null" | tr -d '\r')
+    [[ -n "$TS_APP" ]] && ok "TrollStore Lite registered at $TS_APP" \
+                       || skip "TrollStore Lite not registered"
     exit 0
 fi
 
+# Shared staging directory. Created before either install because the TrollStore
+# step below runs even when debugserver was already present.
+sh_dev "$RPATH; mkdir -p /var/root/.liter8-debs"
+
 if (( ! INSTALLED )); then
-    say "installing the packages"
-    # Pushed and installed from the Mac's verified copies, so the device needs
-    # neither network nor a configured apt.
-    sh_dev "$RPATH; mkdir -p /var/root/.liter8-debs"
-    for d in "${DEBS[@]}"; do
-        put "payload/$d" "/var/root/.liter8-debs/$d"
-        ok "pushed $d"
-    done
-    sh_dev "$RPATH; cd /var/root/.liter8-debs && dpkg -i ${DEBS[*]} 2>&1 | tail -4" \
-        || die "dpkg -i failed"
-    sh_dev "$RPATH; rm -rf /var/root/.liter8-debs"
-    ok "packages installed"
+    say "installing debugserver"
+    # `apt-get install ./file.deb` installs the verified local deb AND resolves
+    # its dependencies from the repo, which is why the internet check above is a
+    # hard requirement rather than a warning.
+    put "payload/$DEBUGSERVER_DEB" "/var/root/.liter8-debs/$DEBUGSERVER_DEB"
+    sh_dev "$RPATH; cd /var/root/.liter8-debs &&
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades \
+            ./$DEBUGSERVER_DEB 2>&1 | tail -6" \
+        || die "apt-get install of $DEBUGSERVER_DEB failed"
+    ok "debugserver-16 and its dependencies installed"
 
     say "installing the re-signed debugserver"
     # dpkg has just written the stock binary. Replace it in place, so the
@@ -159,6 +183,37 @@ say "holding the packages"
 # and hardware breakpoints silently stop firing, which is a miserable thing to
 # debug. --check reports drift via the hash comparison above.
 sh_dev "$RPATH; apt-mark hold debugserver-16 libllvm16 libclang-cpp16 2>&1 | sed 's/^/    /'" || true
+
+say "TrollStore helper $TROLLSTORE_VER"
+TS_HAVE=$(sh_dev "$RPATH; dpkg-query -W -f='\${Version}' com.opa334.trollstorehelper27 2>/dev/null" | tr -d '\r')
+if [[ "$TS_HAVE" == "$TROLLSTORE_VER" ]]; then
+    skip "already installed"
+else
+    # Nothing is re-signed: the deb carries the iOS 27 patched helper and its
+    # postinst installs the bundled TrollStoreLite.ipa. apt pulls ldid, and
+    # libplist3 beneath it.
+    put "payload/$TROLLSTORE_DEB" "/var/root/.liter8-debs/$TROLLSTORE_DEB"
+    sh_dev "$RPATH; cd /var/root/.liter8-debs &&
+        DEBIAN_FRONTEND=noninteractive apt-get install -y ./$TROLLSTORE_DEB 2>&1 | tail -8" \
+        || die "apt-get install of $TROLLSTORE_DEB failed"
+    TS_NOW=$(sh_dev "$RPATH; dpkg-query -W -f='\${Version}' com.opa334.trollstorehelper27 2>/dev/null" | tr -d '\r')
+    [[ "$TS_NOW" == "$TROLLSTORE_VER" ]] \
+        || die "trollstorehelper27 reports '${TS_NOW:-nothing}' after install, expected $TROLLSTORE_VER"
+    ok "helper $TS_NOW installed"
+fi
+
+# The postinst registers TrollStore Lite as a container app. Report it rather
+# than asserting: registration can legitimately be deferred, and a missing
+# bundle is worth seeing without failing the whole stage.
+TS_APP=$(sh_dev "$RPATH
+    find /var/containers/Bundle/Application -maxdepth 2 -name 'TrollStoreLite.app' -print -quit 2>/dev/null" | tr -d '\r')
+if [[ -n "$TS_APP" ]]; then
+    ok "TrollStore Lite registered at $TS_APP"
+else
+    skip "TrollStore Lite not registered yet; run: trollstorehelper install /var/jb/usr/share/trollstore27/TrollStoreLite.ipa"
+fi
+
+sh_dev "$RPATH; rm -rf /var/root/.liter8-debs" >/dev/null 2>&1 || true
 
 say "verifying"
 VER=$(sh_dev "$RPATH; /var/jb/usr/bin/debugserver-16 --version 2>&1 | head -1" | tr -d '\r')
