@@ -54,6 +54,15 @@ struct Inspect: ParsableCommand {
     // Checked here rather than in run() so an unknown mode is reported against
     // `liter8 inspect`, whose help lists the modes.
     func validate() throws {
+        // `.captureForPassthrough` deliberately swallows built-in flags, so
+        // ArgumentParser never sees a help request that follows the mode. Without
+        // this, `inspect <binary> segments --help` reported "segments takes no
+        // parameters", and `inspect <binary> dis 0x1000 --help` ignored the flag
+        // and disassembled. The strategy is kept because a parameter may legally
+        // begin with a dash, so the request is detected here instead.
+        if parameters.contains(where: { $0 == "--help" || $0 == "-h" }) {
+            throw CleanExit.helpRequest(self)
+        }
         guard Self.modes.contains(mode) else {
             throw ValidationError(
                 "unknown inspect mode '\(mode)'. Modes: "

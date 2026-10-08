@@ -139,6 +139,21 @@ else
     skip "inspect argument order"
 fi
 
+print -r -- ""
+print -r -- "== help survives after the inspect mode =="
+# .captureForPassthrough swallows built-in flags, so these regress silently:
+# before the explicit check, `segments --help` reported "takes no parameters"
+# and `dis <off> --help` ignored the flag and disassembled.
+if have "$KC"; then
+    expect_help "inspect <bin> --help"                 "MODES:" inspect "$KC" --help
+    expect_help "inspect <bin> segments --help"        "MODES:" inspect "$KC" segments --help
+    expect_help "inspect <bin> dis <off> --help"       "MODES:" inspect "$KC" dis 0x2f408 --help
+    expect_help "inspect <bin> pattern <word> -h"      "MODES:" inspect "$KC" pattern 0x370001c8 -h
+    expect_help "inspect <bin> objc-methods sel --help" "MODES:" inspect "$KC" objc-methods someSel --help
+else
+    skip "inspect post-mode help"
+fi
+
 print -r -- ""; print -r -- "== errors name the valid values =="
 # Validation happens before any file is read, so a placeholder path is fine here.
 expect_contains "unknown plan lists plans"          "Plans:"      resolve txm nope /dev/null
