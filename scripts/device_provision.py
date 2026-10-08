@@ -69,11 +69,17 @@ def prepare_runtime(context: Context) -> Path:
     return workflow
 
 
-def execute(script: Path, *, check_only: bool, environment: dict[str, str]) -> None:
-    arguments: list[object] = [script]
+def execute(
+    script: Path,
+    *,
+    check_only: bool,
+    environment: dict[str, str],
+    arguments: list[str] | None = None,
+) -> None:
+    command: list[object] = [script, *(arguments or [])]
     if check_only:
-        arguments.append("--check")
-    run(arguments, environment=environment)
+        command.append("--check")
+    run(command, environment=environment)
 
 
 def prepared_rootfs(context: Context, environment: dict[str, str]) -> Path:
@@ -115,7 +121,7 @@ def prepared_rootfs(context: Context, environment: dict[str, str]) -> Path:
 def provision() -> None:
     context = Context.load()
     action = os.environ.get("LITER8_FW_ACTION")
-    if action not in {"bootstrap", "provision", "finalize", "setup-shell"}:
+    if action not in {"bootstrap", "provision", "finalize", "setup-shell", "setup-debugger"}:
         raise WorkflowError(f"unexpected provisioning action: {action}")
     workflow = prepare_runtime(context)
     check_only = os.environ.get("LITER8_CHECK_ONLY") == "1"
@@ -129,6 +135,19 @@ def provision() -> None:
 
     if action == "setup-shell":
         execute(workflow / "setup_shell.sh", check_only=check_only, environment=environment)
+        return
+
+    # Optional, and kept out of finalize: it installs a 53 MB debugger that
+    # nothing in the boot or bootstrap path needs. The payloads come from
+    # fetch_payloads.sh on the Mac, so the device needs no network.
+    if action == "setup-debugger":
+        execute(
+            workflow / "fetch_payloads.sh",
+            check_only=False,
+            environment=environment,
+            arguments=["debugserver", "trollstore"],
+        )
+        execute(workflow / "setup_debugger.sh", check_only=check_only, environment=environment)
         return
 
     if action == "finalize":

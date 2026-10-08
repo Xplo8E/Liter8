@@ -7,7 +7,7 @@ private func usage() -> Never {
     usage:
       liter8 resolve <component> <plan> <input> [options]
       liter8 apply <component> <plan> <input> <output> [options]
-      liter8 fw <actions|prepare|prepare-rootfs|unmount-rootfs|make-cfw|capture-ticket|get-rd|get-boot|verify-cfw|restore-cfw|boot-rd|boot|bootstrap|provision|finalize|setup-shell> [options]
+      liter8 fw <actions|prepare|prepare-rootfs|unmount-rootfs|make-cfw|capture-ticket|get-rd|get-boot|verify-cfw|restore-cfw|boot-rd|boot|bootstrap|provision|finalize|setup-shell|setup-debugger> [options]
       liter8 survey <extracted-firmware-directory> [--guards]
       liter8 acm-probe <kernelcache> <signature-variant>
       liter8 preflight
@@ -591,7 +591,9 @@ do {
                     "--idevicerestore is only valid for fw restore-cfw"
                 )
             }
-            let provisioningActions: Set<String> = ["bootstrap", "provision", "finalize", "setup-shell"]
+            let provisioningActions: Set<String> = [
+                "bootstrap", "provision", "finalize", "setup-shell", "setup-debugger",
+            ]
             guard rootfsArgument == nil || action == "provision" else {
                 throw PatchfinderError.invalidFixture(
                     "--rootfs is only valid for fw provision"
@@ -599,7 +601,7 @@ do {
             }
             guard !checkOnly || provisioningActions.contains(action) else {
                 throw PatchfinderError.invalidFixture(
-                    "--check is only valid for bootstrap, provision, finalize and setup-shell"
+                    "--check is only valid for bootstrap, provision, finalize, setup-shell and setup-debugger"
                 )
             }
             // The literal is written into iBSS and iBEC when the artifact is
