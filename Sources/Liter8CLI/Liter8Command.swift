@@ -1,5 +1,4 @@
 import ArgumentParser
-import Darwin
 import Foundation
 import Liter8Core
 
@@ -9,6 +8,13 @@ import Liter8Core
 /// `--help`, so `liter8 fw boot --help` described the whole program rather than
 /// `fw boot`. Declaring the tree gives scoped help at every level, and makes each
 /// action's accepted options structural instead of a list of manual guards.
+///
+/// ArgumentParser owns the entry point. A custom `main` was tried, to keep the old
+/// `error: <interpolated>` formatting for runtime failures, and it broke every
+/// `--help`: `parseAsRoot()` succeeds for a help request, and the request then
+/// surfaces as an error thrown from `run()`, where a hand-written catch swallows
+/// it. Slightly longer error text is not worth owning that.
+@main
 struct Liter8: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "liter8",
@@ -36,40 +42,4 @@ struct Liter8: ParsableCommand {
             Setup.self,
         ]
     )
-}
-
-/// Entry point.
-///
-/// ArgumentParser owns parsing, help and its own error formatting. Everything a
-/// command throws at runtime is reported the way this CLI always has: the full
-/// interpolated error and exit status 1.
-///
-/// That distinction is not cosmetic. ArgumentParser reports a generic error by its
-/// `localizedDescription`, which for a Foundation file error drops the path and
-/// leaves "the file could not be opened" with no clue which file. Interpolating
-/// keeps `NSFilePath`, and keeps what scripts around this CLI already match on.
-@main
-enum Liter8Main {
-    static func main() {
-        var command: ParsableCommand
-        do {
-            command = try Liter8.parseAsRoot()
-        } catch {
-            // Help requests, unknown options, bad argument counts, and the
-            // ValidationErrors the commands throw before doing any work.
-            Liter8.exit(withError: error)
-        }
-        do {
-            try command.run()
-        } catch let exit as ExitCode {
-            Darwin.exit(exit.rawValue)
-        } catch let clean as CleanExit {
-            Liter8.exit(withError: clean)
-        } catch let validation as ValidationError {
-            Liter8.exit(withError: validation)
-        } catch {
-            FileHandle.standardError.write(Data("error: \(error)\n".utf8))
-            Darwin.exit(1)
-        }
-    }
 }
