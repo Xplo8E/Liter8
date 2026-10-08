@@ -155,15 +155,15 @@ print -r -- "== help survives after the inspect mode =="
 # .captureForPassthrough swallows built-in flags, so these regress silently:
 # before the explicit check, `segments --help` reported "takes no parameters"
 # and `dis <off> --help` ignored the flag and disassembled.
-if have "$KC"; then
-    expect_help "inspect <bin> --help"                 "MODES:" inspect "$KC" --help
-    expect_help "inspect <bin> segments --help"        "MODES:" inspect "$KC" segments --help
-    expect_help "inspect <bin> dis <off> --help"       "MODES:" inspect "$KC" dis 0x2f408 --help
-    expect_help "inspect <bin> pattern <word> -h"      "MODES:" inspect "$KC" pattern 0x370001c8 -h
-    expect_help "inspect <bin> objc-methods sel --help" "MODES:" inspect "$KC" objc-methods someSel --help
-else
-    skip "inspect post-mode help"
-fi
+# No fixture needed: validate() throws the help request before run() opens the
+# path, so these must hold on a bare checkout. Gating them behind a firmware
+# binary would skip the exact regression they exist to catch.
+expect_help "inspect <bin> --help"                  "MODES:" inspect /dev/null --help
+expect_help "inspect <bin> segments --help"         "MODES:" inspect /dev/null segments --help
+expect_help "inspect <bin> dis <off> --help"        "MODES:" inspect /dev/null dis 0x2f408 --help
+expect_help "inspect <bin> pattern <word> -h"       "MODES:" inspect /dev/null pattern 0x370001c8 -h
+expect_help "inspect <bin> objc-methods sel --help" "MODES:" inspect /dev/null objc-methods someSel --help
+expect_help "help resolves before the file is read" "MODES:" inspect /nonexistent segments --help
 
 print -r -- ""; print -r -- "== option values that begin with a dash =="
 # This device boots `-v debug=0x2014e launchd_unsecure_cache=1 wdt=-1 serial=3`,

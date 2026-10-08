@@ -45,6 +45,9 @@ integration: build
 	bash Tests/fw-workflow-integration.sh
 	python3 Tests/ipsw-robustness-integration.py
 	python3 Tests/python-workflow-tests.py
+	# Scoped help and per-action option isolation. Needs no firmware: the checks
+	# that want one skip unless MACHO, KERNEL and IM4P are exported.
+	zsh Tests/cli_assert.sh .build/debug/liter8
 
 check: test-full test-e2e integration
 
