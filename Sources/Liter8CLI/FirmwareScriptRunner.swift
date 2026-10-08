@@ -23,6 +23,7 @@ enum FirmwareScriptRunner {
         "restore-cfw": "restore_cfw.py",
         "provision": "device_provision.py",
         "setup-shell": "device_provision.py",
+        "setup-debugger": "device_provision.py",
         "unmount-rootfs": "rootfs.py",
         "verify-cfw": "verify_cfw.py",
     ]

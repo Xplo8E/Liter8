@@ -12,8 +12,9 @@
 # re-signed), which made provisioning depend on the device already being
 # half-configured. Everything now comes from upstream.
 #
-#   ./fetch_payloads.sh            # everything
-#   ./fetch_payloads.sh sileo      # just one
+#   ./fetch_payloads.sh                # the default set
+#   ./fetch_payloads.sh sileo          # just one
+#   ./fetch_payloads.sh debugserver    # optional, not in the default set
 #
 # Why every binary is re-signed ad-hoc:
 #   Sileo ships flags=0x0 "no signature" with ZERO entitlements, because a real
@@ -55,9 +56,14 @@ WORK="$BASE/payload/.work"
 # PID 1 and its service cache are never patched by shape alone. Swift exports
 # their exact hashes and counts from the selected firmware profile, so a copied
 # rootfs or stale work directory stops before producing boot-critical output.
-LAUNCHD_SHA=${LITER8_LAUNCHD_SHA:?Liter8 did not provide the reviewed launchd hash}
-LAUNCHD_CACHE_SHA=${LITER8_LAUNCHD_CACHE_SHA:?Liter8 did not provide the reviewed launchd cache hash}
-LAUNCHD_CACHE_DAEMONS=${LITER8_LAUNCHD_CACHE_DAEMONS:?Liter8 did not provide the reviewed launchd daemon count}
+#
+# Required only by the components that consume them: LAUNCHD_SHA by injection,
+# the two cache values by cache. The requirement is asserted beside the WANT
+# set below rather than here, so a selective run such as `sileo` or
+# `debugserver` does not need the whole firmware profile exported.
+LAUNCHD_SHA=${LITER8_LAUNCHD_SHA:-}
+LAUNCHD_CACHE_SHA=${LITER8_LAUNCHD_CACHE_SHA:-}
+LAUNCHD_CACHE_DAEMONS=${LITER8_LAUNCHD_CACHE_DAEMONS:-}
 
 SILEO_VER=2.5.1
 SILEO_DEB="org.coolstar.sileo_${SILEO_VER}_iphoneos-arm64.deb"   # arm64 == rootless
@@ -67,6 +73,27 @@ SILEO_SHA=8e3c90e5a7d32f4ca207a0ac30d3cfa8a13dca86a2b4e11cb3f9e5c68d7bc97a
 UICACHE_VER=v1.0.0-ios27
 UICACHE_URL="https://github.com/Xplo8E/uikittools-ng/releases/download/${UICACHE_VER}/uicache27"
 UICACHE_SHA=2a59540d47cff7631470a98dd230bb233a3f081dc0ad37860970bf8a17f6f16a
+
+# debugserver and the two LLVM libraries it links. Pinned from the Procursus
+# 1900 Packages index (Version/Size/SHA256/Filename), not from a device, so a
+# fresh clone reproduces them without the phone being half-configured.
+#
+# libiosexec1, libncursesw6, libedit0 and libffi8 are the remaining
+# dependencies and are already in bootstrap_1900.tar.zst, which is why only
+# these three are fetched.
+PROCURSUS_LLVM="https://apt.procurs.us/pool/main/iphoneos-arm64-rootless/1900/llvm"
+LLVM_VER="16.0.0~5.9.2~RELEASE-1"
+DEBUGSERVER_DEB="debugserver-16_${LLVM_VER}_iphoneos-arm64.deb"
+DEBUGSERVER_SHA=81f58c62f933a96912a7416aa4b73915bfd05ab4c1340f89a336337afe67e748
+LIBLLVM_DEB="libllvm16_${LLVM_VER}_iphoneos-arm64.deb"
+LIBLLVM_SHA=4b43765c93d5be997b662dc98936866045a5f63e54aac89ec505620e0e69ebd8
+LIBCLANGCPP_DEB="libclang-cpp16_${LLVM_VER}_iphoneos-arm64.deb"
+LIBCLANGCPP_SHA=2c715648701def60e9794d392fc5a889a6f7dde46f6098575d9f660446bdb51a
+
+# The stock binary ships ad-hoc with exactly this many entitlements. Asserting
+# it means a Procursus rebuild that changes the set stops here instead of
+# silently shipping a debugger signed against different assumptions.
+DEBUGSERVER_STOCK_ENTS=205
 
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 ok()   { printf '    [+] %s\n' "$1"; }
@@ -81,6 +108,18 @@ mkdir -p "$OUT" "$WORK"
 
 WANT="${*:-sileo helpers cache injection pairing}"
 wants() { case " $WANT " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+# Assert the boot-critical profile values only for the components that use them.
+if wants injection; then
+    [ -n "$LAUNCHD_SHA" ] \
+        || die "Liter8 did not provide the reviewed launchd hash"
+fi
+if wants cache; then
+    [ -n "$LAUNCHD_CACHE_SHA" ] \
+        || die "Liter8 did not provide the reviewed launchd cache hash"
+    [ -n "$LAUNCHD_CACHE_DAEMONS" ] \
+        || die "Liter8 did not provide the reviewed launchd daemon count"
+fi
 
 
 # ------------------------------------------------------------------- sileo
@@ -338,6 +377,86 @@ if wants helpers; then
     ok "uicache $UICACHE_VER downloaded and hash-verified"
 fi
 
+
+# -------------------------------------------------------------- debugserver
+# Not in the default WANT set: it is a 53 MB download for an optional debugger,
+# and nothing in the boot or bootstrap path needs it.
+#
+#   ./fetch_payloads.sh debugserver
+#
+# Only `debugserver` itself is re-signed. The stock binary is ad-hoc with 205
+# entitlements and none of the three below, which is enough to attach to a
+# platform daemon but NOT enough to set a hardware breakpoint: lldb reports the
+# breakpoint as set and it then never fires. Verified by an A/B on one boot
+# against one target, stock versus re-signed.
+#
+# Software breakpoints do not work on this platform at all, regardless of
+# entitlements: the write to a shared-cache code page is silently discarded, so
+# `breakpoint set -H` is mandatory. See docs/design/DEBUGGING_PLATFORM_DAEMONS.md.
+if wants debugserver; then
+    say "debugserver $LLVM_VER"
+    rm -rf "$WORK/debugserver" && mkdir -p "$WORK/debugserver"
+
+    for spec in "$DEBUGSERVER_DEB:$DEBUGSERVER_SHA" \
+                "$LIBLLVM_DEB:$LIBLLVM_SHA" \
+                "$LIBCLANGCPP_DEB:$LIBCLANGCPP_SHA"; do
+        deb_name=${spec%%:*}
+        deb_sha=${spec##*:}
+        deb="$WORK/$deb_name"
+        [ -f "$deb" ] || curl -sL --fail -o "$deb" "$PROCURSUS_LLVM/$deb_name" \
+            || die "download failed: $PROCURSUS_LLVM/$deb_name"
+        got=$(shasum -a 256 "$deb" | awk '{print $1}')
+        [ "$got" = "$deb_sha" ] \
+            || die "$deb_name sha256 mismatch: got $got expected $deb_sha"
+        cp "$deb" "$OUT/$deb_name"
+        ok "$deb_name hash-verified"
+    done
+
+    # Procursus ships these zstd-compressed, unlike Sileo's xz.
+    ( cd "$WORK/debugserver" && ar x "$WORK/$DEBUGSERVER_DEB" \
+        && zstd -dc data.tar.zst | tar xf - )
+    ds="$WORK/debugserver/var/jb/usr/lib/llvm-16/bin/debugserver"
+    [ -f "$ds" ] || die "debugserver not found in $DEBUGSERVER_DEB"
+
+    # Kept inside the per-run directory wiped above. codesign will not overwrite
+    # an existing output file, so a path that survives between runs silently
+    # feeds the previous run's merged plist back into the assertions below.
+    ent="$WORK/debugserver/entitlements.plist"
+    codesign -d --entitlements "$ent" --xml "$ds" 2>/dev/null \
+        || die "cannot read debugserver entitlements"
+    plutil -convert xml1 "$ent"
+    stock=$(grep -c '<key>' "$ent")
+    [ "$stock" = "$DEBUGSERVER_STOCK_ENTS" ] \
+        || die "debugserver ships $stock entitlements, expected $DEBUGSERVER_STOCK_ENTS"
+
+    # set-exception-port: without it debugserver is SIGKILLed with EXC_GUARD on
+    #   task_set_exception_ports(mach_task_self()), which iOS 27 guards.
+    # thread-set-state: programs the ARM64 debug registers, so hardware
+    #   breakpoints fire. This is the one the stock binary most visibly lacks.
+    # cs.debugger: satisfies TXM's debug-mapping entitlement check.
+    for k in com.apple.private.set-exception-port \
+             com.apple.private.thread-set-state \
+             com.apple.private.cs.debugger; do
+        /usr/libexec/PlistBuddy -c "Add :$k bool true" "$ent" >/dev/null \
+            || die "could not add $k"
+    done
+    merged=$(grep -c '<key>' "$ent")
+    [ "$merged" = "$((DEBUGSERVER_STOCK_ENTS + 3))" ] \
+        || die "merged entitlements are $merged, expected $((DEBUGSERVER_STOCK_ENTS + 3))"
+
+    # Keep the stock name and identifier: this replaces the packaged binary at
+    # its own path, so the debugserver-16 symlink keeps working and there is no
+    # second copy to keep in sync.
+    "$LDID" -Idebugserver -S"$ent" -Cadhoc "$ds"
+    for k in set-exception-port thread-set-state cs.debugger; do
+        "$LDID" -e "$ds" 2>/dev/null | grep -q "com.apple.private.$k" \
+            || die "com.apple.private.$k missing after signing"
+    done
+    cp "$ds" "$OUT/debugserver"
+    chmod 0755 "$OUT/debugserver"
+    ok "debugserver re-signed, $merged entitlements, all three present"
+fi
+
 say "summary"
 for p in "$OUT/Sileo.app/Sileo" "$OUT/Sileo.app/giveMeRoot" \
          "$OUT/launchd.orig" "$OUT/launchd.hooked" "$OUT/lhook.dylib" \
@@ -345,7 +464,8 @@ for p in "$OUT/Sileo.app/Sileo" "$OUT/Sileo.app/giveMeRoot" \
          "$OUT/l8remotepairing.dylib" "$OUT/l8coreauth.dylib" \
          "$OUT/uicache" \
          photodiag/photodiag spawnprobe/personaalloc appreg/appreg \
-         photoforce/pfruntimeprobe photoforce/pfwatch ddiwatch/ddiwatch; do
+         photoforce/pfruntimeprobe photoforce/pfwatch ddiwatch/ddiwatch \
+         debugserver; do
     if [ -f "$p" ]; then
         # "$BASE" quoted separately inside ${..}: unquoted it is treated as a
         # glob pattern, so a path containing [ or * would strip the wrong prefix
