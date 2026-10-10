@@ -7,6 +7,16 @@ import Foundation
 /// alone: many functions end with `MOV X0, <saved status>; LDP X29,X30`. The
 /// string `RestoredFDRRecover` identifies the correct routine. Its sole code
 /// reference and the epilogue shape together identify one return site.
+///
+/// This resolver used to also patch the two baseband-presence predicates, so
+/// `restored_external` answered "no baseband" and the restore skipped every
+/// baseband step. That made the restore complete and cost cellular entirely: no
+/// firmware was ever staged, and the modem stayed at ACIPC bootstage 0 reporting
+/// `Baseband Firmware Path Not Found`. It was behind an opt-in `--keep-baseband`
+/// flag for a while, then measured not to be needed at all, and is now gone.
+/// n104ap 24B5099f completes an erase restore with the predicates left alone,
+/// `Status: Restore Finished` with zero errors, and the modem goes on to boot,
+/// register and place VoLTE calls. See docs/design/CELLULAR_PATCHES.md.
 public struct RestoredExternalResolver: Sendable {
     public static let name = "restored-external-fdr"
     private static let anchor = "RestoredFDRRecover"
@@ -64,151 +74,21 @@ public struct RestoredExternalResolver: Sendable {
             throw PatchfinderError.ambiguousCandidate(Self.name, offsets: candidates)
         }
 
-        let original = try image.readUInt32(at: patchOffset)
-        let fdrRecord = PatchRecord(
-            id: "restored-external.fdr-result",
-            component: "restored_external",
-            offset: patchOffset,
-            original: original,
-            replacement: ARM64.movX0Zero,
-            summary: "Return success from RestoredFDRRecover",
-            evidence: [
-                "unique RestoredFDRRecover string at \(anchorOffset.hex)",
-                "unique ADRP+ADD reference at \(reference.adrpOffset.hex)",
-                "MOV X0,status immediately precedes LDP X29,X30,[SP,#0x90]",
-            ]
-        )
-        return [fdrRecord] + (try resolveBasebandPredicates(in: image))
-    }
-
-    /// Locate the adjacent modern and legacy baseband-presence predicates.
-    /// Both read the same cached byte, while the legacy wrapper additionally
-    /// consults the device tree. Their adjacency and complete control-flow
-    /// shapes make a considerably stronger anchor than either prologue alone.
-    private func resolveBasebandPredicates(in image: BinaryImage) throws -> [PatchRecord] {
-        var modernCandidates: [UInt64] = []
-        var cursor: UInt64 = 0
-        while cursor + 0x1C <= UInt64(image.count) {
-            let adrp = try image.readUInt32(at: cursor)
-            let load = try image.readUInt32(at: cursor + 4)
-            let branch = try image.readUInt32(at: cursor + 12)
-            guard adrp & 0x9F00_001F == 0x9000_0008,
-                  load & 0xFFC0_03FF == 0xF940_0108,
-                  try image.readUInt32(at: cursor + 8) == 0xB100_051F,
-                  branch & 0xFF00_001F == 0x5400_0001,
-                  ARM64.conditionalTarget(instruction: branch, at: cursor + 12) == cursor + 0x1C,
-                  try image.readUInt32(at: cursor + 16) & 0x9F00_001F == 0x9000_0008,
-                  try image.readUInt32(at: cursor + 20) & 0xFFC0_03FF == 0x3940_0100,
-                  try image.readUInt32(at: cursor + 24) == ARM64.ret
-            else {
-                cursor += 4
-                continue
-            }
-            if try matchesLegacyBasebandPredicate(
-                in: image,
-                modern: cursor,
-                modernADRP: adrp,
-                modernLoad: load
-            ) {
-                modernCandidates.append(cursor)
-            }
-            cursor += 4
-        }
-
-        guard modernCandidates.count == 1, let modern = modernCandidates.first else {
-            if modernCandidates.isEmpty {
-                throw PatchfinderError.noCandidate("\(Self.name) baseband predicate")
-            }
-            throw PatchfinderError.ambiguousCandidate(
-                "\(Self.name) baseband predicate",
-                offsets: modernCandidates
-            )
-        }
-        guard modern >= 0x78 else {
-            throw PatchfinderError.noCandidate("\(Self.name) legacy baseband predicate")
-        }
-        let legacy = modern - 0x78
-        let modernADRP = try image.readUInt32(at: modern)
-        let modernLoad = try image.readUInt32(at: modern + 4)
-        let legacyBranch = try image.readUInt32(at: legacy + 0x48)
-        guard try image.readUInt32(at: legacy) == 0xD503_237F,
-              try image.readUInt32(at: legacy + 4) == 0xA9BE_4FF4,
-              try image.readUInt32(at: legacy + 8) == 0xA901_7BFD,
-              try image.readUInt32(at: legacy + 12) == 0x9100_43FD,
-              try image.readUInt32(at: legacy + 0x3C) == modernADRP,
-              try image.readUInt32(at: legacy + 0x40) == modernLoad,
-              try image.readUInt32(at: legacy + 0x44) == 0xB100_051F,
-              legacyBranch & 0xFF00_001F == 0x5400_0001,
-              ARM64.conditionalTarget(instruction: legacyBranch, at: legacy + 0x48) == legacy + 0x70,
-              try image.readUInt32(at: legacy + 0x60) == 0x1200_0100
-        else {
-            throw PatchfinderError.noCandidate("\(Self.name) legacy baseband predicate")
-        }
-
-        let evidence = [
-            "unique cached-baseband byte predicate",
-            "adjacent legacy predicate reads the same cache address",
-            "both predicate control-flow shapes validated before entry replacement",
-        ]
         return [
             PatchRecord(
-                id: "restored-external.baseband.present",
+                id: "restored-external.fdr-result",
                 component: "restored_external",
-                offset: modern,
-                original: modernADRP,
+                offset: patchOffset,
+                original: try image.readUInt32(at: patchOffset),
                 replacement: ARM64.movX0Zero,
-                summary: "Report that the device has no baseband",
-                evidence: evidence
-            ),
-            PatchRecord(
-                id: "restored-external.baseband.present-return",
-                component: "restored_external",
-                offset: modern + 4,
-                original: modernLoad,
-                replacement: ARM64.ret,
-                summary: "Return immediately from the baseband predicate",
-                evidence: evidence
-            ),
-            PatchRecord(
-                id: "restored-external.baseband.legacy",
-                component: "restored_external",
-                offset: legacy,
-                original: try image.readUInt32(at: legacy),
-                replacement: ARM64.movX0Zero,
-                summary: "Report no baseband from the legacy predicate",
-                evidence: evidence
-            ),
-            PatchRecord(
-                id: "restored-external.baseband.legacy-return",
-                component: "restored_external",
-                offset: legacy + 4,
-                original: try image.readUInt32(at: legacy + 4),
-                replacement: ARM64.ret,
-                summary: "Return immediately from the legacy baseband predicate",
-                evidence: evidence
+                summary: "Return success from RestoredFDRRecover",
+                evidence: [
+                    "unique RestoredFDRRecover string at \(anchorOffset.hex)",
+                    "unique ADRP+ADD reference at \(reference.adrpOffset.hex)",
+                    "MOV X0,status immediately precedes LDP X29,X30,[SP,#0x90]",
+                ]
             ),
         ]
-    }
-
-    private func matchesLegacyBasebandPredicate(
-        in image: BinaryImage,
-        modern: UInt64,
-        modernADRP: UInt32,
-        modernLoad: UInt32
-    ) throws -> Bool {
-        guard modern >= 0x78 else { return false }
-        let legacy = modern - 0x78
-        let branch = try image.readUInt32(at: legacy + 0x48)
-        return try image.readUInt32(at: legacy) == 0xD503_237F
-            && image.readUInt32(at: legacy + 4) == 0xA9BE_4FF4
-            && image.readUInt32(at: legacy + 8) == 0xA901_7BFD
-            && image.readUInt32(at: legacy + 12) == 0x9100_43FD
-            && image.readUInt32(at: legacy + 0x3C) == modernADRP
-            && image.readUInt32(at: legacy + 0x40) == modernLoad
-            && image.readUInt32(at: legacy + 0x44) == 0xB100_051F
-            && branch & 0xFF00_001F == 0x5400_0001
-            && ARM64.conditionalTarget(instruction: branch, at: legacy + 0x48) == legacy + 0x70
-            && image.readUInt32(at: legacy + 0x60) == 0x1200_0100
     }
 }
 

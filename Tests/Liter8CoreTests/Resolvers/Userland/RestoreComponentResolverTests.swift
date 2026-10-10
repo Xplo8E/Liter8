@@ -15,17 +15,25 @@ final class RestoreComponentResolverTests: XCTestCase {
         return url
     }
 
-    func testRestoredExternalResolverMatchesBeta4Oracle() throws {
+    /// One record, and only one. This resolver used to emit five: the FDR
+    /// result plus four baseband-presence records that made `restored` skip the
+    /// baseband updater and cost cellular entirely. Asserting the count is the
+    /// regression guard: if a baseband-presence patch ever comes back, whether
+    /// through a resurrected flag or a copy-paste, this fails rather than
+    /// silently shipping a CFW with no modem firmware.
+    func testRestoredExternalResolverEmitsOnlyTheFDRRecord() throws {
         let binary = try fixture("offsets/rd/b4_n104/restored_external")
         let records = try RestoredExternalResolver().resolve(
             in: BinaryImage(contentsOf: binary)
         )
 
-        XCTAssertEqual(records.count, 5)
-        XCTAssertEqual(records[0].offset, 0x7E558)
-        XCTAssertEqual(records[0].originalWord, 0xAA1A03E0)
-        XCTAssertEqual(records[0].replacementWord, 0xD2800000)
-        XCTAssertEqual(records.map(\.offset), [0x7E558, 0x49E40, 0x49E44, 0x49DC8, 0x49DCC])
+        XCTAssertEqual(records.count, 1)
+        let record = try XCTUnwrap(records.first)
+        XCTAssertEqual(record.id, "restored-external.fdr-result")
+        XCTAssertEqual(record.offset, 0x7E558)
+        XCTAssertEqual(record.originalWord, 0xAA1A03E0)
+        XCTAssertEqual(record.replacementWord, 0xD2800000)
+        XCTAssertFalse(records.contains { $0.id.hasPrefix("restored-external.baseband") })
     }
 
     func testASRResolverFollowsReporterCallChain() throws {
@@ -55,7 +63,7 @@ final class RestoreComponentResolverTests: XCTestCase {
             // test normally instead of being converted into a failed assert.
             let binary = try fixture(binaryPath)
             let records = try manifest.verify(binaryAt: binary)
-            XCTAssertEqual(records.count, manifestPath.contains("restored-external") ? 5 : 1, manifestPath)
+            XCTAssertEqual(records.count, 1, manifestPath)
         }
     }
 }

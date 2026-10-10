@@ -120,6 +120,14 @@ expect_fail "fw boot rejects --idevicerestore"   fw boot --idevicerestore /bin/t
 expect_fail "fw prepare rejects --serial"        fw prepare --serial
 expect_fail "fw make-cfw rejects --demote-ap"    fw make-cfw --demote-ap
 expect_fail "fw boot rejects --demote-ap"        fw boot --demote-ap
+
+# --keep-baseband and --keep-fdr are gone: keeping the baseband predicates is
+# now the only behaviour, and --keep-fdr only ever enabled an FDR recovery that
+# was measured not to re-seal. A script still passing either must fail loudly
+# rather than be silently ignored, because being ignored is indistinguishable
+# from working and the consequence is a CFW with no modem firmware.
+expect_fail "fw make-cfw rejects the retired --keep-baseband" fw make-cfw --keep-baseband
+expect_fail "fw make-cfw rejects the retired --keep-fdr"      fw make-cfw --keep-fdr
 expect_fail "fw prepare rejects --check"         fw prepare --check
 expect_fail "fw boot rejects --ticket"           fw boot --ticket /tmp/t
 expect_fail "fw boot rejects --sshrd-payload"    fw boot --sshrd-payload /tmp/s
