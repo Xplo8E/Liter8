@@ -54,6 +54,33 @@ die()  { printf '    [!] %s\n' "$1"; exit 1 }
 sh_dev() { "$SSHPASS" -p "$PW" ssh "${SSHOPT[@]}" "$DEV" "$@" }
 put()    { "$SSHPASS" -p "$PW" ssh "${SSHOPT[@]}" "$DEV" "cat > $2" < "$1" }
 
+# apt_install_dev <deb> <tail-lines> [extra apt flags...]
+#
+# Install one staged deb and return apt's own exit status.
+#
+# This exists because the obvious spelling is wrong in a way that hides
+# failures. `apt-get install ... | tail -6` returns *tail's* status, which is
+# always 0, so a `|| die` after it never fires: apt would print
+# "E: Unmet dependencies", the script would report success, and the real failure
+# surfaced two stages later as a confusing missing-file error. That happened, and
+# it took three passes to diagnose.
+#
+# apt's output is still wanted, since its last few lines are what explain a
+# failure, so it is redirected to a file, replayed, and the saved status
+# returned. `set -o pipefail` is deliberately not used instead: this runs under
+# whatever /bin/sh the ramdisk and the booted device provide, and POSIX sh does
+# not require pipefail.
+apt_install_dev() {
+    local deb=$1 lines=$2; shift 2
+    sh_dev "$RPATH; cd /var/root/.liter8-debs || exit 1
+        DEBIAN_FRONTEND=noninteractive apt-get install -y $* ./$deb \
+            > /tmp/.liter8-apt.log 2>&1
+        rc=\$?
+        tail -$lines /tmp/.liter8-apt.log
+        rm -f /tmp/.liter8-apt.log
+        exit \$rc"
+}
+
 RPATH='export PATH=/var/jb/usr/bin:/var/jb/bin:/var/jb/usr/sbin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin'
 
 # Must match the pins in fetch_payloads.sh.
@@ -166,9 +193,7 @@ if (( ! INSTALLED )); then
     # its dependencies from the repo, which is why the internet check above is a
     # hard requirement rather than a warning.
     put "payload/$DEBUGSERVER_DEB" "/var/root/.liter8-debs/$DEBUGSERVER_DEB"
-    sh_dev "$RPATH; cd /var/root/.liter8-debs &&
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades \
-            ./$DEBUGSERVER_DEB 2>&1 | tail -6" \
+    apt_install_dev "$DEBUGSERVER_DEB" 6 --allow-downgrades \
         || die "apt-get install of $DEBUGSERVER_DEB failed"
     ok "debugserver-16 and its dependencies installed"
 
@@ -199,8 +224,7 @@ else
     # postinst installs the bundled TrollStoreLite.ipa. apt pulls ldid, and
     # libplist3 beneath it.
     put "payload/$TROLLSTORE_DEB" "/var/root/.liter8-debs/$TROLLSTORE_DEB"
-    sh_dev "$RPATH; cd /var/root/.liter8-debs &&
-        DEBIAN_FRONTEND=noninteractive apt-get install -y ./$TROLLSTORE_DEB 2>&1 | tail -8" \
+    apt_install_dev "$TROLLSTORE_DEB" 8 \
         || die "apt-get install of $TROLLSTORE_DEB failed"
     TS_NOW=$(sh_dev "$RPATH; dpkg-query -W -f='\${Version}' com.opa334.trollstorehelper27 2>/dev/null" | tr -d '\r')
     [[ "$TS_NOW" == "$TROLLSTORE_VER" ]] \
