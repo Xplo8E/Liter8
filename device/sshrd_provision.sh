@@ -1115,7 +1115,25 @@ fi
 note "l8fdr dylib" "$fdr_library_state"
 # Reported separately from the dylib: with the dylib present and the marker gone the
 # bypass is deliberately inert, which is a recovery state rather than a broken one.
-note "FDR sik bypass marker" "$(sh_dev '[ -f /mnt1/usr/lib/.liter8-fdr-sik-bypass ] && [ ! -L /mnt1/usr/lib/.liter8-fdr-sik-bypass ] && echo OK || echo MISSING' | tr -d '\r')"
+# Checked exactly as l8fdr.c:bypass_enabled() checks it: a regular file, root
+# owned, and not group or other writable. Testing only for existence reported OK
+# for markers the dylib then rejects, which leaves FDR stock and the modem
+# uncalibrated while provisioning calls the boot safe.
+#
+# Parsed out of `ls -ln` rather than stat(1), whose format flag is not portable:
+# this ramdisk carries GNU coreutils, where `stat -f` asks about the filesystem
+# instead of the file and the owner test silently reads as a failure. awk is not
+# present either, so the mode string is matched with shell globs. Fields are
+# mode, links, uid; mode positions 6 and 9 are the group and other write bits.
+note "FDR sik bypass marker" "$(sh_dev '
+M=/mnt1/usr/lib/.liter8-fdr-sik-bypass
+if [ ! -f "$M" ] || [ -L "$M" ]; then echo MISSING; exit 0; fi
+set -- $(ls -ln "$M")
+case "$1" in
+    ?????w*)    echo "BAD (group writable)"; exit 0 ;;
+    ????????w*) echo "BAD (other writable)"; exit 0 ;;
+esac
+[ "$3" = 0 ] && echo OK || echo "BAD (owner uid $3, not root)"' | tr -d '\r')"
 note "pairing fallback marker" "$(sh_dev '[ -f /mnt2/root/Library/Lockdown/.liter8-pairing-fallback ] && [ ! -L /mnt2/root/Library/Lockdown/.liter8-pairing-fallback ] && echo OK || echo MISSING' | tr -d '\r')"
 note "RemoteXPC fallback marker" "$(sh_dev '[ -f /mnt1/usr/lib/.liter8-remotepairing-fallback ] && [ ! -L /mnt1/usr/lib/.liter8-remotepairing-fallback ] && echo OK || echo MISSING' | tr -d '\r')"
 note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_pairing_key.der ] && echo generated || echo pending' | tr -d '\r')"

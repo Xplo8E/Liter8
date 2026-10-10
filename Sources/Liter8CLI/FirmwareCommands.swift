@@ -78,8 +78,13 @@ struct SerialConsoleOption: ParsableArguments {
     )
     var serialConsole = false
 
+    /// Always written, never merely omitted. The child environment is seeded
+    /// from this process's own, so an inherited `LITER8_SERIAL=1` would
+    /// otherwise survive a run without the flag and bake `serial=3` into an
+    /// artifact the caller did not ask for. Emitting "0" makes the flag the
+    /// only thing that decides.
     var environment: [String: String] {
-        serialConsole ? [SerialConsole.environmentKey: "1"] : [:]
+        [SerialConsole.environmentKey: serialConsole ? "1" : "0"]
     }
 }
 
@@ -97,8 +102,14 @@ struct APDemotionOption: ParsableArguments {
     )
     var demoteAP = false
 
+    /// Always written, never merely omitted, and it matters more here than for
+    /// `--serial`. The child environment is seeded from this process's own and
+    /// the resolvers run in a Liter8 process re-entered from Python, so an
+    /// inherited `LITER8_DEMOTE_AP=1` would survive a plain `fw get-boot` and
+    /// silently produce the artifact this flag documents as panicking in early
+    /// kernel init. Emitting "0" makes the flag the only thing that decides.
     var environment: [String: String] {
-        demoteAP ? [APDemotion.environmentKey: "1"] : [:]
+        [APDemotion.environmentKey: demoteAP ? "1" : "0"]
     }
 }
 
