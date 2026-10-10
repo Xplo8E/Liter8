@@ -117,7 +117,7 @@ die()  { printf '    [!] %s\n' "$1"; exit 1; }
     || die "ldid at $LDID cannot run on this host; brew install ldid-procursus"
 mkdir -p "$OUT" "$WORK"
 
-WANT="${*:-sileo helpers cache injection pairing}"
+WANT="${*:-sileo helpers cache injection pairing cellular}"
 wants() { case " $WANT " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # Assert the boot-critical profile values only for the components that use them.
@@ -302,6 +302,16 @@ if wants pairing; then
     ok "marker-gated l8pair.dylib ready"
     ok "remotepairingdeviced-only l8remotepairing.dylib ready"
     ok "coreauthd-only l8coreauth.dylib ready"
+fi
+
+# ----------------------------------------------------------------- cellular
+if wants cellular; then
+    say "baseband calibration FDR bypass"
+    ( cd fdrfix && ./build.sh ) || die "FDR bypass build failed"
+    cp fdrfix/l8fdr.dylib "$OUT/l8fdr.dylib"
+    codesign -v "$OUT/l8fdr.dylib" \
+        || die "FDR bypass signature verification failed"
+    ok "CommCenter-only l8fdr.dylib ready"
 fi
 
 # ------------------------------------------------------------------- cache
@@ -496,7 +506,7 @@ for p in "$OUT/Sileo.app/Sileo" "$OUT/Sileo.app/giveMeRoot" \
          "$OUT/launchd.orig" "$OUT/launchd.hooked" "$OUT/lhook.dylib" \
          "$OUT/systemhook.dylib" "$OUT/sbextissue" "$OUT/l8pair.dylib" \
          "$OUT/l8remotepairing.dylib" "$OUT/l8coreauth.dylib" \
-         "$OUT/uicache" \
+         "$OUT/l8fdr.dylib" "$OUT/uicache" \
          photodiag/photodiag spawnprobe/personaalloc appreg/appreg \
          photoforce/pfruntimeprobe photoforce/pfwatch ddiwatch/ddiwatch \
          "$OUT/debugserver"; do

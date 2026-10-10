@@ -81,6 +81,17 @@ def build_binary(
             "/usr/lib/l8remotepairing.dylib",
             "remotepairingdeviced.load-l8remotepairing",
         ),
+        # /usr/lib, beside the other shims, and not somewhere on the Data volume
+        # however tempting that is. The System volume is APFS-sealed and cannot
+        # be remounted writable on a booted device, so this path can only be
+        # updated from SSHRD, which on a tethered boot costs a DFU cycle per
+        # iteration. Moving it to /var/jb/usr/lib to avoid that was tried and
+        # does not work: dyld silently declines to load it into CommCenter, with
+        # no AMFI or dyld message anywhere in the boot log, while the same
+        # adhoc-signed file at this path loads and the same file on Data loads
+        # fine into an unrestricted process. Inference: a restricted platform
+        # binary may only load dylibs from the sealed system volume.
+        "CommCenter": ("/usr/lib/l8fdr.dylib", "CommCenter.load-l8fdr"),
     }
     if plan in structural_loads:
         # These daemons need no instruction patch. Add one weak dependency in
@@ -214,6 +225,7 @@ def main() -> None:
             "ctkd",
             "lockdownd",
             "remotepairingdeviced",
+            "CommCenter",
         ),
     )
     binary.add_argument("pristine", type=Path)

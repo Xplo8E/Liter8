@@ -26,7 +26,7 @@ cd "$BASE"
 # it is resolved once here rather than spelled out at each call site.
 TOOLS="$BASE/../tools"
 
-STEPS="mounts ticket setup userland pairing screentime injection cache jbtools sileo resolv apps verify"
+STEPS="mounts ticket setup userland pairing cellular screentime injection cache jbtools sileo resolv apps verify"
 
 usage() {
     echo "steps: $STEPS"
@@ -35,6 +35,7 @@ usage() {
     echo "  setup    patch Setup.app to skip unavailable first-run panes"
     echo "  userland patch and re-sign the SEP/activation daemons"
     echo "  pairing  install lockdownd, coreauthd companion guard and RemoteXPC repair"
+    echo "  cellular let CommCenter unseal sealed baseband calibration from FDR"
     echo "  screentime make Setup's unavailable ScreenTime requests fail fast"
     echo "  injection install launchd hook plus icon grant, disabled for first boot"
     echo "  cache    deploy the launchd service cache (dropbear + jbboot + DDI watcher + watchdogd mitigation)"
@@ -449,6 +450,45 @@ echo DONE_OK
     ok "lockdownd and RemoteXPC fallbacks enabled by scoped markers"
 }
 
+deploy_fdr_library() {
+    F_LOCAL=payload/l8fdr.dylib
+    # Sealed System volume on purpose: see the comment in userland_fixups.py.
+    F_DEVICE=/mnt1/usr/lib/l8fdr.dylib
+    F_STAGED=$F_DEVICE.liter8-new
+    F_READBACK=payload/.work/userland/l8fdr.readback
+    mkdir -p payload/.work/userland
+
+    [ -f "$F_LOCAL" ] || die "missing $F_LOCAL; run fetch_payloads.sh cellular"
+    codesign -v "$F_LOCAL" || die "l8fdr.dylib has an invalid CodeDirectory"
+    F_WANT=$(shasum -a 256 "$F_LOCAL" | awk '{print $1}')
+    put "$F_LOCAL" "$F_STAGED"
+    must_dev "
+[ -f '$F_DEVICE' ] && [ ! -f '$F_DEVICE.orig' ] && cp '$F_DEVICE' '$F_DEVICE.orig'
+chmod 0755 '$F_STAGED'
+mv -f '$F_STAGED' '$F_DEVICE'
+echo DONE_OK
+" "could not activate l8fdr.dylib"
+    sh_dev "/bin/cat '$F_DEVICE'" > "$F_READBACK" \
+        || die "could not read back l8fdr.dylib"
+    F_GOT=$(shasum -a 256 "$F_READBACK" | awk '{print $1}')
+    [ "$F_GOT" = "$F_WANT" ] || die "l8fdr.dylib readback hash mismatch"
+    ok "l8fdr.dylib deployed and read back ($F_WANT)"
+}
+
+# The dylib is inert without this marker, so a boot where CommCenter misbehaves
+# is recovered by deleting one file from SSHRD rather than by restoring a 40 MB
+# re-signed binary.
+enable_fdr_bypass() {
+    F_MARKER=/mnt1/usr/lib/.liter8-fdr-sik-bypass
+    must_dev "
+: > '$F_MARKER.new'
+chmod 0600 '$F_MARKER.new'
+mv -f '$F_MARKER.new' '$F_MARKER'
+echo DONE_OK
+" "could not enable the FDR sik bypass marker"
+    ok "CommCenter FDR sik bypass enabled by scoped marker"
+}
+
 deploy_userland_daemon() {
     U_NAME=$1
     case "$U_NAME" in
@@ -466,6 +506,9 @@ deploy_userland_daemon() {
             ;;
         remotepairingdeviced)
             U_DEVICE=/mnt1/usr/libexec/remotepairingdeviced
+            ;;
+        CommCenter)
+            U_DEVICE=/mnt1/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter
             ;;
         *)
             die "unsupported userland daemon: $U_NAME"
@@ -500,6 +543,19 @@ if wants pairing && [ "$CHECK_ONLY" = 0 ]; then
         deploy_userland_daemon "$U_NAME"
     done
     enable_pairing_fallback
+fi
+
+# -------------------------------------------------------------- cellular
+# Baseband calibration is sealed to an AP identity key this device cannot
+# reproduce, so CommCenter cannot unseal it from FactoryData and the modem comes
+# up without calibration. The dylib reaches libFDR's own "ignore sik
+# verification" path inside CommCenter only. See
+# docs/design/BASEBAND_AND_CELLULAR.md.
+if wants cellular && [ "$CHECK_ONLY" = 0 ]; then
+    say "baseband calibration FDR bypass"
+    deploy_fdr_library
+    deploy_userland_daemon CommCenter
+    enable_fdr_bypass
 fi
 
 # ------------------------------------------------------------- ScreenTime
@@ -1035,6 +1091,24 @@ else
     coreauth_library_state=MISSING
 fi
 note "l8coreauth dylib" "$coreauth_library_state"
+if [ -f payload/l8fdr.dylib ]; then
+    fdr_want=$(shasum -a 256 payload/l8fdr.dylib | awk '{print $1}')
+    sh_dev '/bin/cat /mnt1/usr/lib/l8fdr.dylib' \
+        > payload/.work/verify.l8fdr 2>/dev/null || true
+    if [ -s payload/.work/verify.l8fdr ] && \
+       [ "$(shasum -a 256 payload/.work/verify.l8fdr | awk '{print $1}')" = "$fdr_want" ] && \
+       codesign -v payload/.work/verify.l8fdr >/dev/null 2>&1; then
+        fdr_library_state=OK
+    else
+        fdr_library_state=MISMATCH
+    fi
+else
+    fdr_library_state=MISSING
+fi
+note "l8fdr dylib" "$fdr_library_state"
+# Reported separately from the dylib: with the dylib present and the marker gone the
+# bypass is deliberately inert, which is a recovery state rather than a broken one.
+note "FDR sik bypass marker" "$(sh_dev '[ -f /mnt1/usr/lib/.liter8-fdr-sik-bypass ] && [ ! -L /mnt1/usr/lib/.liter8-fdr-sik-bypass ] && echo OK || echo MISSING' | tr -d '\r')"
 note "pairing fallback marker" "$(sh_dev '[ -f /mnt2/root/Library/Lockdown/.liter8-pairing-fallback ] && [ ! -L /mnt2/root/Library/Lockdown/.liter8-pairing-fallback ] && echo OK || echo MISSING' | tr -d '\r')"
 note "RemoteXPC fallback marker" "$(sh_dev '[ -f /mnt1/usr/lib/.liter8-remotepairing-fallback ] && [ ! -L /mnt1/usr/lib/.liter8-remotepairing-fallback ] && echo OK || echo MISSING' | tr -d '\r')"
 note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_pairing_key.der ] && echo generated || echo pending' | tr -d '\r')"
