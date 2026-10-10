@@ -14,15 +14,19 @@ And it's iPhone 11 only, `n104ap`. I don't own another A13 device so that's all 
 
 ## What works
 
-Normal boot to the home screen, root SSH, apt and Sileo, TrollStore, apps launch.
+- Normal boot to the home screen, root SSH, apt and Sileo, TrollStore, apps launch
+- Cellular, no flags needed. SIM ready, carrier bundle matched, registered on the network
+- Calls and SMS over IMS, **carried by WiFi Calling**, so they need WiFi connected *and* WiFi Calling on
+- USB lockdown pairing, same-boot RemoteXPC reconnect, QuickTime capture, and CoreDevice process listing and screenshots once the DeveloperDiskImage jobs are up
 
 ## What doesn't
 
 - SEP
 - passcode
-- cellular
-- Apple services
+- **Cellular data**, and VoLTE with it. The bearer comes up with a real carrier address and the modem acknowledges every instruction, but nothing ever comes back. Narrowed to inside the baseband, with everything above it ruled out: [the blocker, and what was eliminated](docs/CELLULAR_DATA_BLOCKER.md)
+- Apple services. Push has no token, because minting one needs a real activation record, which needs a SEP-attested key. Measured, not assumed
 - xTweak injection. It injects, but it's nowhere near as solid as vphone
+- MobileBackup2. Both clients reach the service and negotiate, then the backup fails because the boot has no normal persona state
 - 11 Pro and Pro Max. profiles exist but no device to test on
 
 PRs welcome on any of these, especially SEP. The Pro and Pro Max are open too, if you own one and want to take the port on, i'll help where i can. Or if you'd rather help on the hardware side, there's a [coffee link](https://buymeacoffee.com/xplo8e) and that's what it'd go towards. Either route is fine, and so is neither.
@@ -207,20 +211,6 @@ docs/
 
 It's all one Swift target. The folders are there so i can find things, nothing more.
 
-## Rough edges
-
-`fw get-rd` and `fw get-boot` rebuild far more than they need to. It's slow and i know it, it's on the list.
-
-USB lockdown pairing, same-boot RemoteXPC reconnect and QuickTime capture now
-work on the validated iPhone 11 `24A446` SEP-less profile. CoreDevice process
-listing and screenshots also work after starting the DeveloperDiskImage jobs.
-The provisioning workflow now adds a System-volume watcher to perform that
-registration when the image appears. Automatic registration and CoreDevice
-process enumeration are validated on the same device; the normal Xcode/LLDB
-flow remains open. These are scoped compatibility fixes, not replacements for
-SEP, keybags or content protection. MobileBackup2 still stops at missing persona
-state. The failure chains and fixes are written up in the docs.
-
 ## Docs
 
 - [Architecture and onboarding](CODEBASE_GUIDE.md)
@@ -231,6 +221,9 @@ state. The failure chains and fixes are written up in the docs.
 - [Bootstrap and provisioning status](docs/design/BOOTSTRAP_JB_STATUS.md)
 - [Normal boot handoff](docs/design/NORMAL_BOOT_HANDOFF.md)
 - [Debugging platform daemons](docs/design/DEBUGGING_PLATFORM_DAEMONS.md)
+- [Baseband and cellular](docs/design/BASEBAND_AND_CELLULAR.md) — how each problem was found, and what failed
+- [How the cellular patches work](docs/design/CELLULAR_PATCHES.md) — what each patch targets, changes and verifies
+- [Cellular data blocker](docs/CELLULAR_DATA_BLOCKER.md) — self-contained handover: why data still does not flow, what has been ruled out, and what is worth researching next
 - [Performance backlog](docs/BACKLOG.md)
 
 ## Contributing

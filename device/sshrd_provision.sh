@@ -26,7 +26,7 @@ cd "$BASE"
 # it is resolved once here rather than spelled out at each call site.
 TOOLS="$BASE/../tools"
 
-STEPS="mounts ticket setup userland pairing screentime injection cache jbtools sileo resolv apps verify"
+STEPS="mounts ticket setup userland pairing cellular screentime injection cache jbtools sileo resolv apps verify"
 
 usage() {
     echo "steps: $STEPS"
@@ -35,6 +35,7 @@ usage() {
     echo "  setup    patch Setup.app to skip unavailable first-run panes"
     echo "  userland patch and re-sign the SEP/activation daemons"
     echo "  pairing  install lockdownd, coreauthd companion guard and RemoteXPC repair"
+    echo "  cellular unseal baseband calibration and stop CommCenter refusing a data context"
     echo "  screentime make Setup's unavailable ScreenTime requests fail fast"
     echo "  injection install launchd hook plus icon grant, disabled for first boot"
     echo "  cache    deploy the launchd service cache (dropbear + jbboot + DDI watcher + watchdogd mitigation)"
@@ -58,10 +59,11 @@ esac
 
 wants() { case " $WANT " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
-# Prefer a native sshpass. The bundled one is x86_64, so it needs Rosetta
-# on Apple Silicon. See https://github.com/Xplo8E/Liter8/issues/2.
-SSHPASS=$(command -v sshpass || true)
-"$SSHPASS" -V >/dev/null 2>&1 || SSHPASS="$TOOLS/sshpass"
+# ssh's own askpass hook rather than sshpass, which races this dropbear's
+# password prompt and intermittently sends the wrong secret. The shim keeps the
+# `-p <password> ssh|scp ...` call shape, so the call sites below are unchanged.
+# Its header has the measurements.
+SSHPASS="$BASE/askpass-sshpass"
 # Prefer a native ldid. The bundled one is arm64 only, so it cannot run on an
 # Intel Mac. See https://github.com/Xplo8E/Liter8/issues/2.
 LDID="$TOOLS/ldid_macosx_arm64"
@@ -172,10 +174,11 @@ stop_owned_iproxy() {
 
 # ---------------------------------------------------------------- preflight
 say "preflight"
-# -x passes for an arm64 binary on an Intel Mac, so run each one instead. These
-# fail far into provisioning otherwise, with only "Bad CPU type in executable".
-"$SSHPASS" -V >/dev/null 2>&1 \
-    || die "sshpass at $SSHPASS cannot run on this host; brew install sshpass"
+# -x passes for an arm64 binary on an Intel Mac, so the native helpers below are
+# run rather than just tested. They fail far into provisioning otherwise, with
+# only "Bad CPU type in executable". askpass-sshpass is a /bin/sh script with no
+# architecture to get wrong, so -x is the whole check for it.
+[ -x "$SSHPASS" ] || die "missing $SSHPASS"
 "$LDID" -v 2>&1 | grep -q "Link Identity Editor" \
     || die "ldid at $LDID cannot run on this host; brew install ldid-procursus"
 "$GTAR" --version >/dev/null 2>&1 \
@@ -447,6 +450,45 @@ echo DONE_OK
     ok "lockdownd and RemoteXPC fallbacks enabled by scoped markers"
 }
 
+deploy_fdr_library() {
+    F_LOCAL=payload/l8fdr.dylib
+    # Sealed System volume on purpose: see the comment in userland_fixups.py.
+    F_DEVICE=/mnt1/usr/lib/l8fdr.dylib
+    F_STAGED=$F_DEVICE.liter8-new
+    F_READBACK=payload/.work/userland/l8fdr.readback
+    mkdir -p payload/.work/userland
+
+    [ -f "$F_LOCAL" ] || die "missing $F_LOCAL; run fetch_payloads.sh cellular"
+    codesign -v "$F_LOCAL" || die "l8fdr.dylib has an invalid CodeDirectory"
+    F_WANT=$(shasum -a 256 "$F_LOCAL" | awk '{print $1}')
+    put "$F_LOCAL" "$F_STAGED"
+    must_dev "
+[ -f '$F_DEVICE' ] && [ ! -f '$F_DEVICE.orig' ] && cp '$F_DEVICE' '$F_DEVICE.orig'
+chmod 0755 '$F_STAGED'
+mv -f '$F_STAGED' '$F_DEVICE'
+echo DONE_OK
+" "could not activate l8fdr.dylib"
+    sh_dev "/bin/cat '$F_DEVICE'" > "$F_READBACK" \
+        || die "could not read back l8fdr.dylib"
+    F_GOT=$(shasum -a 256 "$F_READBACK" | awk '{print $1}')
+    [ "$F_GOT" = "$F_WANT" ] || die "l8fdr.dylib readback hash mismatch"
+    ok "l8fdr.dylib deployed and read back ($F_WANT)"
+}
+
+# The dylib is inert without this marker, so a boot where CommCenter misbehaves
+# is recovered by deleting one file from SSHRD rather than by restoring a 40 MB
+# re-signed binary.
+enable_fdr_bypass() {
+    F_MARKER=/mnt1/usr/lib/.liter8-fdr-sik-bypass
+    must_dev "
+: > '$F_MARKER.new'
+chmod 0600 '$F_MARKER.new'
+mv -f '$F_MARKER.new' '$F_MARKER'
+echo DONE_OK
+" "could not enable the FDR sik bypass marker"
+    ok "CommCenter FDR sik bypass enabled by scoped marker"
+}
+
 deploy_userland_daemon() {
     U_NAME=$1
     case "$U_NAME" in
@@ -464,6 +506,9 @@ deploy_userland_daemon() {
             ;;
         remotepairingdeviced)
             U_DEVICE=/mnt1/usr/libexec/remotepairingdeviced
+            ;;
+        CommCenter)
+            U_DEVICE=/mnt1/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter
             ;;
         *)
             die "unsupported userland daemon: $U_NAME"
@@ -498,6 +543,24 @@ if wants pairing && [ "$CHECK_ONLY" = 0 ]; then
         deploy_userland_daemon "$U_NAME"
     done
     enable_pairing_fallback
+fi
+
+# -------------------------------------------------------------- cellular
+# Baseband calibration is sealed to an AP identity key this device cannot
+# reproduce, so CommCenter cannot unseal it from FactoryData and the modem comes
+# up without calibration. The dylib reaches libFDR's own "ignore sik
+# verification" path inside CommCenter only.
+#
+# CommCenter also gets a semantic instruction patch so canActivateDataSettings
+# stops refusing a cellular data context because the device has no real
+# activation record, which is what leaves IMS without a PDN and voice without
+# VoLTE. Both are applied by userland_fixups.py in one re-sign. See
+# docs/design/BASEBAND_AND_CELLULAR.md.
+if wants cellular && [ "$CHECK_ONLY" = 0 ]; then
+    say "baseband calibration FDR bypass"
+    deploy_fdr_library
+    deploy_userland_daemon CommCenter
+    enable_fdr_bypass
 fi
 
 # ------------------------------------------------------------- ScreenTime
@@ -987,6 +1050,8 @@ verify_userland_patch ctkd \
     /mnt1/System/Library/Frameworks/CryptoTokenKit.framework/ctkd
 verify_userland_patch lockdownd /mnt1/usr/libexec/lockdownd
 verify_userland_patch remotepairingdeviced /mnt1/usr/libexec/remotepairingdeviced
+verify_userland_patch CommCenter \
+    /mnt1/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter
 
 if [ -f payload/l8pair.dylib ]; then
     pairing_want=$(shasum -a 256 payload/l8pair.dylib | awk '{print $1}')
@@ -1033,6 +1098,42 @@ else
     coreauth_library_state=MISSING
 fi
 note "l8coreauth dylib" "$coreauth_library_state"
+if [ -f payload/l8fdr.dylib ]; then
+    fdr_want=$(shasum -a 256 payload/l8fdr.dylib | awk '{print $1}')
+    sh_dev '/bin/cat /mnt1/usr/lib/l8fdr.dylib' \
+        > payload/.work/verify.l8fdr 2>/dev/null || true
+    if [ -s payload/.work/verify.l8fdr ] && \
+       [ "$(shasum -a 256 payload/.work/verify.l8fdr | awk '{print $1}')" = "$fdr_want" ] && \
+       codesign -v payload/.work/verify.l8fdr >/dev/null 2>&1; then
+        fdr_library_state=OK
+    else
+        fdr_library_state=MISMATCH
+    fi
+else
+    fdr_library_state=MISSING
+fi
+note "l8fdr dylib" "$fdr_library_state"
+# Reported separately from the dylib: with the dylib present and the marker gone the
+# bypass is deliberately inert, which is a recovery state rather than a broken one.
+# Checked exactly as l8fdr.c:bypass_enabled() checks it: a regular file, root
+# owned, and not group or other writable. Testing only for existence reported OK
+# for markers the dylib then rejects, which leaves FDR stock and the modem
+# uncalibrated while provisioning calls the boot safe.
+#
+# Parsed out of `ls -ln` rather than stat(1), whose format flag is not portable:
+# this ramdisk carries GNU coreutils, where `stat -f` asks about the filesystem
+# instead of the file and the owner test silently reads as a failure. awk is not
+# present either, so the mode string is matched with shell globs. Fields are
+# mode, links, uid; mode positions 6 and 9 are the group and other write bits.
+note "FDR sik bypass marker" "$(sh_dev '
+M=/mnt1/usr/lib/.liter8-fdr-sik-bypass
+if [ ! -f "$M" ] || [ -L "$M" ]; then echo MISSING; exit 0; fi
+set -- $(ls -ln "$M")
+case "$1" in
+    ?????w*)    echo "BAD (group writable)"; exit 0 ;;
+    ????????w*) echo "BAD (other writable)"; exit 0 ;;
+esac
+[ "$3" = 0 ] && echo OK || echo "BAD (owner uid $3, not root)"' | tr -d '\r')"
 note "pairing fallback marker" "$(sh_dev '[ -f /mnt2/root/Library/Lockdown/.liter8-pairing-fallback ] && [ ! -L /mnt2/root/Library/Lockdown/.liter8-pairing-fallback ] && echo OK || echo MISSING' | tr -d '\r')"
 note "RemoteXPC fallback marker" "$(sh_dev '[ -f /mnt1/usr/lib/.liter8-remotepairing-fallback ] && [ ! -L /mnt1/usr/lib/.liter8-remotepairing-fallback ] && echo OK || echo MISSING' | tr -d '\r')"
 note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_pairing_key.der ] && echo generated || echo pending' | tr -d '\r')"

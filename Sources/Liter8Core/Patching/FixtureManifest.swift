@@ -159,6 +159,8 @@ public struct FixtureManifest: Codable, Sendable {
             return try CTKDResolver().resolve(in: image)
         case MobileActivationDResolver.name:
             return try MobileActivationDResolver().resolve(in: image)
+        case CommCenterDataActivationResolver.name:
+            return try CommCenterDataActivationResolver().resolve(in: image)
         case IBSSSkipDisplayInitResolver.name:
             return try IBSSSkipDisplayInitResolver().resolve(in: image)
         case IBECPinotIgnoreFailureResolver.name:

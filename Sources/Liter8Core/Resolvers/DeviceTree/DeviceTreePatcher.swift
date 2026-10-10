@@ -176,6 +176,22 @@ public enum DeviceTreePatcher {
                 // normal plan prevents a stale SSHRD DeviceTree being reused.
                 .set(nodePath: "/chosen", property: "ephemeral-storage", value: littleEndianOne),
             ]
+
+            if APDemotion.isRequested {
+                // iBoot never publishes this one, so the template value is what
+                // the kernel sees. The other two terms of
+                // AMFDRIsNonDefaultDemotionState are handled elsewhere:
+                // certificate-security-mode already reads 1, and
+                // effective-production-status-ap is suppressed in iBoot because
+                // iBoot would otherwise overwrite whatever is set here.
+                operations.append(
+                    .set(
+                        nodePath: "/chosen",
+                        property: "effective-security-mode-sep",
+                        value: littleEndianOne
+                    )
+                )
+            }
         }
         return operations
     }

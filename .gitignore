@@ -34,5 +34,8 @@ device/pairingfix/l8pair.dylib
 device/coreauthfix/l8coreauth.dylib
 # Built by device/remotexpcfix/build.sh, reproduced from source each run.
 device/remotexpcfix/l8remotepairing.dylib
+# Built by device/fdrfix/build.sh, reproduced from source each run.
+device/fdrfix/l8fdr.dylib
+device/fdrfix/l8radio
 # Host-built/downloaded device payloads; always reproduced by fetch_payloads.sh.
 device/payload/

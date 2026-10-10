@@ -82,6 +82,23 @@ def build_binary(
             "remotepairingdeviced.load-l8remotepairing",
         ),
     }
+
+    # Daemons that need a semantic instruction patch *and* a weak dependency.
+    #
+    # All these dylibs sit in /usr/lib rather than somewhere on the Data volume,
+    # however tempting that is. The System volume is APFS-sealed and cannot be
+    # remounted writable on a booted device, so these paths can only be updated
+    # from SSHRD, which on a tethered boot costs a DFU cycle per iteration.
+    # Moving l8fdr.dylib to /var/jb/usr/lib to avoid that was tried and does not
+    # work: dyld silently declines to load it into CommCenter, with no AMFI or
+    # dyld message anywhere in the boot log, while the same adhoc-signed file at
+    # this path loads, and the same file on Data loads fine into an
+    # unrestricted process. Inference: a restricted platform binary may only
+    # load dylibs from the sealed system volume.
+    instruction_and_load = {
+        "coreauthd": ("/usr/lib/l8coreauth.dylib", "coreauthd.load-l8coreauth"),
+        "CommCenter": ("/usr/lib/l8fdr.dylib", "CommCenter.load-l8fdr"),
+    }
     if plan in structural_loads:
         # These daemons need no instruction patch. Add one weak dependency in
         # the reviewed zero-padded Mach-O header so the process-local shim is
@@ -108,15 +125,19 @@ def build_binary(
         # Save the semantic resolver output beside the built artifact. Besides
         # documenting the selected sites, this makes a future failure answerable
         # without repeating a device session.
+        # The daemon name and the resolver plan name are the same everywhere
+        # except CommCenter, whose executable is capitalised while the CLI plan
+        # keeps the lowercase spelling the other plans use.
+        resolver_plan = {"CommCenter": "commcenter"}.get(plan, plan)
         resolved = run(
-            [liter8, "resolve", "userland", plan, pristine, "--json"],
+            [liter8, "resolve", "userland", resolver_plan, pristine, "--json"],
             capture=True,
         ).stdout
         resolved_records = json.loads(resolved)
-        if plan == "coreauthd":
+        if plan in instruction_and_load:
+            dylib_path, record_id = instruction_and_load[plan]
             instruction_patched = output.with_suffix(output.suffix + ".instructions")
-            run([liter8, "apply", "userland", plan, pristine, instruction_patched])
-            dylib_path = "/usr/lib/l8coreauth.dylib"
+            run([liter8, "apply", "userland", resolver_plan, pristine, instruction_patched])
             patcher = Path(__file__).resolve().parent / "launchdhook/patch_launchd.py"
             try:
                 run([
@@ -132,13 +153,13 @@ def build_binary(
             finally:
                 instruction_patched.unlink(missing_ok=True)
             resolved_records.append({
-                "id": "coreauthd.load-l8coreauth",
-                "component": "coreauthd",
+                "id": record_id,
+                "component": plan,
                 "operation": "LC_LOAD_WEAK_DYLIB",
                 "path": dylib_path,
             })
         else:
-            run([liter8, "apply", "userland", plan, pristine, output])
+            run([liter8, "apply", "userland", resolver_plan, pristine, output])
         records.write_text(json.dumps(resolved_records, indent=2) + "\n")
 
     original_identifier = signing_identifier(pristine)
@@ -214,6 +235,7 @@ def main() -> None:
             "ctkd",
             "lockdownd",
             "remotepairingdeviced",
+            "CommCenter",
         ),
     )
     binary.add_argument("pristine", type=Path)

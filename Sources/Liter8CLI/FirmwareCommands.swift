@@ -78,8 +78,38 @@ struct SerialConsoleOption: ParsableArguments {
     )
     var serialConsole = false
 
+    /// Always written, never merely omitted. The child environment is seeded
+    /// from this process's own, so an inherited `LITER8_SERIAL=1` would
+    /// otherwise survive a run without the flag and bake `serial=3` into an
+    /// artifact the caller did not ask for. Emitting "0" makes the flag the
+    /// only thing that decides.
     var environment: [String: String] {
-        serialConsole ? [SerialConsole.environmentKey: "1"] : [:]
+        [SerialConsole.environmentKey: serialConsole ? "1" : "0"]
+    }
+}
+
+struct APDemotionOption: ParsableArguments {
+    @Flag(
+        name: .customLong("demote-ap"),
+        help: """
+        DOES NOT BOOT, kept for research only. Makes the device claim a demoted \
+        application processor so libFDR skips its SEP-attested sik check and \
+        baseband calibration can unseal. Measured on n104ap 24B5099f: panics in \
+        early kernel init with an LLC PIO error before the OS version is even \
+        published. Faking one term of a security state the driver stack reads as \
+        a consistent set does not work. See docs/design/BASEBAND_AND_CELLULAR.md.
+        """
+    )
+    var demoteAP = false
+
+    /// Always written, never merely omitted, and it matters more here than for
+    /// `--serial`. The child environment is seeded from this process's own and
+    /// the resolvers run in a Liter8 process re-entered from Python, so an
+    /// inherited `LITER8_DEMOTE_AP=1` would survive a plain `fw get-boot` and
+    /// silently produce the artifact this flag documents as panicking in early
+    /// kernel init. Emitting "0" makes the flag the only thing that decides.
+    var environment: [String: String] {
+        [APDemotion.environmentKey: demoteAP ? "1" : "0"]
     }
 }
 
@@ -318,14 +348,18 @@ struct Firmware: ParsableCommand {
         @OptionGroup var common: FirmwareCommonOptions
         @OptionGroup var prepared: FirmwarePreparedOptions
         @OptionGroup var serial: SerialConsoleOption
+        @OptionGroup var demotion: APDemotionOption
 
         func run() throws {
             let resolved = try resolveAPTicket(
                 explicit: ticket, action: "get-boot", workDirectory: common.workDirectoryURL
             )
+            // get-boot builds the normal-boot iBoot and DeviceTree, which is
+            // where both halves of the demotion claim live.
             try runPreparedFirmwareAction(
                 "get-boot", common: common, prepared: prepared,
-                ticket: resolved, environment: serial.environment
+                ticket: resolved,
+                environment: serial.environment.merging(demotion.environment) { _, new in new }
             )
         }
     }

@@ -1,0 +1,42 @@
+#!/bin/sh
+#
+# Drop-in replacement for the one sshpass(1) form these scripts use:
+#
+#     askpass-sshpass -p <password> ssh|scp [args...]
+#
+# Why it exists: sshpass drives ssh through a pty and watches for the password
+# prompt. Against SSHRD's dropbear it loses that race on roughly one connection
+# in six and sends the wrong secret, which surfaces as "Permission denied" for a
+# password that is correct, and looks exactly like a flaky device. Measured on
+# 24B5099f over the same iproxy forward: 11 failures in 60 sshpass connections,
+# 0 failures in 40 through ssh's own askpass hook.
+#
+# ssh's SSH_ASKPASS hook has no prompt to race, because ssh invokes the helper
+# itself when it needs the password. It also removes the bundled x86_64 sshpass
+# binary from the dependency list, which needed Rosetta on Apple Silicon.
+# See https://github.com/Xplo8E/Liter8/issues/2.
+#
+# The password is passed to the re-exec through the environment rather than the
+# command line so it does not appear in the process table.
+set -eu
+
+if [ "${ASKPASS_EMIT:-0}" = 1 ]; then
+    printf '%s\n' "${ASKPASS_PASSWORD:-}"
+    exit 0
+fi
+
+[ "${1:-}" = "-p" ] && [ "$#" -ge 3 ] || {
+    echo "usage: ${0##*/} -p <password> ssh|scp [args...]" >&2
+    exit 2
+}
+
+SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+PASSWORD=$2
+shift 2
+
+ASKPASS_EMIT=1 \
+ASKPASS_PASSWORD="$PASSWORD" \
+DISPLAY=askpass \
+SSH_ASKPASS_REQUIRE=force \
+SSH_ASKPASS="$SELF" \
+exec "$@"

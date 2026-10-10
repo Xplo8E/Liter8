@@ -61,6 +61,7 @@ let resolverGroups: [String: [String: String]] = [
         "coreauthd": CoreAuthDResolver.name,
         "ctkd": CTKDResolver.name,
         "mobileactivationd": MobileActivationDResolver.name,
+        "commcenter": CommCenterDataActivationResolver.name,
     ],
     "devicetree": [
         "restore": DeviceTreePatchPlan.restore.rawValue,
@@ -172,6 +173,9 @@ func resolveRecords(
     case MobileActivationDResolver.name:
         try options.requireNoTuning(resolver: name)
         return try MobileActivationDResolver().resolve(in: image)
+    case CommCenterDataActivationResolver.name:
+        try options.requireNoTuning(resolver: name)
+        return try CommCenterDataActivationResolver().resolve(in: image)
     case IBSSSkipDisplayInitResolver.name:
         try options.requireNoTuning(resolver: name)
         return try IBSSSkipDisplayInitResolver().resolve(in: image)

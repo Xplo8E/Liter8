@@ -1,0 +1,553 @@
+# How the cellular patches work
+
+Reference for the six changes that take this CFW from "no modem at all" to working phone calls and SMS. Read the scope before the detail: calls come up over IMS carried by **WiFi Calling**, not over VoLTE. The bearer *is* raised, so that is not the reason; IMS-over-cellular is never attempted, because `isQualifiedToRegister` fails on a baseband provisioned state that patching cannot produce. See "What these do not fix". [BASEBAND_AND_CELLULAR.md](BASEBAND_AND_CELLULAR.md) is the investigation: how each problem was found, what was tried and what failed. This file is the other half, for someone reviewing or re-deriving the patches: what each one targets, how it is located, what it changes, why that is safe, and how to check it on a device.
+
+Device throughout: iPhone 11, `iPhone12,1` / `n104ap`, iOS 27.2 `24B5099f`. Offsets are quoted for that build only, and they are **outputs**. Every one is rediscovered from the binary on each run; none is an input to anything.
+
+## Four things have to be true
+
+Cellular is not one feature. These are independent, they fail independently, and each hides the next:
+
+1. **The modem has firmware.** The AP pushes it on every cold boot; there is no usable copy in the modem's own flash. Patch 1.
+2. **The modem has calibration.** Per-unit RF trim, sealed in FactoryData against an identity this device can no longer reproduce. Patches 2 and 3.
+3. **CommCenter will allocate a data context.** Gated on an activation record this CFW does not have. Patches 4 and 5.
+4. **IMS registers.** Follows from 3. LTE has no circuit-switched voice, so a call has to be IP. IMS will take either transport: a cellular bearer (VoLTE) or an IPsec tunnel to the carrier over WiFi (VoWiFi, "WiFi Calling"). On this device only the second one comes up, so patches 4 and 5 get you calls, and they need WiFi. The cellular transport is gated separately and is not reachable by patching: see "What these do not fix".
+
+Fix 1 and the modem boots but has no calibration. Fix 2 and it registers but cannot call. Fix 3 and calls work. Nothing about the earlier symptoms tells you the later problems are there, which is why this took three rounds.
+
+## The inventory
+
+All five apply by default. There are no cellular flags: a plain `fw make-cfw`, restore, `sshrd_provision.sh` and boot gets you a working modem, and calls over WiFi Calling.
+
+| # | record / artifact | component | what it does |
+|---|---|---|---|
+| 1 | *(four records **deleted**)* | `restored_external` | nothing any more, and that is the fix. They used to claim "no baseband" |
+| 2 | `restored-external.fdr-result` | `restored_external` | forces FDR recovery to report success without doing it |
+| 3 | `l8fdr.dylib` + `CommCenter.load-l8fdr` | `CommCenter` | answers libFDR's three demotion-state queries so the sealed calibration unseals |
+| 4 | `commcenter.data-connection.context-index` | `CommCenter` | stops `canActivateWithoutOverrides` refusing before it evaluates |
+| 5 | `commcenter.data-settings.activation-status` | `CommCenter` | stops `canActivateDataSettings` refusing on activation status |
+| 6 | `commcenter.data-settings.activate-baseband-state` | `CommCenter` | stops `activateDataSettings` refusing the activation it was just told it could do |
+
+Patch 1 reads backwards and is worth stating plainly: **there was never a patch to add for the baseband, only a patch to stop applying.** Patches 4, 5 and 6 live in one resolver, `CommCenterDataActivationResolver`, because they are three gates on one path, and 5 and 6 are the *same check at two call sites*, which is the trap described below.
+
+---
+
+## 1. Let the baseband updater run: stop lying about the baseband
+
+**The problem.** `RestoredExternalResolver` used to patch both baseband-presence predicates in `restored_external` to answer "no baseband". That was deliberate, on the theory that `restored_external` consulting the real answer during a CFW restore was a failure mode.
+
+The cost was total. `restored` skipped every baseband step, `update_baseband` and `update_baseband_legacy` returned success in under 100 ms without ever requesting `BasebandData`, nothing was staged under `<preboot>/usr/standalone/firmware/Baseband/`, and the modem had no firmware to load:
+
+```
+CommCenter: modem boot up failure [Baseband Firmware Path Not Found]
+ACIPC bootstage = 0
+```
+
+**What changed.** Four records are gone from the resolver entirely:
+
+```
+restored-external.baseband.present            report that the device has no baseband
+restored-external.baseband.present-return     return immediately from that predicate
+restored-external.baseband.legacy             same, legacy predicate
+restored-external.baseband.legacy-return      return immediately from the legacy predicate
+```
+
+so the predicates answer truthfully and the updater runs. `RestoredExternalResolver` now emits exactly one record, the FDR one, and a unit test asserts that count so a resurrected baseband patch fails the suite rather than silently shipping a CFW with no modem firmware.
+
+**Why they were removed rather than kept behind a flag.** They were behind an opt-in `--keep-baseband` for a while, which inverted the sense: you had to pass a flag to *get* cellular. Then the premise turned out to be wrong. n104ap 24B5099f completes an erase restore with the predicates left alone, `Status: Restore Finished` with zero errors, the updater runs for real across two personalization rounds, `bbticket.der` lands beside the images, and the modem goes on to boot, register and carry calls. Suppressing them was never necessary on this build.
+
+`--keep-baseband` and `--keep-fdr` are therefore retired, along with `LITER8_KEEP_BASEBAND` and `LITER8_KEEP_FDR`. Passing either flag now **fails** rather than being ignored, deliberately: a silently-ignored flag in somebody's script is indistinguishable from it working, and the consequence here is a phone with no cellular.
+
+The usual caveat applies in the other direction now. This is one device and one build, and the failure modes are asymmetric: suppressing the predicates cost cellular, while a baseband updater that fails takes the whole restore with it. If it misbehaves on a board nobody has tested, that is the thing to look at first.
+
+---
+
+## 2. FDR recovery, and why letting it run is not the fix
+
+`restored-external.fdr-result` forces `RestoredFDRRecover` to report success without doing the work. It is always applied. This section is about why you might think it should not be, and why that is wrong, because it looks like the obvious answer to the calibration problem.
+
+**Why the real thing is wanted.** FDR data is sealed against an instance identity that, for the `bbcl` (baseband calibration) class, embeds the AP's AKS system key public. The copy in this device's FactoryData holds a **65-byte key stored raw**, because `AMFDRDataCreateSikPubDigestIfNecessary` only digests at 66 bytes and above. The running OS gets a key of at least 66 bytes from `aks_system_key_get_public`, so it presents its **SHA-384, 48 bytes**. 65 raw against 48 digested cannot match:
+
+```
+_AMFDRDecodeInstPropertyMatching: kFDRTag_inst propertyLength (sik) (130) != sikLength (96)
+AMFDRDecodeTrustEvaluation bbcl:... returned code=0x40004000      (AMFDRError 18)
+BBU: kBBUReturnFDRDataValidationFailed
+```
+
+The step that reconciles them is FDR recovery and **re-sealing**, which `restored_external` runs as `fdr_recover`, `fdr_auto_challenge_claim`, `verify_fdr_data` and `fdr_verify_sealed_manifest`.
+
+**Why it does not work.** Re-sealing a `sik` instance is a `PUT` to Apple's FDR service (`AMFDRAppendPermissionsString with ActionPUT sik instance for Claim`). It needs that service reachable and willing during the restore, which is exactly what the patch exists to route around. If it fails, the restore fails. Measured: `fdr_recover` does not re-seal on this path.
+
+So calibration has to be unsealed on the **booted** device instead, which is patch 3.
+
+---
+
+## 3. Unseal the calibration: `l8fdr.dylib`
+
+The one genuinely interesting patch. It changes no instructions.
+
+**The seam.** libFDR decides whether to enforce the `sik` match by asking MobileGestalt three questions:
+
+```c
+v0 = AMFDRSealingMapCallMGCopyAnswer("CertificateSecurityMode",     0);
+v1 = AMFDRSealingMapCallMGCopyAnswer("EffectiveSecurityModeSEP",    0);
+v2 = AMFDRSealingMapCallMGCopyAnswer("EffectiveProductionStatusAp", 0);
+// non-default demotion state == v0 && v1 && !v2
+```
+
+and if the AP is in a non-default demotion state, it skips the comparison entirely. The device is not demoted, so it answers no.
+
+`AMFDRSealingMapCallMGCopyAnswer` consults a **provider registry** first:
+
+```c
+provider = lookup(key);
+if (provider != NULL) return provider(key, error, context);
+```
+
+and that registry is populated by an **exported** function, `AMFDRSealingMapRegisterCustomQueryProvider`. So the override is a supported extension point, not a patch.
+
+**What the dylib does.** `l8fdr.c` runs a `__attribute__((constructor))`, resolves that symbol with `dlsym`, and registers three providers:
+
+| key | answer |
+|---|---|
+| `CertificateSecurityMode` | `true` |
+| `EffectiveSecurityModeSEP` | `true` |
+| `EffectiveProductionStatusAp` | `false` |
+
+libFDR then computes "non-default demotion state", skips `sik` verification, and the sealed calibration unseals. Delivered by adding one `LC_LOAD_WEAK_DYLIB` to `CommCenter` (`CommCenter.load-l8fdr`), the same mechanism `lockdownd` and `coreauthd` already use.
+
+**Why not interpose, and why not patch the vtable.** Both were tried and measured. Interposing `os_variant_is_recovery` never fires, because the call is bound inside the dyld shared cache and `__DATA,__interpose` cannot reach it. Patching a vtable at runtime fails because `__DATA_CONST` loses write from its `max_protection` once dyld has applied fixups, and the device boots SPTM/TXM, so `vm_protect` returns `KERN_PROTECTION_FAILURE` and the process cannot grant itself write. Hooking at the library's own registry, above both, is what works.
+
+**Scope and the recovery handle.** Three guards, all required:
+
+1. the host process must be `CommCenter`;
+2. `/usr/lib/.liter8-fdr-sik-bypass` must exist, root-owned `0600`;
+3. only those three keys are answered — every other query falls through to stock.
+
+The marker is deliberately the switch rather than the dylib. A boot where CommCenter misbehaves is recovered by deleting **one empty file** from SSHRD, instead of restoring a 40 MB re-signed binary.
+
+**Why `/usr/lib`, which costs a DFU cycle per change.** The injected dylib has to sit on the sealed System volume. `/var/jb/usr/lib` was tried: dyld silently declines to load it into `CommCenter`, with no AMFI or dyld message anywhere, while the same adhoc-signed file at `/usr/lib` loads and the same file on Data loads fine into an unrestricted process. Inference: a restricted platform binary may only load dylibs from the sealed System volume. The System volume cannot be remounted writable on a booted device, so every iteration costs a DFU trip.
+
+---
+
+## 4 and 5. Let CommCenter allocate a data context
+
+Patches 3 and earlier get the modem booting, the SIM reading and the device registering. They do not get a phone call. These two do.
+
+### Why a registered modem still cannot call
+
+Registration is the radio layer. Voice on LTE has to be IP, signalled over **IMS**, and IMS needs a bearer to run over. Without any:
+
+```
+kDataNotSupported{ActivationStatus failed in DataSettings }
+kDataNotSupported{context is not assigned }
+IMS APN: false      ims '' QS:kNotConfigured
+dialed over CS because of no IMS reg     Call ended. VoIP: false
+```
+
+voice falls back to circuit-switched, and on a network that has retired 2G/3G for this subscriber there is nowhere to fall back to. The operator tells the caller the number is unreachable.
+
+### Why there is no bearer
+
+CommCenter does not believe the device is activated. `mobileactivationd` is patched to short-circuit its activation *state*, which satisfies `lockdownd` and Setup because those only ask for the state. CommCenter asks for more: it reads an `ActivationStatus` whose default construction is `fManifestResult = 2, State = 3` with both flags clear, and nothing fills it in.
+
+Completing a real activation is not available, and that is measured rather than assumed. `CreateTunnel1SessionInfoRequest` needs a SEP-attested signing key:
+
+```
+ctkd:              <sepk:*(d) kid=da39a3ee5e6b4b0d> generated for mobileactivationd
+mobileactivationd: SecKeyCreateRandomKey failed: -25300 <- CryptoTokenKit -7
+                   -[MACollectionInterface signingKey]: Failed to create ref key
+                   Failed to collect signing key attestation
+```
+
+`CryptoTokenKit -7` is `TKErrorCodeTokenNotFound`: ctkd has no Secure Enclave token registered. The token id in that handle is `*` and `da39a3ee5e6b4b0d` is SHA-1 of the empty string, so it was computed over nothing. A control test (software key, then three Secure Enclave variants) shows the software path works and every Secure Enclave path fails identically, so this is neither entitlements nor that one daemon. The consumer gets patched instead.
+
+### Three gates in series, and each one hid the next
+
+**This is the part worth reading before touching any of them.** Each deploy costs a DFU cycle, and this path cost three because each gate was only visible once the one in front of it was open.
+
+```
+canActivateWithoutOverrides                                 0x92340
+    index = -1
+    fetchContextIndex(&index, ...)                          0x921f8
+    if (index == -2) {
+        status = -3
+        reason = "context is not assigned"
+        return                                              <-- gate 4, OUTER
+    }
+    settings = this->vtable[0x90](1)  -> canActivateDataSettings   <-- gate 5
+    settings = this->vtable[0x90](0)  -> canActivateDataSettings   <-- gate 5
+        blraa vtable[0x4c0] ; tbz w0,#0                            <-- gate 5 site
+
+... then, separately, when the activation is actually performed:
+
+activateDataSettings                                        0x9d7b20
+    blraa vtable[0x4c0] ; tbz w0,#0                                <-- gate 6
+    "can not activate with current baseband activated state"
+```
+
+Gates 5 and 6 query the **same vtable slot**. Gate 5 is in the function that answers "may I?", gate 6 is in the function that does the work and asks again. Patching only the asker gets you a published network agent and no bearer.
+
+Fix only the inner gate and **nothing observable changes**, because the outer one returns first. That happened: the inner patch was correct, deployed and verified in the binary, and the device behaved identically. The reason counts said so the whole time — the outer reason fired **80** times per boot, the inner one **14**.
+
+### Gate 4: `commcenter.data-connection.context-index`
+
+`-2` means no PDP context index is allocated for this connection. Allocation is not broken in general: `OTAActivation` and `BootstrapRoamingInternetBypass` each hold a context and each is published as a network agent. Those two are the bootstrap data path, which exists so an unactivated iPhone can reach Apple over cellular. `Internet` holds none, and cannot be given one while activation is refused. That circle is the bug.
+
+```
+0x92390  3100091f  cmn   w8, #2          ; index == -2 ?
+0x92394  54000201  b.ne  0x923d4         ; no -> evaluate        PATCH THIS
+0x92398  12800048  mov   w8, #-3
+0x9239c  d0010609  adrp  x9, "context is not assigned"
+```
+
+**Change:** `b.ne 0x923d4` becomes an unconditional `b 0x923d4`, so the function evaluates instead of returning.
+
+```
+0x92394  54000201  ->  14000010
+```
+
+Two reasons that is safe rather than merely convenient:
+
+- The fetched index is read **exactly once** in all 265 instructions of the function, by the comparison being patched, and never again. Checked by grepping every access to the stack slot: one store, one load. Nothing downstream can index anything with a negative value.
+- The replacement is a **branch, not a `NOP`**. NOPing a conditional branch does not skip the block it guards, it falls into it — the failure block is the fall-through here, so a NOP would fail every time. And the preceding instruction is a load, which sets no flags, so the condition after a NOP would be whatever the last call left in NZCV. Retargeting to the branch's own destination is deterministic.
+
+General rule: **NOP a branch when the branch causes the bad path; retarget it when the bad path is the fall-through.**
+
+### Gate 5: `commcenter.data-settings.activation-status`
+
+The second of the two gates inside `canActivateDataSettings`:
+
+```c
+if (a1->fFatalActivationBlocker[a2] == 1) { code = 67; ... }   // passes
+if ((vtable[1216](a1, a2) & 1) == 0)      { code = -3; ... }   // fails here
+```
+
+```
+0x936e4  d73f0910  blraa x8, x16         ; the ActivationStatus virtual call
+0x936e8  36000460  tbz   w0, #0, <fail>  ; PATCH THIS -> nop
+```
+
+**Change:** `tbz w0,#0` becomes `nop`, so the function falls through to its success path whatever the Registry-resolved `DataServiceInterface` answered.
+
+```
+0x936e8  36000460  ->  1f2003d5
+```
+
+Here a `NOP` *is* right, because this branch is what enters the failure block.
+
+### Gate 6: `commcenter.data-settings.activate-baseband-state`
+
+**The same check as gate 5, at a second call site, and the reason gate 5 alone was not enough.** This is the trap worth carrying away from this whole exercise.
+
+`canActivateDataSettings` answers "may this be activated". With gates 4 and 5 patched it answers yes, and the log says so: `prepareToReactivate: can reactivate: t(OK )`. But `activateDataSettings`, the function that *performs* the activation, re-asks the identical question before it will touch the modem:
+
+```
+canActivateDataSettings  0x936e8   blraa vtable[0x4c0] ; tbz w0,#0
+activateDataSettings     0x9d7cd4  blraa vtable[0x4c0] ; tbz w0,#0
+```
+
+Same virtual slot, `0x4C0` = 1216, same instruction. So with only gate 5 fixed the connection gets as far as `kActivating` and then falls straight back:
+
+```
+activateDataSettings: requested for kDataContextBB, family 0x3, currentMode=kLTE
+activateDataSettings: can not activate with current baseband activated state
+activateDataSettings: activate service: kDataConnectionInternet, ct kDataContextBB, result -1
+handleActivationReturn_Sync: result = -1; err = -3
+handleDataActivated: failed to activate
+detachActivator: detaching due to connection is down
+```
+
+which publishes an `Internet` network agent whose bearer never rises. `pdp_ip0` stays at `flags=8010` with no address, and because IMS then has no cellular transport it registers over WiFi instead, which is why calls arrive only with WiFi Calling enabled. One unpatched branch, and the visible symptom is "calls need WiFi".
+
+```
+0x9d7cd0  d73f0910  blraa x8, x16         ; the same ActivationStatus virtual
+0x9d7cd4  360003c0  tbz   w0, #0, <fail>  ; PATCH THIS -> nop
+```
+
+**Change:**
+
+```
+0x9d7cd4  360003c0  ->  1f2003d5
+```
+
+**How this one was found**, because it is a method rather than luck. `idevicesyslog archive` pulls a logarchive off the device, which reads the **persisted** log rather than a live stream, so decisions made once during bring-up are recoverable after the fact. That produced 1558 `setup config:` lines and the `activateDataSettings:` trace above, none of which a live capture had ever caught. The lesson generalises: when a decision happens once and you keep missing it, stop streaming and pull the archive.
+
+**Device-validated 2026-10-10, and the result is partial.** The refusal is gone, 0 occurrences against 59077 CommCenter lines, and the bearer now *activates* where it never did before: `pdp_ip0` comes up `UP,RUNNING` with an IPv4 address and takes the default route, with WiFi off.
+
+It does not carry traffic. The interface counters stay flat across repeated samples, only a link-local IPv6 is assigned with no IPv6 default route, and the path is marked `constrained`. So gate 6 was genuinely the blocker for *activation*, and activation is not the whole of cellular data. Do not read "the bearer came up" as "data works": those are two claims and only the first is supported here. The first revision of this paragraph made exactly that mistake, off a cumulative byte counter that included context setup.
+
+---
+
+## How the three CommCenter sites are located
+
+No offsets are inputs. `CommCenterDataActivationResolver` anchors on structure.
+
+CommCenter keeps its ten temporary-failure reason strings in one contiguous run, and **each has exactly one ADRP+ADD xref**, which is what makes them usable anchors:
+
+```
+0x2154a4b  connection is down
+0x2154a5e  Default temporary failure state for DataConnection
+0x2154a91  Not allowed on Satellite system
+0x2154ab1  No settings
+0x2154abd  Currently is not allowed on the SIM (current)
+0x2154aeb  Temporary unavailable due to DataConnectionState
+0x2154b1c  context is not assigned                            <- gate 4 anchor
+0x2154b34  Default in canActivateWithoutOverrides
+0x2154b5b  NESession not started yet
+0x2154b75  Incompatible Data Mode
+```
+
+**Gate 4** requires: the unique `"context is not assigned"` literal, its unique ADRP+ADD xref, then `MOVN W8,#2` one instruction back and `CMN W8,#2` three back, then that the branch between them is a `B.NE`. Requiring the `CMN` is what makes it unambiguous: ten reason strings each have one xref, but only this one is reached by a comparison against `-2`. The replacement displacement is computed from the branch's own decoded target, so it cannot drift.
+
+**Gate 5** requires: the unique `"ActivationStatus failed in DataSettings"` literal, its unique ADRP+ADD xref, the `MOVN W8,#2` that begins the failure block, and then the single `TBZ W0,#0` anywhere in an executable range that targets that block **and** is immediately preceded by a `BLRAA`. The `BLRAA` requirement is what separates this branch from the unconditional jump the FatalActivationBlocker path uses to reach the same block's shared tail.
+
+**Gate 6** requires: the unique `"activateDataSettings: can not activate with current baseband activated state"` literal, its unique ADRP+ADD xref, and then the single `TBZ W0,#0` that branches **backwards** into the block containing that reference, is immediately preceded by a `BLRAA`, and has `MOV X17,#0x4C0` within ten instructions in front of that call.
+
+The slot constant is the load-bearing part of that signature. Gates 5 and 6 interrogate the same virtual, so without pinning `0x4C0` the finder would match whichever authenticated call happened to sit nearest the string. With it, the record is tied to vtable slot 1216 specifically, which is the thing the patch is actually about.
+
+Note the anchor is the **whole** stored literal, prefix included. `"can not activate with current baseband activated state"` on its own is a substring of it and is not nul-terminated, so it is not findable as a literal at all. That cost a wrong turn worth recording: the first attempt anchored on the substring, resolved zero xrefs, and looked like the string was referenced through some exotic addressing mode.
+
+Two ARM64 details that matter when reading this:
+
+- `CMN Wn,#imm` is `ADDS WZR,Wn,#imm`; there is no separate CMN encoding. `cmn w8,#2` is `0x3100091F` and sets Z when `w8 == -2`, which is why the compiler used CMN rather than CMP.
+- `MOV Wn,#-3` is `MOVN Wn,#2`, `0x12800048`. Searching for a literal `-3` finds nothing.
+
+Anything that fails to resolve uniquely throws rather than guessing: `missingAnchor`, `ambiguousAnchor`, `noCandidate`, `ambiguousCandidate`.
+
+---
+
+## Applying and deploying
+
+Nothing here needs a flag. Patches 1 and 2 are baked into the CFW when the restore ramdisk is built; patches 3, 4 and 5 are deployed from SSHRD, because the System volume is read-only on a normal boot.
+
+```bash
+# 1, 2. the restore ramdisk. No cellular flags: the baseband updater runs
+#       because the records that used to suppress it no longer exist.
+liter8 fw make-cfw
+
+# ... restore, then boot SSHRD: fw get-rd, fw boot-rd
+
+# 3, 4, 5. l8fdr.dylib, the patched CommCenter and the marker.
+#          The cellular step is in the default step list, so a bare
+#          ./device/sshrd_provision.sh does this too.
+./device/sshrd_provision.sh cellular
+```
+
+The `cellular` step does three things: `deploy_fdr_library`, `deploy_userland_daemon CommCenter`, `enable_fdr_bypass`. The CommCenter binary is rebuilt from the device's own `.orig`, re-signed with its original identifier and entitlements, deployed, and read back and hash-compared. The `verify` step independently re-resolves from the `.orig` and byte-compares against what is live, reporting `CommCenter patch OK` or `MISMATCH`.
+
+To resolve without applying:
+
+```bash
+liter8 resolve userland commcenter <CommCenter> --json
+```
+
+which prints both records with their offsets, original and replacement words, and the evidence that selected each site.
+
+## Checking it worked, on the device
+
+The **structural check is better than any log grep** and needs no control test. Read the network agents off the interface:
+
+```
+$ ifconfig pdp_ip0
+```
+
+- Only `OTAActivation` and `BootstrapRoamingInternetBypass`: CommCenter thinks the device is not activated. Gate 4 is still refusing.
+- `Internet` present: the gates are open.
+- `IMS` present on an `UP,RUNNING` interface: IMS has registered and calls will work. **Check which interface**, because it decides the transport. On `ipsec0`, beside a `TelephonyIPSec` agent, it is VoWiFi and needs WiFi Calling. On a `pdp_ip*` it is VoLTE. On this device it is always `ipsec0`.
+
+For a call, the one line that matters is `VoIP`:
+
+```
+CommCenter: Call State changed from (Active: true, VoIP: true) to (Active: false, VoIP: false)
+CommCenter: Voice Call ended. VoIP: true
+```
+
+`VoIP: true` means the call was carried over IMS. It does **not** tell you which radio carried it, which is a trap: VoLTE and VoWiFi both log `VoIP: true`, and the transport only shows up in which interface holds the IMS agent. `VoIP: false, CS: true` is circuit-switched fallback, meaning IMS is not up at all.
+
+For calibration, these should all be **zero** once patch 3 is live:
+
+```
+CAL:  not found in FDR          (note: two spaces, a one-space grep returns 0 and reads as success)
+boot failed due to
+```
+
+and you should see, within about two seconds of CommCenter starting:
+
+```
+l8fdr: loaded in CommCenter, registered 3 of 3 demotion-state answers
+AMFDRSealingMapCallMGCopyAnswerInternal: Overriding query for CertificateSecurityMode
+_AMFDRSealingMapPrepareAMFDRForCopyLocalData: AP is in NeRD or non-default
+    demotion state, ignore sik verification                 (x3: Cal, PROV, Pac)
+```
+
+**Always grep for something that must be present before believing something is absent.** Three separate times in this work a tool returned a false zero that was briefly believed: the on-device `strings` cannot read these binaries and returns 0 for `CoreTelephony` in a CoreTelephony binary; baseband log messages are privacy-redacted to `[bbu] <private>` by default, which looks exactly like the updater never running; and the two-space `CAL:` string above.
+
+## Undoing any of it
+
+Each patch has its own handle, in increasing cost:
+
+| patch | undo |
+|---|---|
+| 3 (`l8fdr`) | delete `/usr/lib/.liter8-fdr-sik-bypass` from SSHRD. The dylib stays loaded and inert. |
+| 4, 5 (CommCenter) | restore `CommCenter.orig`, kept beside the binary, from SSHRD. |
+| 1, 2 (`restored_external`) | no runtime handle. They are decided when the ramdisk is built, so undoing them means editing `RestoredExternalResolver`, rebuilding the CFW and restoring again. |
+
+## What these do not fix
+
+**Cellular data carrying traffic, and VoLTE. Both still open, and they are no longer the same problem.**
+
+Gate 6 fixed bearer *activation*. `pdp_ip0` now comes up `UP,RUNNING` with an IPv4 address and the default route, with WiFi off. What it does not do is pass data: the interface counters stay flat across repeated samples, only a link-local IPv6 is assigned with no IPv6 default route, and the path is `constrained`. DNS, IPv4 and IPv6 are all present on the path and link quality reads good, so the local side is configured and the session is not carrying.
+
+A later reading, taken with WiFi **on** at three hours uptime, is better than that and is recorded here because it narrows the problem:
+
+```
+pdp_ip0: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1450
+    inet  100.75.137.63 --> 100.75.137.63 netmask 0xffffffff
+    inet6 2401:4900:16b8:5d5:189e:28d7:34b8:9e2e prefixlen 64 autoconf secured
+    inet6 2401:4900:16b8:5d5:1d7:88e3:b309:58f0  prefixlen 64 autoconf temporary
+    agent domain:Cellular type:Internet flags:0x5b desc:"CommCenter: Internet.0"
+    link quality: 100 (good)   link rate: 52.43 Mbps
+```
+
+Two **global** IPv6 addresses now exist where the earlier reading had only a link-local. `2401:4900::/32` is the carrier's own allocation, and an `autoconf` address is only installed after a Router Advertisement arrives *on that interface*, so packets from the carrier's PGW had reached the bearer and been processed at some point.
+
+**Settled the same day, with WiFi off and a round trip rather than a counter.** The reason this had stayed open was that the CFW ships no traffic generator: `curl`, `nc`, `wget`, `ping`, `ping6`, `python3`, `dig`, and also `scutil`, `traceroute`, `openssl` and `awk` are all absent, so no bound-interface request could be issued. A small one was written for it, and the answer is unambiguous:
+
+```
+[*] probing via pdp_ip0 (index 2), 6s deadline per probe
+    ICMP echo    -> 8.8.8.8         FAIL  no reply in 6s
+    ICMP echo    -> 1.1.1.1         FAIL  no reply in 6s
+    UDP  DNS/53  -> 8.8.8.8         FAIL  no reply in 6s
+    UDP  DNS/53  -> 1.1.1.1         FAIL  no reply in 6s
+    TCP  443     -> 1.1.1.1         FAIL  no SYN-ACK in 6s
+    TCP  443     -> 8.8.8.8         FAIL  no SYN-ACK in 6s
+    TCP  80      -> 17.253.144.10   FAIL  no SYN-ACK in 6s
+```
+
+Each probe is pinned with `IP_BOUND_IF`, so none of those can be satisfied by another path. The counters then say which direction is broken: `Ipkts` sat at exactly 977 for 34 minutes and five probe runs while `Opkts` rose by 1221, with `Ierrs` and `Oerrs` at 0. The bearer is **strictly outbound**. This is the one place where a counter is legitimate evidence here, because the claim is "this value never changes", which two samples can support, unlike a rate.
+
+**And the routing-preference theory is dead.** A previous revision of this paragraph noted that `en0`'s default was unscoped (`UGScg`) while `pdp_ip0`'s carried the IFSCOPE flag (`UGScIg`), and suggested that was simply "cellular available, WiFi primary". With WiFi off, `pdp_ip0`'s default becomes unscoped, so iOS has actively chosen that path, and the probes above still fail over it.
+
+Everything checkable on the device is correct: the context reports `state=2`, the correct `airtelgprs.com` APN, `ipFamily=3`, `suspended=0`, a routable carrier CGNAT address, good link quality at 52.43 Mbps, and a SIM reporting `(present, good, exposed, voice+data)`. `publicNetAllowed=0` looked like the gate and is not one: `setPublicNetAllowed:` has a single caller in CommCenter which only marshals a struct byte into the reply object, and the unscoped default route shows the local stack is not withholding traffic regardless. That last sentence used to continue "a session the PGW created and then refuses to carry is policy enforcement above the radio", offered as an inference and pointing at the SIM in another phone as the next measurement. The measurement was taken, and the inference is wrong.
+
+**The SIM carries data normally in another handset**, so the fault is this device. Three more candidates died after that:
+
+- **A zombie context**, where the network had torn the bearer down without iOS noticing. Airplane mode on and off rebuilds it completely, with a different address each time (`100.75.137.63`, then `100.82.236.190`, then `100.87.63.36`), and every probe still fails with `Ipkts` unmoved.
+- **A walled garden or carrier filtering.** The network's own PCO hands the device two IPv4 and two IPv6 DNS servers inside Airtel's core, which is exactly what a restricted bootstrap APN would still allow. All six probes against `117.96.122.156` and `117.96.122.40` fail too. There is no garden to be walled into.
+- **The APN.** Checked directly: `airtelgprs.com` is present, correct, set as the `AttachAPN`, IPv4v6, blank user and password as Airtel expects.
+
+Meanwhile the control plane is not merely working but fully provisioned on every cycle:
+
+```
+DataContextIPActivatedDriver: activation status = 0, is_pco_present = 1,
+  pDnsIPv4_addr_array_length=2, pDnsIPv6_addr_array_length=2, ip_type = 3,
+  v4.ip = 100.87.63.36, apn = airtelgprs.com, cid = 0
+handleDataContextActivated: Activation succeeded on kDataContextBB
+associateDataPath: cid = 0 mode = 0 queueSetId = 0 txFilters=0 rxFilters=0
+setChannelState: IBIContextCommunicationChannelState::WAITING_FOR_START_INDICATION->STABLE
+```
+
+and the radio is demonstrably alive, with live `RSRP -90 … -95 dBm` and `RSRQ -7.5 … -13 dB` from the serving cell, plus an attach that could not have happened without working uplink. The one anomaly is that RRC never leaves idle while 1221 packets are handed to the interface, where a modem with uplink data pending would run a Service Request and go connected.
+
+**Inference, not measured:** the break is in the user-plane path between the AP and the air, below iOS and at or inside the baseband, and the most probable cause is that this CFW runs the baseband with calibration unsealed through `l8fdr.dylib`'s demotion answers, a state in which control-plane signalling evidently works and the user plane evidently does not. That has a mechanism but is not confirmed. Testing it means restoring to stock and retrying the same SIM, which costs the current state.
+
+**What this closes for anyone reading these patches:** cellular data is not reachable from CommCenter. Gates 4, 5 and 6 activate the context and there is no further gate in that family to find, because CommCenter is not the component refusing anything. Every value it reports about this connection is correct.
+
+VoLTE turned out not to follow from the bearer, which corrects an earlier prediction in this document. With the bearer up and WiFi off, calls and SMS still do not work, and the reason is explicit:
+
+```
+SSP/AP - Transport[BB(CS)] ... IMSFeature-required[0] IMSFeatureEnabled[0]
+                               IMSRegistration-required[0] IMSRegistered[0]
+ImsRegMaskUp: IMSRegistered[kNotRegistered] qualifiedToBringupPDN[1] qualifiedToRegister[0]
+Connectivity(true): [ConnectionAvailable(BB: true, iWLAN: false), ...]
+refreshAllDataSettings: APN info not present or does not support iWLan
+getPreferredContextType: cannot activate on IWLAN
+```
+
+`qualifiedToBringupPDN[1] qualifiedToRegister[0]` is the shape to note: the device is allowed a bearer and is **not qualified to register IMS**. So IMS-over-cellular is not refused for want of a bearer, it is never attempted. That is a provisioning gate, not a plumbing one.
+
+What does work is IMS over WiFi, and the log names the transport rather than leaving it to inference:
+
+```
+ImsRegistrationState: UE is Registered for Voice+Sms on iWLAN (CarrierBundle)
+IMSRegistrationState: ... isWifi: true
+```
+
+`iWLAN` is IMS over WLAN. Hence calls and SMS working only with WiFi plus WiFi Calling. One reported quirk is consistent with `qualifiedToRegister[0]`: registration does not come up on its own, and toggling network selection in Settings forces it once before it lapses again.
+
+The cheap explanations are ruled out rather than merely unchecked. **Cellular Data and Data Roaming are both on**, confirmed in Settings. CommCenter is not refusing data in general, since the bearer activates and the IMS-over-WiFi connection registers. And WiFi being connected is a reason for iOS to prefer WiFi, not a reason for a cellular session to carry nothing.
+
+**Traced since.** `qualifiedToRegister` is computed in `libSystemDetermination.dylib`, and `sd::IMSSubscriberModel::isQualifiedToRegister()` at `0x24b59998c` decompiles to:
+
+```c
+if ( config->isIMSUnprovisionedAllowed()                       // reads AllowIMSUnprovisioned
+     && this[17]->vtable[464]( this[17], this->getSimSlot() ) ) {
+    os_log("Proceeding with unprovisioned SIM.");
+    mask = this + 272;        // fUnprovisionedImsRegMaskQualifier
+} else {
+    mask = this + 268;        // fImsRegMaskQualifier
+}
+v8 = this->isRegMaskSet(mask);
+```
+
+`isIMSUnprovisionedAllowed()` reads the carrier-bundle key `AllowIMSUnprovisioned`, which Airtel's `IMSConfig` does not set while several US bundles do. So this is a carrier-bundle value, not a signed ticket, not SEP, and not the activation record. Push is separate and does still sit behind SEP.
+
+Two cautions for anyone re-deriving this. The vtable dispatch offsets the decompiler prints are relative to the **vptr**, which is the vtable symbol plus 16: a C++ vtable object begins with offset-to-top and typeinfo words. Indexing from the symbol instead shifts every slot by two and yields confident nonsense; an earlier revision of this section did exactly that and named the wrong key. The cheap check is to read the first two words at the symbol, and then to ask whether the resulting call sites mean anything — `setImsPref` dispatches on the same object at `vptr+384` and `vptr+376`, which must read as `isIMSUnprovisionedAllowed() && isCDMALessEnabled()` to match its own log line about dropping the VoWiFi IMS pref for an unprovisioned SIM.
+
+**Condition B, identified, and it closes this route.** `this[17]->vtable[464]` is `sd::IMSSubscriberEventHandler`'s method at `vptr+464`, which is a per-SIM-slot lookup of the baseband's own provisioned state:
+
+```c
+bool handler_vptr464(sd::IMSSubscriberEventHandler *this, int slot)
+{
+    node = map_find(*(this + 3816), slot);          // keyed on the SimSlot
+    if (!node) return false;                        // slot not present
+    os_log("Baseband service provisioned state: %s", asString(node->state));
+    return (node->state & 0xFD) == 1;
+}
+```
+
+`__Z8asString31BasebandServiceProvisionedState` in `libCommCenterBase.dylib` compiles to a bounds check plus a 5-entry jump table, which gives the enum exactly rather than by guessing from the order the names appear in logs:
+
+| value | name | `(v & 0xFD) == 1` |
+|---|---|---|
+| 0 | `kUnknown` | no, `0` |
+| 1 | `kNotProvisioned` | **yes** |
+| 2 | `kProvisioned` | no, `0` |
+| 3 | `kInProgress` | **yes** |
+| 4 | `kUnavailable` | no, `4` |
+
+`0xFD` clears bit 1, so condition B accepts exactly `kNotProvisioned` and `kInProgress`. It asks "is the baseband currently telling me this slot is not provisioned?", which is the sensible companion to condition A: the pair means "this SIM is unprovisioned **and** the carrier permits unprovisioned IMS, so register anyway."
+
+**And on this device it has never held.** Three independent checks over every log captured during the investigation, 234 `provisioned state` lines in total:
+
+- Condition B's own format string is `"Baseband service provisioned state: %s"` with **no space** before the colon. `CommCenter` has five near-identical format strings for this state and the other four all have a space, a slot tag, or the word `changing`. The no-space variant has **zero** occurrences, so condition B was never even reached, which is what the short-circuit predicts while condition A is false.
+- `"Proceeding with unprovisioned SIM."` has **zero** occurrences, which says the same thing from the other side of the branch.
+- The values ever observed, from the other log sites: `kUnknown` 115, `kUnavailable` 102, `kProvisioned` 17. **`kNotProvisioned` and `kInProgress` have never appeared.**
+
+So setting `AllowIMSUnprovisioned` satisfies condition A and then fails at condition B, against a state that has only ever held values B rejects. The carrier-bundle route is **measurably not sufficient**, not merely unproven. That is worth knowing before spending effort on it, because the effort is substantial and all of it was already closed or expensive: `carrier.plist` is covered by `signatures/common.plist` (`CBSignature2` RSA, `CBSignature3` ECDSA), so editing it gets the bundle rejected and loses the WiFi Calling that currently works; there is no Data-volume override, since `com.apple.commcenter.carrier_bundle.plist` is a path index rather than merged settings; and neither `isIMSUnprovisionedAllowed` nor condition B can be patched directly, because both live in `libSystemDetermination.dylib`, which is not a file on disk but a member of the dyld shared cache.
+
+The remaining route, patching the *call site* of the signature check in CommCenter (`nm -u` lists `VerifyCarrierBundleSignature` as undefined, `otool -L` shows CommCenter linking `libCommCenterBase.dylib` directly), is the same shape as gate 6 but harder: no log string at the failure branch to anchor on, and the failure handling sits in the cache-only callee. It is now also pointless on its own, since it only opens condition A.
+
+**What VoLTE would actually need** is for the baseband to report `kNotProvisioned` for the slot, which is a radio and network fact rather than a value in a plist, and which sits downstream of the activation wall at the Secure Enclave. Patching cannot produce it.
+
+**Locating all of this, for anyone repeating it.** The handle that worked was the vptr PAC discriminator. It is per-class, emitted as an immediate (`MOVK X17, #0xD7D, LSL#48`, encoding `0xF2E1AFB1`, bytes `b1 af e1 f2`), and therefore byte-searchable with no symbols: 0 sites in `libCommCenterBase.dylib`, 70 in `CommCenter`, which settles where the class is defined without reading either. Of those 70, the two using `PACDA` rather than `AUTDA` are the constructors, because a vptr is signed only where it is written, and both name the class outright: `_ZTVN2sd25IMSSubscriberEventHandlerE` and `__ZTVN2sd27IMSSubscriberEventInterfaceE`. Both also carry `ADD X16, X16, #0x10` before signing, which is the compiler confirming the `vptr = symbol + 16` rule above rather than me asserting it.
+
+Cellular data carrying traffic remains unexplained and is not addressed by any of the above.
+
+Also not fixed:
+
+- **Push, and so iMessage and FaceTime.** `apsd: APSSystemTokenInfo no token info found in keychain`. Minting a token needs a real activation record, which needs a SEP-attested key, which is the wall above. Not expected to work without SEP.
+- **SEP and passcode**, unchanged and by design.
+
+## Validation state
+
+Patches 1 to 3: device-validated 2026-10-09. Modem boots, `BasebandVersion 8.00.00`, SIM `kCTSIMSupportSIMStatusReady`, carrier bundle matched, registered. Calibration unseals on **every** bring-up, not once.
+
+Patches 4 and 5: device-validated 2026-10-10, same device and build. Incoming calls ring and connect, confirmed by the caller, and SMS arrives. Before these patches the log read `IMS APN: false  ims '' QS:kNotConfigured` and calls failed in both directions, so IMS was not registering at all; `canActivateWithoutOverrides` gates every data connection including the IMS one, and opening it is what let IMS come up.
+
+Reason counts from a live capture with 3721 CommCenter lines in the window as the control: `context is not assigned` 80 to 0, `ActivationStatus failed in DataSettings` 14 to 0, `Default in canActivateWithoutOverrides` 70 to 0, `no IMS reg` present to 0.
+
+**Scope, stated precisely, because an earlier revision of this document got it wrong.** These patches deliver calls and SMS over IMS on the WiFi transport. They do not deliver VoLTE, and `VoIP: true` in the log was read as VoLTE when it only ever meant "over IMS". The transport is visible in which interface holds the IMS agent, nowhere else, and here it is always `ipsec0`.
+
+One refusal survives and is correct: `DATA.Connection.Internet.2` is SIM slot two, and slot two is empty.

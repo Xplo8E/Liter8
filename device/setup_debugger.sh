@@ -37,8 +37,11 @@ SSHOPT=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
         -p "${LITER8_SSH_PORT:-2222}")
 DEV="root@${LITER8_SSH_HOST:-localhost}"
 PW=alpine
-SSHPASS=$(command -v sshpass || true)
-"$SSHPASS" -V >/dev/null 2>&1 || SSHPASS=../tools/sshpass
+# ssh's own askpass hook rather than sshpass, which races this dropbear's
+# password prompt and intermittently sends the wrong secret. The shim keeps the
+# `-p <password> ssh|scp ...` call shape, so the call sites below are unchanged.
+# Its header has the measurements.
+SSHPASS=${0:A:h}/askpass-sshpass
 
 CHECK_ONLY=0
 [[ "$1" == "--check" ]] && CHECK_ONLY=1
@@ -50,6 +53,33 @@ die()  { printf '    [!] %s\n' "$1"; exit 1 }
 
 sh_dev() { "$SSHPASS" -p "$PW" ssh "${SSHOPT[@]}" "$DEV" "$@" }
 put()    { "$SSHPASS" -p "$PW" ssh "${SSHOPT[@]}" "$DEV" "cat > $2" < "$1" }
+
+# apt_install_dev <deb> <tail-lines> [extra apt flags...]
+#
+# Install one staged deb and return apt's own exit status.
+#
+# This exists because the obvious spelling is wrong in a way that hides
+# failures. `apt-get install ... | tail -6` returns *tail's* status, which is
+# always 0, so a `|| die` after it never fires: apt would print
+# "E: Unmet dependencies", the script would report success, and the real failure
+# surfaced two stages later as a confusing missing-file error. That happened, and
+# it took three passes to diagnose.
+#
+# apt's output is still wanted, since its last few lines are what explain a
+# failure, so it is redirected to a file, replayed, and the saved status
+# returned. `set -o pipefail` is deliberately not used instead: this runs under
+# whatever /bin/sh the ramdisk and the booted device provide, and POSIX sh does
+# not require pipefail.
+apt_install_dev() {
+    local deb=$1 lines=$2; shift 2
+    sh_dev "$RPATH; cd /var/root/.liter8-debs || exit 1
+        DEBIAN_FRONTEND=noninteractive apt-get install -y $* ./$deb \
+            > /tmp/.liter8-apt.log 2>&1
+        rc=\$?
+        tail -$lines /tmp/.liter8-apt.log
+        rm -f /tmp/.liter8-apt.log
+        exit \$rc"
+}
 
 RPATH='export PATH=/var/jb/usr/bin:/var/jb/bin:/var/jb/usr/sbin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin'
 
@@ -63,7 +93,6 @@ DS_PATH=/var/jb/usr/lib/llvm-16/bin/debugserver
 # apt resolves each deb's dependencies on the device, so this script never has
 # to know about libllvm16, libclang-cpp16, ldid or libplist3. That needs working
 # internet on the phone, which is checked before anything is installed.
-PROBE_URL=https://apt.procurs.us/dists/1900/InRelease
 
 say "checking payloads"
 for f in debugserver "$DEBUGSERVER_DEB" "$TROLLSTORE_DEB"; do
@@ -106,16 +135,20 @@ sh_dev "$RPATH; command -v apt-get >/dev/null" \
 # the repo itself rather than a generic host: a captive portal or a DNS-only
 # answer would pass a ping and then fail the install halfway through.
 #
-# wget, not curl: the bootstrap ships wget and has no curl.
+# `apt-get update` is the probe, not wget. A fresh Procursus bootstrap has no
+# wget, no curl, no nc and no ping, so probing with any of them reports "cannot
+# reach the repo" on exactly the first run this check exists to protect. apt is
+# guaranteed present because the install below needs it, and succeeding here
+# proves the one thing that has to work.
 say "checking device internet"
 IFACE_STATE=$(sh_dev "$RPATH; ifconfig en0 2>/dev/null | grep -c 'status: active'" | tr -d '\r')
-if ! sh_dev "$RPATH; wget -q --spider --timeout=10 --tries=1 $PROBE_URL" >/dev/null 2>&1; then
+if ! sh_dev "$RPATH; apt-get update -o Acquire::Retries=1" >/dev/null 2>&1; then
     if [[ "$IFACE_STATE" == "0" ]]; then
         die "the device has no Wi-Fi connection. Connect it to Wi-Fi and run this again."
     fi
-    die "the device is on Wi-Fi but cannot reach apt.procurs.us. Check its internet connection and run this again."
+    die "the device is on Wi-Fi but apt could not reach its repositories. Check its internet connection and run this again."
 fi
-ok "device can reach apt.procurs.us"
+ok "device package lists updated"
 
 # The device has no shasum and no openssl, so the file is read back and hashed
 # on the Mac. Same approach as the uicache staging check in sshrd_provision.sh.
@@ -160,9 +193,7 @@ if (( ! INSTALLED )); then
     # its dependencies from the repo, which is why the internet check above is a
     # hard requirement rather than a warning.
     put "payload/$DEBUGSERVER_DEB" "/var/root/.liter8-debs/$DEBUGSERVER_DEB"
-    sh_dev "$RPATH; cd /var/root/.liter8-debs &&
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades \
-            ./$DEBUGSERVER_DEB 2>&1 | tail -6" \
+    apt_install_dev "$DEBUGSERVER_DEB" 6 --allow-downgrades \
         || die "apt-get install of $DEBUGSERVER_DEB failed"
     ok "debugserver-16 and its dependencies installed"
 
@@ -193,8 +224,7 @@ else
     # postinst installs the bundled TrollStoreLite.ipa. apt pulls ldid, and
     # libplist3 beneath it.
     put "payload/$TROLLSTORE_DEB" "/var/root/.liter8-debs/$TROLLSTORE_DEB"
-    sh_dev "$RPATH; cd /var/root/.liter8-debs &&
-        DEBIAN_FRONTEND=noninteractive apt-get install -y ./$TROLLSTORE_DEB 2>&1 | tail -8" \
+    apt_install_dev "$TROLLSTORE_DEB" 8 \
         || die "apt-get install of $TROLLSTORE_DEB failed"
     TS_NOW=$(sh_dev "$RPATH; dpkg-query -W -f='\${Version}' com.opa334.trollstorehelper27 2>/dev/null" | tr -d '\r')
     [[ "$TS_NOW" == "$TROLLSTORE_VER" ]] \

@@ -108,6 +108,7 @@ expect_help "profiles --help works"                  "OVERVIEW" profiles --help
 expect_help "acm-probe --help works"                 "signature-variant" acm-probe --help
 expect_help "fw actions --help works"                "OVERVIEW" fw actions --help
 expect_help "fw make-cfw --help names --serial"      "--serial" fw make-cfw --help
+expect_help "fw get-boot --help names --demote-ap"  "--demote-ap" fw get-boot --help
 expect_help "fw restore-cfw --help names the option" "--idevicerestore" fw restore-cfw --help
 
 print -r -- ""; print -r -- "== help does NOT offer options that do not apply =="
@@ -117,6 +118,16 @@ expect_fail "fw boot rejects --check"            fw boot --check
 expect_fail "fw make-cfw rejects --check"        fw make-cfw --check
 expect_fail "fw boot rejects --idevicerestore"   fw boot --idevicerestore /bin/true
 expect_fail "fw prepare rejects --serial"        fw prepare --serial
+expect_fail "fw make-cfw rejects --demote-ap"    fw make-cfw --demote-ap
+expect_fail "fw boot rejects --demote-ap"        fw boot --demote-ap
+
+# --keep-baseband and --keep-fdr are gone: keeping the baseband predicates is
+# now the only behaviour, and --keep-fdr only ever enabled an FDR recovery that
+# was measured not to re-seal. A script still passing either must fail loudly
+# rather than be silently ignored, because being ignored is indistinguishable
+# from working and the consequence is a CFW with no modem firmware.
+expect_fail "fw make-cfw rejects the retired --keep-baseband" fw make-cfw --keep-baseband
+expect_fail "fw make-cfw rejects the retired --keep-fdr"      fw make-cfw --keep-fdr
 expect_fail "fw prepare rejects --check"         fw prepare --check
 expect_fail "fw boot rejects --ticket"           fw boot --ticket /tmp/t
 expect_fail "fw boot rejects --sshrd-payload"    fw boot --sshrd-payload /tmp/s
@@ -176,6 +187,12 @@ expect_no_match "--boot-args accepts a bare -v" "Missing value" \
     resolve iboot ibss-bootargs /dev/null --boot-args "-v"
 expect_no_match "apply --boot-args leading dash" "Missing value" \
     apply iboot ibss-bootargs /dev/null /tmp/liter8-assert-out.bin --boot-args "-v x"
+
+print -r -- ""; print -r -- "== the CommCenter data-activation plan is wired up =="
+# The plan has to be listed, or provisioning fails late with "unknown plan"
+# after an SSHRD trip has already been spent.
+expect_contains "userland lists commcenter" "commcenter" resolve userland nope /dev/null
+expect_fail "commcenter rejects a non-Mach-O" resolve userland commcenter /etc/hosts
 
 print -r -- ""; print -r -- "== errors name the valid values =="
 # Validation happens before any file is read, so a placeholder path is fine here.

@@ -1,35 +1,11 @@
 {
-  "expectedOutputSHA256" : "6b9103f0741c6060aeff755eb9b72218be84f8a98be349bd16253a132bf4e01d",
+  "expectedOutputSHA256" : "b0f054224b9270847e128c52fadd69fc5ef0249d278912ed16ab53a9ae883911",
   "expectedPatches" : [
     {
       "id" : "restored-external.fdr-result",
       "offset" : 518520,
       "originalBytes" : "e0031aaa",
       "replacementBytes" : "000080d2"
-    },
-    {
-      "id" : "restored-external.baseband.present",
-      "offset" : 302520,
-      "originalBytes" : "88150090",
-      "replacementBytes" : "000080d2"
-    },
-    {
-      "id" : "restored-external.baseband.present-return",
-      "offset" : 302524,
-      "originalBytes" : "082947f9",
-      "replacementBytes" : "c0035fd6"
-    },
-    {
-      "id" : "restored-external.baseband.legacy",
-      "offset" : 302400,
-      "originalBytes" : "7f2303d5",
-      "replacementBytes" : "000080d2"
-    },
-    {
-      "id" : "restored-external.baseband.legacy-return",
-      "offset" : 302404,
-      "originalBytes" : "f44fbea9",
-      "replacementBytes" : "c0035fd6"
     }
   ],
   "expectedSize" : 3357024,
