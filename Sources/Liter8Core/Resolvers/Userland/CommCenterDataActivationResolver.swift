@@ -18,9 +18,19 @@ import Foundation
 ///     IMS APN: false      ims '' QS:kNotConfigured
 ///     dialed over CS because of no IMS reg     Call ended. VoIP: false
 ///
-/// Activation fails first, so no data context is assigned, so IMS has no PDN,
-/// so there is no VoLTE and voice falls back to a circuit-switched path the
-/// network may not offer. `mobileactivationd` logs what the existing patch
+/// Activation fails first, so no data context is assigned, so IMS cannot
+/// register on any transport, so voice falls back to a circuit-switched path
+/// the network may not offer.
+///
+/// What this delivers, stated precisely: IMS registers, and calls and SMS work.
+/// It does not deliver VoLTE. IMS takes either a cellular bearer or an IPsec
+/// tunnel to the carrier over WiFi, and on this device only the second comes up,
+/// because the `Internet` bearer is still never raised. So the result is WiFi
+/// Calling and it needs WiFi enabled. `VoIP: true` in the log means "over IMS"
+/// and says nothing about which radio carried it; the transport is visible only
+/// in which interface holds the IMS agent, and here that is always `ipsec0`.
+///
+/// `mobileactivationd` logs what the existing patch
 /// does: "Hactivation is enabled, short circuiting activation state to
 /// Activated." That satisfies lockdown and Setup, which only ask for the
 /// state, but CommCenter reads an `ActivationStatus` whose default

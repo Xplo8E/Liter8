@@ -1,6 +1,6 @@
 # Baseband and cellular on a Liter8 CFW
 
-Short version: a Liter8-restored iPhone 11 used to have **no cellular** out of the box, deliberately. Four patches changed that and they all apply by default now, no flags. As of 2026-10-10 the modem works and **phone calls work over VoLTE**. Cellular data does not. Push, and so iMessage and FaceTime, does not and is not expected to.
+Short version: a Liter8-restored iPhone 11 used to have **no cellular** out of the box, deliberately. Four patches changed that and they all apply by default now, no flags. As of 2026-10-10 the modem works and **phone calls and SMS work over IMS, carried by WiFi Calling**. Not VoLTE: cellular data is still not up, so IMS has no cellular transport and registers over an IPsec tunnel on WiFi instead, which means calls need WiFi connected and WiFi Calling enabled. Push, and so iMessage and FaceTime, does not work and is not expected to.
 
 A note on reading this, because it will otherwise mislead you: `--keep-baseband` and `--keep-fdr` appear throughout and **both flags have since been retired**. Keeping the baseband predicates is now the only behaviour, so the flag it was hidden behind is gone and passing it fails. Mentions below are historical, kept because they are how the argument developed.
 

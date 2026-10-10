@@ -21,20 +21,26 @@ registered on the network. The modem gets its firmware from the restore, and
 `l8fdr.dylib` lets CommCenter unseal the baseband calibration whose FDR seal was made
 against an AP identity key this device can no longer reproduce.
 
-Phone calls, over VoLTE. That took two more patches on top of the calibration fix,
-because CommCenter refuses a data context on a device whose activation was
-short-circuited rather than performed, and without a data context there is no IMS
-bearer, so no VoLTE, so voice falls back to a circuit-switched path the operator no
-longer runs. [the whole chain, measured](docs/design/BASEBAND_AND_CELLULAR.md), and
+Phone calls and SMS, over IMS, **carried by WiFi Calling**. That took two more
+patches on top of the calibration fix, because CommCenter refuses a data context on
+a device whose activation was short-circuited rather than performed, and without one
+there is no IMS at all. With the gates open IMS registers and calls work.
+
+Read the qualifier though: IMS comes up over an IPsec tunnel to the carrier on
+WiFi, not over LTE, because the cellular data bearer is still not raised. So calls
+and SMS need WiFi connected *and* WiFi Calling enabled. True VoLTE needs cellular
+data working, which is the open problem below.
+[the whole chain, measured](docs/design/BASEBAND_AND_CELLULAR.md), and
 [what each patch actually does](docs/design/CELLULAR_PATCHES.md)
 
 ## What doesn't
 
 - SEP
 - passcode
-- cellular *data*. The `Internet` network agent is published and no longer refused, but
-  the bearer is not raised. WiFi was up the whole time it was tested, which is reason
-  enough on its own, so treat this as unfinished rather than diagnosed
+- cellular *data*, and so VoLTE with it. The `Internet` network agent is published and
+  no longer refused, but the bearer is never raised and there is no cellular route at
+  all. That is also why calls need WiFi Calling: IMS has no cellular transport, so it
+  registers over an IPsec tunnel on WiFi instead. One open problem, two symptoms
 - Apple services. Push has no token, because minting one needs a real activation record,
   which needs a SEP-attested key. Measured, not assumed
 - xTweak injection. It injects, but it's nowhere near as solid as vphone

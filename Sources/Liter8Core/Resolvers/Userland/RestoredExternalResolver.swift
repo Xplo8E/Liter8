@@ -16,7 +16,7 @@ import Foundation
 /// flag for a while, then measured not to be needed at all, and is now gone.
 /// n104ap 24B5099f completes an erase restore with the predicates left alone,
 /// `Status: Restore Finished` with zero errors, and the modem goes on to boot,
-/// register and place VoLTE calls. See docs/design/CELLULAR_PATCHES.md.
+/// register and carry calls. See docs/design/CELLULAR_PATCHES.md.
 public struct RestoredExternalResolver: Sendable {
     public static let name = "restored-external-fdr"
     private static let anchor = "RestoredFDRRecover"

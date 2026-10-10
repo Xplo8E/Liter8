@@ -1,6 +1,6 @@
 # How the cellular patches work
 
-Reference for the five changes that take this CFW from "no modem at all" to "phone calls over VoLTE". [BASEBAND_AND_CELLULAR.md](BASEBAND_AND_CELLULAR.md) is the investigation: how each problem was found, what was tried and what failed. This file is the other half, for someone reviewing or re-deriving the patches: what each one targets, how it is located, what it changes, why that is safe, and how to check it on a device.
+Reference for the five changes that take this CFW from "no modem at all" to working phone calls and SMS. Read the scope before the detail: calls come up over IMS carried by **WiFi Calling**, not over VoLTE, because the cellular data bearer is still not raised. See "What these do not fix". [BASEBAND_AND_CELLULAR.md](BASEBAND_AND_CELLULAR.md) is the investigation: how each problem was found, what was tried and what failed. This file is the other half, for someone reviewing or re-deriving the patches: what each one targets, how it is located, what it changes, why that is safe, and how to check it on a device.
 
 Device throughout: iPhone 11, `iPhone12,1` / `n104ap`, iOS 27.2 `24B5099f`. Offsets are quoted for that build only, and they are **outputs**. Every one is rediscovered from the binary on each run; none is an input to anything.
 
@@ -11,14 +11,14 @@ Cellular is not one feature. These are independent, they fail independently, and
 1. **The modem has firmware.** The AP pushes it on every cold boot; there is no usable copy in the modem's own flash. Patch 1.
 2. **The modem has calibration.** Per-unit RF trim, sealed in FactoryData against an identity this device can no longer reproduce. Patches 2 and 3.
 3. **CommCenter will allocate a data context.** Gated on an activation record this CFW does not have. Patches 4 and 5.
-4. **An IMS bearer comes up.** Follows from 3. LTE has no circuit-switched voice, so a call needs VoLTE, which needs IMS, which needs a bearer.
+4. **IMS registers.** Follows from 3. LTE has no circuit-switched voice, so a call has to be IP. IMS will take either transport: a cellular bearer (VoLTE) or an IPsec tunnel to the carrier over WiFi (VoWiFi, "WiFi Calling"). On this device only the second one comes up, so patches 4 and 5 get you calls, and they need WiFi.
 
 Fix 1 and the modem boots but has no calibration. Fix 2 and it registers but cannot call. Fix 3 and calls work. Nothing about the earlier symptoms tells you the later problems are there, which is why this took three rounds.
 
 ## The inventory
 
 All five apply by default. There are no cellular flags: a plain `fw make-cfw`,
-restore, `sshrd_provision.sh` and boot gets you a working modem and VoLTE calls.
+restore, `sshrd_provision.sh` and boot gets you a working modem, and calls over WiFi Calling.
 
 | # | record / artifact | component | what it does |
 |---|---|---|---|
@@ -54,7 +54,7 @@ restored-external.baseband.legacy-return      return immediately from the legacy
 
 so the predicates answer truthfully and the updater runs. `RestoredExternalResolver` now emits exactly one record, the FDR one, and a unit test asserts that count so a resurrected baseband patch fails the suite rather than silently shipping a CFW with no modem firmware.
 
-**Why they were removed rather than kept behind a flag.** They were behind an opt-in `--keep-baseband` for a while, which inverted the sense: you had to pass a flag to *get* cellular. Then the premise turned out to be wrong. n104ap 24B5099f completes an erase restore with the predicates left alone, `Status: Restore Finished` with zero errors, the updater runs for real across two personalization rounds, `bbticket.der` lands beside the images, and the modem goes on to boot, register and place VoLTE calls. Suppressing them was never necessary on this build.
+**Why they were removed rather than kept behind a flag.** They were behind an opt-in `--keep-baseband` for a while, which inverted the sense: you had to pass a flag to *get* cellular. Then the premise turned out to be wrong. n104ap 24B5099f completes an erase restore with the predicates left alone, `Status: Restore Finished` with zero errors, the updater runs for real across two personalization rounds, `bbticket.der` lands beside the images, and the modem goes on to boot, register and carry calls. Suppressing them was never necessary on this build.
 
 `--keep-baseband` and `--keep-fdr` are therefore retired, along with `LITER8_KEEP_BASEBAND` and `LITER8_KEEP_FDR`. Passing either flag now **fails** rather than being ignored, deliberately: a silently-ignored flag in somebody's script is indistinguishable from it working, and the consequence here is a phone with no cellular.
 
@@ -136,7 +136,7 @@ Patches 3 and earlier get the modem booting, the SIM reading and the device regi
 
 ### Why a registered modem still cannot call
 
-Registration is the radio layer. Voice on LTE is **VoLTE**, signalled over **IMS**, which needs a data bearer. Without one:
+Registration is the radio layer. Voice on LTE has to be IP, signalled over **IMS**, and IMS needs a bearer to run over. Without any:
 
 ```
 kDataNotSupported{ActivationStatus failed in DataSettings }
@@ -298,7 +298,7 @@ $ ifconfig pdp_ip0
 
 - Only `OTAActivation` and `BootstrapRoamingInternetBypass`: CommCenter thinks the device is not activated. Gate 4 is still refusing.
 - `Internet` present: the gates are open.
-- `pdp_ip1` carrying `IMS` and `UP,POINTOPOINT,RUNNING` with `rtref 1`: the IMS bearer is established and VoLTE calls will work.
+- `IMS` present on an `UP,RUNNING` interface: IMS has registered and calls will work. **Check which interface**, because it decides the transport. On `ipsec0`, beside a `TelephonyIPSec` agent, it is VoWiFi and needs WiFi Calling. On a `pdp_ip*` it is VoLTE. On this device it is always `ipsec0`.
 
 For a call, the one line that matters is `VoIP`:
 
@@ -307,7 +307,7 @@ CommCenter: Call State changed from (Active: true, VoIP: true) to (Active: false
 CommCenter: Voice Call ended. VoIP: true
 ```
 
-`VoIP: true` is VoLTE. `VoIP: false, CS: true` is circuit-switched fallback, which means IMS is not up.
+`VoIP: true` means the call was carried over IMS. It does **not** tell you which radio carried it, which is a trap: VoLTE and VoWiFi both log `VoIP: true`, and the transport only shows up in which interface holds the IMS agent. `VoIP: false, CS: true` is circuit-switched fallback, meaning IMS is not up at all.
 
 For calibration, these should all be **zero** once patch 3 is live:
 
@@ -339,15 +339,38 @@ Each patch has its own handle, in increasing cost:
 
 ## What these do not fix
 
-- **Cellular data.** The `Internet` agent is published and no longer refused, but the bearer is not raised: `flags=8010`, no inet address on any `pdp_ip*`. WiFi was connected throughout testing, which is on its own enough reason for iOS not to raise it, and the Settings cellular-data and data-roaming toggles have not been checked. Unfinished, not diagnosed.
+**Cellular data, and VoLTE with it. These are one problem with two symptoms, and it is the open one.**
+
+The `Internet` agent is published on `pdp_ip0` and no longer refused, but its bearer is never raised: `flags=8010` rather than `UP,RUNNING`, no inet address on any `pdp_ip*`, and no cellular route in the table at all. Only `en0` has one.
+
+That is also why calls need WiFi Calling. IMS will take either transport, and with no cellular bearer there is only one left:
+
+```
+ipsec0  UP,POINTOPOINT,RUNNING
+        agent domain:TelephonyIPSec type:TelephonyIPSec  "CommCenter: TelephonyIPSec"
+        agent domain:Cellular       type:IMS             "CommCenter: IMS.0"
+pdp_ip0 POINTOPOINT,MULTICAST                             <- published, never raised
+        agent domain:Cellular type:Internet flags:0x59
+pdp_ip1 UP,RUNNING -> Em.0, Em.1 only                     <- emergency, not IMS
+```
+
+IMS sits on `ipsec0` beside a `TelephonyIPSec` agent, which is an IPsec tunnel to the carrier's ePDG over WiFi. So the observed behaviour is exactly what that predicts: calls and SMS work with WiFi connected and WiFi Calling enabled, and fail with either one off. Raise the cellular bearer and IMS gets a second transport, which is VoLTE.
+
+Not diagnosed, and the obvious explanations are ruled out. **Cellular Data and Data Roaming are both on**, checked in Settings on the device. WiFi being connected is reason for iOS to *prefer* WiFi for traffic, but not reason for the bearer never to be raised at all, and an IMS connection does come up, so CommCenter is willing to activate some data connections and not this one. Whatever stops `Internet` is specific to it.
+
+Also not fixed:
+
 - **Push, and so iMessage and FaceTime.** `apsd: APSSystemTokenInfo no token info found in keychain`. Minting a token needs a real activation record, which needs a SEP-attested key, which is the wall above. Not expected to work without SEP.
 - **SEP and passcode**, unchanged and by design.
-- **SMS**, untested since the voice fix.
 
 ## Validation state
 
 Patches 1 to 3: device-validated 2026-10-09. Modem boots, `BasebandVersion 8.00.00`, SIM `kCTSIMSupportSIMStatusReady`, carrier bundle matched, registered. Calibration unseals on **every** bring-up, not once.
 
-Patches 4 and 5: device-validated 2026-10-10, same device and build. Incoming calls ring and connect, confirmed by the caller, carried on IMS. Reason counts from a live capture with 3721 CommCenter lines in the window as the control: `context is not assigned` 80 to 0, `ActivationStatus failed in DataSettings` 14 to 0, `Default in canActivateWithoutOverrides` 70 to 0, `no IMS reg` present to 0.
+Patches 4 and 5: device-validated 2026-10-10, same device and build. Incoming calls ring and connect, confirmed by the caller, and SMS arrives. Before these patches the log read `IMS APN: false  ims '' QS:kNotConfigured` and calls failed in both directions, so IMS was not registering at all; `canActivateWithoutOverrides` gates every data connection including the IMS one, and opening it is what let IMS come up.
+
+Reason counts from a live capture with 3721 CommCenter lines in the window as the control: `context is not assigned` 80 to 0, `ActivationStatus failed in DataSettings` 14 to 0, `Default in canActivateWithoutOverrides` 70 to 0, `no IMS reg` present to 0.
+
+**Scope, stated precisely, because an earlier revision of this document got it wrong.** These patches deliver calls and SMS over IMS on the WiFi transport. They do not deliver VoLTE, and `VoIP: true` in the log was read as VoLTE when it only ever meant "over IMS". The transport is visible in which interface holds the IMS agent, nowhere else, and here it is always `ipsec0`.
 
 One refusal survives and is correct: `DATA.Connection.Internet.2` is SIM slot two, and slot two is empty.
