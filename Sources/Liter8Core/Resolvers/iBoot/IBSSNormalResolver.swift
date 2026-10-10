@@ -16,7 +16,13 @@ public struct IBSSNormalResolver: Sendable {
     public init() {}
 
     public func resolve(in image: BinaryImage) throws -> [PatchRecord] {
-        try IBSSValidateResolver().resolve(in: image)
+        var records = try IBSSValidateResolver().resolve(in: image)
             + IBSSBootArgsResolver().resolve(in: image)
+        // Opt-in third primitive. Gated so the default normal-boot record set
+        // and every pinned fixture stay byte-identical.
+        if APDemotion.isRequested {
+            records += try IBootProductionStatusResolver().resolve(in: image)
+        }
+        return records
     }
 }

@@ -83,6 +83,25 @@ struct SerialConsoleOption: ParsableArguments {
     }
 }
 
+struct APDemotionOption: ParsableArguments {
+    @Flag(
+        name: .customLong("demote-ap"),
+        help: """
+        DOES NOT BOOT, kept for research only. Makes the device claim a demoted \
+        application processor so libFDR skips its SEP-attested sik check and \
+        baseband calibration can unseal. Measured on n104ap 24B5099f: panics in \
+        early kernel init with an LLC PIO error before the OS version is even \
+        published. Faking one term of a security state the driver stack reads as \
+        a consistent set does not work. See docs/design/BASEBAND_AND_CELLULAR.md.
+        """
+    )
+    var demoteAP = false
+
+    var environment: [String: String] {
+        demoteAP ? [APDemotion.environmentKey: "1"] : [:]
+    }
+}
+
 /// Shared execution path for the prepared actions.
 func runPreparedFirmwareAction(
     _ action: String,
@@ -318,14 +337,18 @@ struct Firmware: ParsableCommand {
         @OptionGroup var common: FirmwareCommonOptions
         @OptionGroup var prepared: FirmwarePreparedOptions
         @OptionGroup var serial: SerialConsoleOption
+        @OptionGroup var demotion: APDemotionOption
 
         func run() throws {
             let resolved = try resolveAPTicket(
                 explicit: ticket, action: "get-boot", workDirectory: common.workDirectoryURL
             )
+            // get-boot builds the normal-boot iBoot and DeviceTree, which is
+            // where both halves of the demotion claim live.
             try runPreparedFirmwareAction(
                 "get-boot", common: common, prepared: prepared,
-                ticket: resolved, environment: serial.environment
+                ticket: resolved,
+                environment: serial.environment.merging(demotion.environment) { _, new in new }
             )
         }
     }

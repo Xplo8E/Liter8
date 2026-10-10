@@ -108,6 +108,7 @@ expect_help "profiles --help works"                  "OVERVIEW" profiles --help
 expect_help "acm-probe --help works"                 "signature-variant" acm-probe --help
 expect_help "fw actions --help works"                "OVERVIEW" fw actions --help
 expect_help "fw make-cfw --help names --serial"      "--serial" fw make-cfw --help
+expect_help "fw get-boot --help names --demote-ap"  "--demote-ap" fw get-boot --help
 expect_help "fw restore-cfw --help names the option" "--idevicerestore" fw restore-cfw --help
 
 print -r -- ""; print -r -- "== help does NOT offer options that do not apply =="
@@ -117,6 +118,8 @@ expect_fail "fw boot rejects --check"            fw boot --check
 expect_fail "fw make-cfw rejects --check"        fw make-cfw --check
 expect_fail "fw boot rejects --idevicerestore"   fw boot --idevicerestore /bin/true
 expect_fail "fw prepare rejects --serial"        fw prepare --serial
+expect_fail "fw make-cfw rejects --demote-ap"    fw make-cfw --demote-ap
+expect_fail "fw boot rejects --demote-ap"        fw boot --demote-ap
 expect_fail "fw prepare rejects --check"         fw prepare --check
 expect_fail "fw boot rejects --ticket"           fw boot --ticket /tmp/t
 expect_fail "fw boot rejects --sshrd-payload"    fw boot --sshrd-payload /tmp/s
