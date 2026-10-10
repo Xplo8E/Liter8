@@ -22,12 +22,26 @@ OUT="$BASE/l8fdr.dylib"
 "$LDID" -v 2>&1 | grep -q "Link Identity Editor" \
     || { echo "[!] ldid at $LDID cannot run here; brew install ldid-procursus" >&2; exit 1; }
 
+# l8ari.cpp rides in the same dylib rather than a second one, because a new
+# dylib would need its own LC_LOAD_WEAK_DYLIB in CommCenter and therefore a
+# liter8 patcher change, while this file is already loaded. It is C++ because
+# Ari::LogConfig's callback takes std::string by value and the ABI has to match
+# libc++ exactly. It is inert unless its own marker exists, so it cannot affect
+# the FDR path it shares a binary with.
+# Compiled per source rather than in one invocation, because -std=c++17 cannot
+# be passed alongside a C file.
 for arch in arm64 arm64e; do
-    xcrun -sdk iphoneos clang -arch "$arch" -miphoneos-version-min=15.0 \
-        -isysroot "$SDK" -dynamiclib -O2 -Wall -Wextra -Werror \
+    COMMON="-arch $arch -miphoneos-version-min=15.0 -isysroot $SDK -O2 -Wall -Wextra -Werror"
+    # shellcheck disable=SC2086
+    xcrun -sdk iphoneos clang $COMMON -c -o "$BASE/l8fdr_$arch.o" "$BASE/l8fdr.c"
+    # shellcheck disable=SC2086
+    xcrun -sdk iphoneos clang++ $COMMON -std=c++17 -c -o "$BASE/l8ari_$arch.o" "$BASE/l8ari.cpp"
+    xcrun -sdk iphoneos clang++ -arch "$arch" -miphoneos-version-min=15.0 \
+        -isysroot "$SDK" -dynamiclib \
         -Wl,-not_for_dyld_shared_cache -install_name /usr/lib/l8fdr.dylib \
         -framework CoreFoundation \
-        -o "$BASE/l8fdr_$arch.dylib" "$BASE/l8fdr.c"
+        -o "$BASE/l8fdr_$arch.dylib" "$BASE/l8fdr_$arch.o" "$BASE/l8ari_$arch.o"
+    rm -f "$BASE/l8fdr_$arch.o" "$BASE/l8ari_$arch.o"
 done
 
 lipo -create "$BASE/l8fdr_arm64.dylib" "$BASE/l8fdr_arm64e.dylib" -output "$OUT"
@@ -56,6 +70,13 @@ strings -a "$OUT" | grep -q '^CommCenter$' \
     || { echo "[!] the CommCenter process guard is absent" >&2; exit 1; }
 strings -a "$OUT" | grep -q '^/usr/lib/\.liter8-fdr-sik-bypass$' \
     || { echo "[!] the FDR marker gate is absent" >&2; exit 1; }
+# The ARI tracer must stay gated on its own Data-volume marker, and must still
+# be reaching Ari::LogConfig by its exact mangled name. A rename in a future
+# build would otherwise fail silently at dlsym and look like "no ARI traffic".
+strings -a "$OUT" | grep -qx '/var/wireless/Library/Preferences' \
+    || { echo "[!] the ARI candidate directory list is absent" >&2; exit 1; }
+strings -a "$OUT" | grep -q '^_ZN3Ari9LogConfigEjPFvjPKcEPFvi' \
+    || { echo "[!] the Ari::LogConfig symbol is absent" >&2; exit 1; }
 [ -z "$("$LDID" -e "$OUT")" ] \
     || { echo "[!] l8fdr unexpectedly carries entitlements" >&2; exit 1; }
 
