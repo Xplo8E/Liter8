@@ -83,7 +83,7 @@ extension UserlandResolverTests {
         let records = try CommCenterDataActivationResolver()
             .resolve(in: BinaryImage(contentsOf: commcenter))
 
-        XCTAssertEqual(records.count, 2)
+        XCTAssertEqual(records.count, 3)
 
         // The outer gate, in canActivateWithoutOverrides. B.NE in, and an
         // unconditional B to that same branch's own target out. Asserting the
@@ -107,5 +107,19 @@ extension UserlandResolverTests {
         XCTAssertEqual(activation.component, "CommCenter")
         XCTAssertEqual(activation.originalWord, 0x3600_0460)
         XCTAssertEqual(activation.replacementWord, ARM64.nop)
+
+        // The third gate, in activateDataSettings. It asks the same vtable slot
+        // as the second, which is why patching the second alone left the
+        // Internet bearer unraised, so the two must stay distinct records at
+        // distinct offsets. Asserting both offsets is what would catch the
+        // resolver collapsing onto one site.
+        let basebandState = try XCTUnwrap(
+            records.first { $0.id == "commcenter.data-settings.activate-baseband-state" }
+        )
+        XCTAssertEqual(basebandState.offset, 0x9D7CD4)
+        XCTAssertEqual(basebandState.component, "CommCenter")
+        XCTAssertEqual(basebandState.originalWord, 0x3600_03C0)
+        XCTAssertEqual(basebandState.replacementWord, ARM64.nop)
+        XCTAssertNotEqual(basebandState.offset, activation.offset)
     }
 }

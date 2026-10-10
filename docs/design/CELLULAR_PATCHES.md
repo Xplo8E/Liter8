@@ -1,6 +1,6 @@
 # How the cellular patches work
 
-Reference for the five changes that take this CFW from "no modem at all" to working phone calls and SMS. Read the scope before the detail: calls come up over IMS carried by **WiFi Calling**, not over VoLTE, because the cellular data bearer is still not raised. See "What these do not fix". [BASEBAND_AND_CELLULAR.md](BASEBAND_AND_CELLULAR.md) is the investigation: how each problem was found, what was tried and what failed. This file is the other half, for someone reviewing or re-deriving the patches: what each one targets, how it is located, what it changes, why that is safe, and how to check it on a device.
+Reference for the six changes that take this CFW from "no modem at all" to working phone calls and SMS. Read the scope before the detail: calls come up over IMS carried by **WiFi Calling**, not over VoLTE, because the cellular data bearer is still not raised. See "What these do not fix". [BASEBAND_AND_CELLULAR.md](BASEBAND_AND_CELLULAR.md) is the investigation: how each problem was found, what was tried and what failed. This file is the other half, for someone reviewing or re-deriving the patches: what each one targets, how it is located, what it changes, why that is safe, and how to check it on a device.
 
 Device throughout: iPhone 11, `iPhone12,1` / `n104ap`, iOS 27.2 `24B5099f`. Offsets are quoted for that build only, and they are **outputs**. Every one is rediscovered from the binary on each run; none is an input to anything.
 
@@ -27,8 +27,9 @@ restore, `sshrd_provision.sh` and boot gets you a working modem, and calls over 
 | 3 | `l8fdr.dylib` + `CommCenter.load-l8fdr` | `CommCenter` | answers libFDR's three demotion-state queries so the sealed calibration unseals |
 | 4 | `commcenter.data-connection.context-index` | `CommCenter` | stops `canActivateWithoutOverrides` refusing before it evaluates |
 | 5 | `commcenter.data-settings.activation-status` | `CommCenter` | stops `canActivateDataSettings` refusing on activation status |
+| 6 | `commcenter.data-settings.activate-baseband-state` | `CommCenter` | stops `activateDataSettings` refusing the activation it was just told it could do |
 
-Patch 1 reads backwards and is worth stating plainly: **there was never a patch to add for the baseband, only a patch to stop applying.** Patches 4 and 5 live in one resolver, `CommCenterDataActivationResolver`, because they are two gates on one path.
+Patch 1 reads backwards and is worth stating plainly: **there was never a patch to add for the baseband, only a patch to stop applying.** Patches 4, 5 and 6 live in one resolver, `CommCenterDataActivationResolver`, because they are three gates on one path, and 5 and 6 are the *same check at two call sites*, which is the trap described below.
 
 ---
 
@@ -162,9 +163,9 @@ mobileactivationd: SecKeyCreateRandomKey failed: -25300 <- CryptoTokenKit -7
 
 `CryptoTokenKit -7` is `TKErrorCodeTokenNotFound`: ctkd has no Secure Enclave token registered. The token id in that handle is `*` and `da39a3ee5e6b4b0d` is SHA-1 of the empty string, so it was computed over nothing. A control test (software key, then three Secure Enclave variants) shows the software path works and every Secure Enclave path fails identically, so this is neither entitlements nor that one daemon. The consumer gets patched instead.
 
-### The two gates are in series
+### Three gates in series, and each one hid the next
 
-**This is the part worth reading before touching either.** Each deploy costs a DFU cycle.
+**This is the part worth reading before touching any of them.** Each deploy costs a DFU cycle, and this path cost three because each gate was only visible once the one in front of it was open.
 
 ```
 canActivateWithoutOverrides                                 0x92340
@@ -175,9 +176,18 @@ canActivateWithoutOverrides                                 0x92340
         reason = "context is not assigned"
         return                                              <-- gate 4, OUTER
     }
-    settings = this->vtable[0x90](1)  -> canActivateDataSettings   <-- gate 5, INNER
-    settings = this->vtable[0x90](0)  -> canActivateDataSettings   <-- gate 5, INNER
+    settings = this->vtable[0x90](1)  -> canActivateDataSettings   <-- gate 5
+    settings = this->vtable[0x90](0)  -> canActivateDataSettings   <-- gate 5
+        blraa vtable[0x4c0] ; tbz w0,#0                            <-- gate 5 site
+
+... then, separately, when the activation is actually performed:
+
+activateDataSettings                                        0x9d7b20
+    blraa vtable[0x4c0] ; tbz w0,#0                                <-- gate 6
+    "can not activate with current baseband activated state"
 ```
+
+Gates 5 and 6 query the **same vtable slot**. Gate 5 is in the function that answers "may I?", gate 6 is in the function that does the work and asks again. Patching only the asker gets you a published network agent and no bearer.
 
 Fix only the inner gate and **nothing observable changes**, because the outer one returns first. That happened: the inner patch was correct, deployed and verified in the binary, and the device behaved identically. The reason counts said so the whole time — the outer reason fired **80** times per boot, the inner one **14**.
 
@@ -207,7 +217,7 @@ General rule: **NOP a branch when the branch causes the bad path; retarget it wh
 
 ### Gate 5: `commcenter.data-settings.activation-status`
 
-The second of two gates inside `canActivateDataSettings`:
+The second of the two gates inside `canActivateDataSettings`:
 
 ```c
 if (a1->fFatalActivationBlocker[a2] == 1) { code = 67; ... }   // passes
@@ -227,9 +237,48 @@ if ((vtable[1216](a1, a2) & 1) == 0)      { code = -3; ... }   // fails here
 
 Here a `NOP` *is* right, because this branch is what enters the failure block.
 
+### Gate 6: `commcenter.data-settings.activate-baseband-state`
+
+**The same check as gate 5, at a second call site, and the reason gate 5 alone was not enough.** This is the trap worth carrying away from this whole exercise.
+
+`canActivateDataSettings` answers "may this be activated". With gates 4 and 5 patched it answers yes, and the log says so: `prepareToReactivate: can reactivate: t(OK )`. But `activateDataSettings`, the function that *performs* the activation, re-asks the identical question before it will touch the modem:
+
+```
+canActivateDataSettings  0x936e8   blraa vtable[0x4c0] ; tbz w0,#0
+activateDataSettings     0x9d7cd4  blraa vtable[0x4c0] ; tbz w0,#0
+```
+
+Same virtual slot, `0x4C0` = 1216, same instruction. So with only gate 5 fixed the connection gets as far as `kActivating` and then falls straight back:
+
+```
+activateDataSettings: requested for kDataContextBB, family 0x3, currentMode=kLTE
+activateDataSettings: can not activate with current baseband activated state
+activateDataSettings: activate service: kDataConnectionInternet, ct kDataContextBB, result -1
+handleActivationReturn_Sync: result = -1; err = -3
+handleDataActivated: failed to activate
+detachActivator: detaching due to connection is down
+```
+
+which publishes an `Internet` network agent whose bearer never rises. `pdp_ip0` stays at `flags=8010` with no address, and because IMS then has no cellular transport it registers over WiFi instead, which is why calls arrive only with WiFi Calling enabled. One unpatched branch, and the visible symptom is "calls need WiFi".
+
+```
+0x9d7cd0  d73f0910  blraa x8, x16         ; the same ActivationStatus virtual
+0x9d7cd4  360003c0  tbz   w0, #0, <fail>  ; PATCH THIS -> nop
+```
+
+**Change:**
+
+```
+0x9d7cd4  360003c0  ->  1f2003d5
+```
+
+**How this one was found**, because it is a method rather than luck. `idevicesyslog archive` pulls a logarchive off the device, which reads the **persisted** log rather than a live stream, so decisions made once during bring-up are recoverable after the fact. That produced 1558 `setup config:` lines and the `activateDataSettings:` trace above, none of which a live capture had ever caught. The lesson generalises: when a decision happens once and you keep missing it, stop streaming and pull the archive.
+
+**Not device-validated at the time of writing.** The shape matching gate 5 exactly is strong evidence, not proof that the bearer rises once it is patched: the virtual may be answering false for a reason the activation itself genuinely needs.
+
 ---
 
-## How both CommCenter sites are located
+## How the three CommCenter sites are located
 
 No offsets are inputs. `CommCenterDataActivationResolver` anchors on structure.
 
@@ -251,6 +300,12 @@ CommCenter keeps its ten temporary-failure reason strings in one contiguous run,
 **Gate 4** requires: the unique `"context is not assigned"` literal, its unique ADRP+ADD xref, then `MOVN W8,#2` one instruction back and `CMN W8,#2` three back, then that the branch between them is a `B.NE`. Requiring the `CMN` is what makes it unambiguous: ten reason strings each have one xref, but only this one is reached by a comparison against `-2`. The replacement displacement is computed from the branch's own decoded target, so it cannot drift.
 
 **Gate 5** requires: the unique `"ActivationStatus failed in DataSettings"` literal, its unique ADRP+ADD xref, the `MOVN W8,#2` that begins the failure block, and then the single `TBZ W0,#0` anywhere in an executable range that targets that block **and** is immediately preceded by a `BLRAA`. The `BLRAA` requirement is what separates this branch from the unconditional jump the FatalActivationBlocker path uses to reach the same block's shared tail.
+
+**Gate 6** requires: the unique `"activateDataSettings: can not activate with current baseband activated state"` literal, its unique ADRP+ADD xref, and then the single `TBZ W0,#0` that branches **backwards** into the block containing that reference, is immediately preceded by a `BLRAA`, and has `MOV X17,#0x4C0` within ten instructions in front of that call.
+
+The slot constant is the load-bearing part of that signature. Gates 5 and 6 interrogate the same virtual, so without pinning `0x4C0` the finder would match whichever authenticated call happened to sit nearest the string. With it, the record is tied to vtable slot 1216 specifically, which is the thing the patch is actually about.
+
+Note the anchor is the **whole** stored literal, prefix included. `"can not activate with current baseband activated state"` on its own is a substring of it and is not nul-terminated, so it is not findable as a literal at all. That cost a wrong turn worth recording: the first attempt anchored on the substring, resolved zero xrefs, and looked like the string was referenced through some exotic addressing mode.
 
 Two ARM64 details that matter when reading this:
 

@@ -114,6 +114,11 @@ public struct CommCenterDataActivationResolver: Sendable {
     public static let name = "commcenter-data-activation"
     private static let anchor = "ActivationStatus failed in DataSettings"
     private static let contextAnchor = "context is not assigned"
+    /// The whole stored literal, including the `activateDataSettings: ` prefix
+    /// that every log line in that function shares. The substring on its own
+    /// is not nul-terminated and so is not findable as a literal.
+    private static let basebandStateAnchor =
+        "activateDataSettings: can not activate with current baseband activated state"
 
     /// `MOVN W8, #2`, i.e. `MOV W8, #-3`: the status stored by the failure
     /// block, and therefore its first instruction.
@@ -133,6 +138,32 @@ public struct CommCenterDataActivationResolver: Sendable {
     /// letting an unrelated constant elsewhere in the function match.
     private static let failureBlockSearchWords = 6
 
+    /// `TBZ W0, #0, <label>`: 32-bit form, bit 0, Rt = W0. The displacement is
+    /// masked out so only the tested register and bit are compared.
+    private static let testBranchMask: UInt32 = 0xFFF8_001F
+    private static let testBranchW0Bit0: UInt32 = 0x3600_0000
+
+    /// `BLRAA Xn, Xm`, the authenticated indirect call every one of these gates
+    /// branches on the result of.
+    private static let blraaMask: UInt32 = 0xFFFF_FC00
+    private static let blraaOpcode: UInt32 = 0xD73F_0800
+
+    /// `MOV X17, #0x4C0`, the vtable byte offset materialised immediately before
+    /// the authenticated call. `0x4C0` is 1216, the `ActivationStatus` virtual,
+    /// and pinning it is what ties the third gate to the same slot as the
+    /// second rather than to any nearby virtual call.
+    private static let movX17ActivationSlot: UInt32 = 0xD280_9811
+
+    /// How far back from the `BLRAA` the slot constant may sit. It is five
+    /// instructions in `activateDataSettings` and seven in
+    /// `canActivateDataSettings`, the difference being one extra argument move.
+    private static let slotSearchWords = 10
+
+    /// How far the `TBZ` may jump backwards to reach the block that logs the
+    /// refusal. The string reference is eight instructions into that block on
+    /// 24B5099f.
+    private static let refusalBlockSearchWords = 24
+
     public init() {}
 
     public func resolve(in image: BinaryImage) throws -> [PatchRecord] {
@@ -140,7 +171,124 @@ public struct CommCenterDataActivationResolver: Sendable {
         return try [
             resolveContextGate(in: image, layout: layout),
             resolveActivationStatusGate(in: image, layout: layout),
+            resolveActivateBasebandStateGate(in: image, layout: layout),
         ]
+    }
+
+    /// The third gate, in `activateDataSettings`, which asks the **same**
+    /// virtual as the second and is the reason fixing the second alone was not
+    /// enough.
+    ///
+    /// `canActivateDataSettings` answers "may this be activated". With gates one
+    /// and two patched it answers yes, and the log shows it:
+    ///
+    ///     prepareToReactivate: can reactivate: t(OK )
+    ///
+    /// `activateDataSettings` then does the activation, and re-asks the
+    /// identical question before touching the modem:
+    ///
+    ///     canActivateDataSettings  0x936e8   blraa vtable[0x4c0]; tbz w0,#0
+    ///     activateDataSettings     0x9d7cd4  blraa vtable[0x4c0]; tbz w0,#0
+    ///
+    /// so the connection reaches `kActivating`, fails, and falls back:
+    ///
+    ///     activateDataSettings: can not activate with current baseband activated state
+    ///     activateDataSettings: activate service: kDataConnectionInternet, ct kDataContextBB, result -1
+    ///     handleActivationReturn_Sync: result = -1; err = -3
+    ///     handleDataActivated: failed to activate
+    ///
+    /// which publishes an `Internet` network agent that never raises its
+    /// bearer. `pdp_ip0` sits at `flags=8010` with no address, and because IMS
+    /// has no cellular transport it registers over WiFi instead, which is why
+    /// calls arrive only with WiFi Calling on.
+    ///
+    /// Anchored on the refusal string, which is unique, then on the `TBZ W0,#0`
+    /// that jumps *backwards* into the block containing that string, which must
+    /// be preceded by a `BLRAA` and have `MOV X17,#0x4C0` in front of that. The
+    /// slot constant is the important one: it pins this to vtable slot 1216 and
+    /// so to the same `ActivationStatus` virtual as gate two, rather than to
+    /// whichever virtual call happens to sit nearest the string.
+    private func resolveActivateBasebandStateGate(
+        in image: BinaryImage,
+        layout: MachOLayout
+    ) throws -> PatchRecord {
+        let anchorOffset = try uniqueLiteral(Self.basebandStateAnchor, in: image)
+        let reference = try uniqueReference(
+            toFileOffset: anchorOffset,
+            layout: layout,
+            describedAs: "\(Self.name) baseband-state message xref"
+        )
+        guard let referenceAddress = layout.virtualAddress(forFileOffset: reference.adrpOffset) else {
+            throw PatchfinderError.noCandidate("\(Self.name) baseband-state reference address")
+        }
+
+        var candidates: [UInt64] = []
+        for range in layout.executableFileRanges {
+            var offset = (range.lowerBound + 3) & ~UInt64(3)
+            while offset + 4 <= range.upperBound {
+                defer { offset += 4 }
+                let branch = try image.readUInt32(at: offset)
+                guard branch & Self.testBranchMask == Self.testBranchW0Bit0, offset >= 4 else {
+                    continue
+                }
+                guard let address = layout.virtualAddress(forFileOffset: offset),
+                      let target = ARM64.testBranchTarget(instruction: branch, at: address)
+                else { continue }
+
+                // The refusal block is behind the branch and contains the
+                // string reference, so the jump is backwards and short.
+                guard target <= referenceAddress,
+                      referenceAddress - target <= UInt64(Self.refusalBlockSearchWords * 4)
+                else { continue }
+
+                guard try image.readUInt32(at: offset - 4) & Self.blraaMask == Self.blraaOpcode
+                else { continue }
+
+                guard try Self.materialisesActivationSlot(before: offset - 4, in: image) else {
+                    continue
+                }
+                candidates.append(offset)
+            }
+        }
+
+        guard let patchOffset = candidates.only else {
+            if candidates.isEmpty {
+                throw PatchfinderError.noCandidate("\(Self.name) baseband-state gate")
+            }
+            throw PatchfinderError.ambiguousCandidate(
+                "\(Self.name) baseband-state gate",
+                offsets: candidates
+            )
+        }
+
+        return PatchRecord(
+            id: "commcenter.data-settings.activate-baseband-state",
+            component: "CommCenter",
+            offset: patchOffset,
+            original: try image.readUInt32(at: patchOffset),
+            replacement: ARM64.nop,
+            summary: "Stop activateDataSettings refusing the activation it was just told it could do",
+            evidence: [
+                "unique \"\(Self.basebandStateAnchor)\" literal at \(anchorOffset.hex)",
+                "unique ADRP+ADD reference at \(reference.adrpOffset.hex)",
+                "single TBZ W0,#0 branching back into that block, preceded by BLRAA",
+                "MOV X17,#0x4C0 pins it to vtable slot 1216, the same virtual as gate two",
+            ]
+        )
+    }
+
+    /// Whether `MOV X17, #0x4C0` sits within the search window ending at
+    /// `callOffset`, which is the vtable slot the authenticated call dispatches.
+    private static func materialisesActivationSlot(
+        before callOffset: UInt64,
+        in image: BinaryImage
+    ) throws -> Bool {
+        for step in 1...slotSearchWords {
+            let candidate = callOffset - UInt64(step * 4)
+            guard candidate + 4 <= callOffset else { return false }
+            if try image.readUInt32(at: candidate) == movX17ActivationSlot { return true }
+        }
+        return false
     }
 
     /// The outer gate: stop `canActivateWithoutOverrides` returning before it
@@ -244,7 +392,8 @@ public struct CommCenterDataActivationResolver: Sendable {
                 let branch = try image.readUInt32(at: offset)
 
                 // TBZ W0, #0, <target>: 32-bit form, bit 0, Rt = W0.
-                guard branch & 0xFFF8_001F == 0x3600_0000, offset >= 4 else { continue }
+                guard branch & Self.testBranchMask == Self.testBranchW0Bit0, offset >= 4
+                else { continue }
                 guard let address = layout.virtualAddress(forFileOffset: offset),
                       ARM64.testBranchTarget(instruction: branch, at: address) == failureAddress
                 else { continue }
@@ -252,7 +401,7 @@ public struct CommCenterDataActivationResolver: Sendable {
                 // The gate is the branch on the virtual call's result, so the
                 // preceding instruction must be an authenticated indirect call.
                 let previous = try image.readUInt32(at: offset - 4)
-                guard previous & 0xFFFF_FC00 == 0xD73F_0800 else { continue }
+                guard previous & Self.blraaMask == Self.blraaOpcode else { continue }
 
                 candidates.append(offset)
             }
