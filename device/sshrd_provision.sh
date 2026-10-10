@@ -35,7 +35,7 @@ usage() {
     echo "  setup    patch Setup.app to skip unavailable first-run panes"
     echo "  userland patch and re-sign the SEP/activation daemons"
     echo "  pairing  install lockdownd, coreauthd companion guard and RemoteXPC repair"
-    echo "  cellular let CommCenter unseal sealed baseband calibration from FDR"
+    echo "  cellular unseal baseband calibration and stop CommCenter refusing a data context"
     echo "  screentime make Setup's unavailable ScreenTime requests fail fast"
     echo "  injection install launchd hook plus icon grant, disabled for first boot"
     echo "  cache    deploy the launchd service cache (dropbear + jbboot + DDI watcher + watchdogd mitigation)"
@@ -549,7 +549,12 @@ fi
 # Baseband calibration is sealed to an AP identity key this device cannot
 # reproduce, so CommCenter cannot unseal it from FactoryData and the modem comes
 # up without calibration. The dylib reaches libFDR's own "ignore sik
-# verification" path inside CommCenter only. See
+# verification" path inside CommCenter only.
+#
+# CommCenter also gets a semantic instruction patch so canActivateDataSettings
+# stops refusing a cellular data context because the device has no real
+# activation record, which is what leaves IMS without a PDN and voice without
+# VoLTE. Both are applied by userland_fixups.py in one re-sign. See
 # docs/design/BASEBAND_AND_CELLULAR.md.
 if wants cellular && [ "$CHECK_ONLY" = 0 ]; then
     say "baseband calibration FDR bypass"
@@ -1045,6 +1050,8 @@ verify_userland_patch ctkd \
     /mnt1/System/Library/Frameworks/CryptoTokenKit.framework/ctkd
 verify_userland_patch lockdownd /mnt1/usr/libexec/lockdownd
 verify_userland_patch remotepairingdeviced /mnt1/usr/libexec/remotepairingdeviced
+verify_userland_patch CommCenter \
+    /mnt1/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter
 
 if [ -f payload/l8pair.dylib ]; then
     pairing_want=$(shasum -a 256 payload/l8pair.dylib | awk '{print $1}')

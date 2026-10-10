@@ -26,7 +26,7 @@ COMPONENTS AND PLANS:
               credential-manager, sandbox, valeria, boot, boot-public,
               diagnostic
   txm         restore, boot
-  userland    restored-fdr, asr, coreauthd, ctkd, mobileactivationd
+  userland    restored-fdr, asr, coreauthd, ctkd, mobileactivationd, commcenter
   devicetree  restore, normal
 """
 

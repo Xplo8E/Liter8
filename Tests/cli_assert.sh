@@ -188,6 +188,12 @@ expect_no_match "--boot-args accepts a bare -v" "Missing value" \
 expect_no_match "apply --boot-args leading dash" "Missing value" \
     apply iboot ibss-bootargs /dev/null /tmp/liter8-assert-out.bin --boot-args "-v x"
 
+print -r -- ""; print -r -- "== the CommCenter data-activation plan is wired up =="
+# The plan has to be listed, or provisioning fails late with "unknown plan"
+# after an SSHRD trip has already been spent.
+expect_contains "userland lists commcenter" "commcenter" resolve userland nope /dev/null
+expect_fail "commcenter rejects a non-Mach-O" resolve userland commcenter /etc/hosts
+
 print -r -- ""; print -r -- "== errors name the valid values =="
 # Validation happens before any file is read, so a placeholder path is fine here.
 expect_contains "unknown plan lists plans"          "Plans:"      resolve txm nope /dev/null

@@ -16,12 +16,27 @@ And it's iPhone 11 only, `n104ap`. I don't own another A13 device so that's all 
 
 Normal boot to the home screen, root SSH, apt and Sileo, TrollStore, apps launch.
 
+Cellular, with no flags needed. SIM ready, carrier bundle matched,
+registered on the network. The modem gets its firmware from the restore, and
+`l8fdr.dylib` lets CommCenter unseal the baseband calibration whose FDR seal was made
+against an AP identity key this device can no longer reproduce.
+
+Phone calls, over VoLTE. That took two more patches on top of the calibration fix,
+because CommCenter refuses a data context on a device whose activation was
+short-circuited rather than performed, and without a data context there is no IMS
+bearer, so no VoLTE, so voice falls back to a circuit-switched path the operator no
+longer runs. [the whole chain, measured](docs/design/BASEBAND_AND_CELLULAR.md), and
+[what each patch actually does](docs/design/CELLULAR_PATCHES.md)
+
 ## What doesn't
 
 - SEP
 - passcode
-- cellular
-- Apple services
+- cellular *data*. The `Internet` network agent is published and no longer refused, but
+  the bearer is not raised. WiFi was up the whole time it was tested, which is reason
+  enough on its own, so treat this as unfinished rather than diagnosed
+- Apple services. Push has no token, because minting one needs a real activation record,
+  which needs a SEP-attested key. Measured, not assumed
 - xTweak injection. It injects, but it's nowhere near as solid as vphone
 - 11 Pro and Pro Max. profiles exist but no device to test on
 
@@ -231,6 +246,8 @@ state. The failure chains and fixes are written up in the docs.
 - [Bootstrap and provisioning status](docs/design/BOOTSTRAP_JB_STATUS.md)
 - [Normal boot handoff](docs/design/NORMAL_BOOT_HANDOFF.md)
 - [Debugging platform daemons](docs/design/DEBUGGING_PLATFORM_DAEMONS.md)
+- [Baseband and cellular](docs/design/BASEBAND_AND_CELLULAR.md) — how each problem was found, and what failed
+- [How the cellular patches work](docs/design/CELLULAR_PATCHES.md) — what each patch targets, changes and verifies
 - [Performance backlog](docs/BACKLOG.md)
 
 ## Contributing
