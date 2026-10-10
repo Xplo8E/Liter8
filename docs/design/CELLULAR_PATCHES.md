@@ -1,6 +1,6 @@
 # How the cellular patches work
 
-Reference for the six changes that take this CFW from "no modem at all" to working phone calls and SMS. Read the scope before the detail: calls come up over IMS carried by **WiFi Calling**, not over VoLTE, because the cellular data bearer is still not raised. See "What these do not fix". [BASEBAND_AND_CELLULAR.md](BASEBAND_AND_CELLULAR.md) is the investigation: how each problem was found, what was tried and what failed. This file is the other half, for someone reviewing or re-deriving the patches: what each one targets, how it is located, what it changes, why that is safe, and how to check it on a device.
+Reference for the six changes that take this CFW from "no modem at all" to working phone calls and SMS. Read the scope before the detail: calls come up over IMS carried by **WiFi Calling**, not over VoLTE. The bearer *is* raised, so that is not the reason; IMS-over-cellular is never attempted, because `isQualifiedToRegister` fails on a baseband provisioned state that patching cannot produce. See "What these do not fix". [BASEBAND_AND_CELLULAR.md](BASEBAND_AND_CELLULAR.md) is the investigation: how each problem was found, what was tried and what failed. This file is the other half, for someone reviewing or re-deriving the patches: what each one targets, how it is located, what it changes, why that is safe, and how to check it on a device.
 
 Device throughout: iPhone 11, `iPhone12,1` / `n104ap`, iOS 27.2 `24B5099f`. Offsets are quoted for that build only, and they are **outputs**. Every one is rediscovered from the binary on each run; none is an input to anything.
 
@@ -11,14 +11,13 @@ Cellular is not one feature. These are independent, they fail independently, and
 1. **The modem has firmware.** The AP pushes it on every cold boot; there is no usable copy in the modem's own flash. Patch 1.
 2. **The modem has calibration.** Per-unit RF trim, sealed in FactoryData against an identity this device can no longer reproduce. Patches 2 and 3.
 3. **CommCenter will allocate a data context.** Gated on an activation record this CFW does not have. Patches 4 and 5.
-4. **IMS registers.** Follows from 3. LTE has no circuit-switched voice, so a call has to be IP. IMS will take either transport: a cellular bearer (VoLTE) or an IPsec tunnel to the carrier over WiFi (VoWiFi, "WiFi Calling"). On this device only the second one comes up, so patches 4 and 5 get you calls, and they need WiFi.
+4. **IMS registers.** Follows from 3. LTE has no circuit-switched voice, so a call has to be IP. IMS will take either transport: a cellular bearer (VoLTE) or an IPsec tunnel to the carrier over WiFi (VoWiFi, "WiFi Calling"). On this device only the second one comes up, so patches 4 and 5 get you calls, and they need WiFi. The cellular transport is gated separately and is not reachable by patching: see "What these do not fix".
 
 Fix 1 and the modem boots but has no calibration. Fix 2 and it registers but cannot call. Fix 3 and calls work. Nothing about the earlier symptoms tells you the later problems are there, which is why this took three rounds.
 
 ## The inventory
 
-All five apply by default. There are no cellular flags: a plain `fw make-cfw`,
-restore, `sshrd_provision.sh` and boot gets you a working modem, and calls over WiFi Calling.
+All five apply by default. There are no cellular flags: a plain `fw make-cfw`, restore, `sshrd_provision.sh` and boot gets you a working modem, and calls over WiFi Calling.
 
 | # | record / artifact | component | what it does |
 |---|---|---|---|
@@ -274,7 +273,9 @@ which publishes an `Internet` network agent whose bearer never rises. `pdp_ip0` 
 
 **How this one was found**, because it is a method rather than luck. `idevicesyslog archive` pulls a logarchive off the device, which reads the **persisted** log rather than a live stream, so decisions made once during bring-up are recoverable after the fact. That produced 1558 `setup config:` lines and the `activateDataSettings:` trace above, none of which a live capture had ever caught. The lesson generalises: when a decision happens once and you keep missing it, stop streaming and pull the archive.
 
-**Not device-validated at the time of writing.** The shape matching gate 5 exactly is strong evidence, not proof that the bearer rises once it is patched: the virtual may be answering false for a reason the activation itself genuinely needs.
+**Device-validated 2026-10-10, and the result is partial.** The refusal is gone, 0 occurrences against 59077 CommCenter lines, and the bearer now *activates* where it never did before: `pdp_ip0` comes up `UP,RUNNING` with an IPv4 address and takes the default route, with WiFi off.
+
+It does not carry traffic. The interface counters stay flat across repeated samples, only a link-local IPv6 is assigned with no IPv6 default route, and the path is marked `constrained`. So gate 6 was genuinely the blocker for *activation*, and activation is not the whole of cellular data. Do not read "the bearer came up" as "data works": those are two claims and only the first is supported here. The first revision of this paragraph made exactly that mistake, off a cumulative byte counter that included context setup.
 
 ---
 
@@ -394,24 +395,145 @@ Each patch has its own handle, in increasing cost:
 
 ## What these do not fix
 
-**Cellular data, and VoLTE with it. These are one problem with two symptoms, and it is the open one.**
+**Cellular data carrying traffic, and VoLTE. Both still open, and they are no longer the same problem.**
 
-The `Internet` agent is published on `pdp_ip0` and no longer refused, but its bearer is never raised: `flags=8010` rather than `UP,RUNNING`, no inet address on any `pdp_ip*`, and no cellular route in the table at all. Only `en0` has one.
+Gate 6 fixed bearer *activation*. `pdp_ip0` now comes up `UP,RUNNING` with an IPv4 address and the default route, with WiFi off. What it does not do is pass data: the interface counters stay flat across repeated samples, only a link-local IPv6 is assigned with no IPv6 default route, and the path is `constrained`. DNS, IPv4 and IPv6 are all present on the path and link quality reads good, so the local side is configured and the session is not carrying.
 
-That is also why calls need WiFi Calling. IMS will take either transport, and with no cellular bearer there is only one left:
+A later reading, taken with WiFi **on** at three hours uptime, is better than that and is recorded here because it narrows the problem:
 
 ```
-ipsec0  UP,POINTOPOINT,RUNNING
-        agent domain:TelephonyIPSec type:TelephonyIPSec  "CommCenter: TelephonyIPSec"
-        agent domain:Cellular       type:IMS             "CommCenter: IMS.0"
-pdp_ip0 POINTOPOINT,MULTICAST                             <- published, never raised
-        agent domain:Cellular type:Internet flags:0x59
-pdp_ip1 UP,RUNNING -> Em.0, Em.1 only                     <- emergency, not IMS
+pdp_ip0: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1450
+    inet  100.75.137.63 --> 100.75.137.63 netmask 0xffffffff
+    inet6 2401:4900:16b8:5d5:189e:28d7:34b8:9e2e prefixlen 64 autoconf secured
+    inet6 2401:4900:16b8:5d5:1d7:88e3:b309:58f0  prefixlen 64 autoconf temporary
+    agent domain:Cellular type:Internet flags:0x5b desc:"CommCenter: Internet.0"
+    link quality: 100 (good)   link rate: 52.43 Mbps
 ```
 
-IMS sits on `ipsec0` beside a `TelephonyIPSec` agent, which is an IPsec tunnel to the carrier's ePDG over WiFi. So the observed behaviour is exactly what that predicts: calls and SMS work with WiFi connected and WiFi Calling enabled, and fail with either one off. Raise the cellular bearer and IMS gets a second transport, which is VoLTE.
+Two **global** IPv6 addresses now exist where the earlier reading had only a link-local. `2401:4900::/32` is the carrier's own allocation, and an `autoconf` address is only installed after a Router Advertisement arrives *on that interface*, so packets from the carrier's PGW had reached the bearer and been processed at some point.
 
-Not diagnosed, and the obvious explanations are ruled out. **Cellular Data and Data Roaming are both on**, checked in Settings on the device. WiFi being connected is reason for iOS to *prefer* WiFi for traffic, but not reason for the bearer never to be raised at all, and an IMS connection does come up, so CommCenter is willing to activate some data connections and not this one. Whatever stops `Internet` is specific to it.
+**Settled the same day, with WiFi off and a round trip rather than a counter.** The reason this had stayed open was that the CFW ships no traffic generator: `curl`, `nc`, `wget`, `ping`, `ping6`, `python3`, `dig`, and also `scutil`, `traceroute`, `openssl` and `awk` are all absent, so no bound-interface request could be issued. A small one was written for it, and the answer is unambiguous:
+
+```
+[*] probing via pdp_ip0 (index 2), 6s deadline per probe
+    ICMP echo    -> 8.8.8.8         FAIL  no reply in 6s
+    ICMP echo    -> 1.1.1.1         FAIL  no reply in 6s
+    UDP  DNS/53  -> 8.8.8.8         FAIL  no reply in 6s
+    UDP  DNS/53  -> 1.1.1.1         FAIL  no reply in 6s
+    TCP  443     -> 1.1.1.1         FAIL  no SYN-ACK in 6s
+    TCP  443     -> 8.8.8.8         FAIL  no SYN-ACK in 6s
+    TCP  80      -> 17.253.144.10   FAIL  no SYN-ACK in 6s
+```
+
+Each probe is pinned with `IP_BOUND_IF`, so none of those can be satisfied by another path. The counters then say which direction is broken: `Ipkts` sat at exactly 977 for 34 minutes and five probe runs while `Opkts` rose by 1221, with `Ierrs` and `Oerrs` at 0. The bearer is **strictly outbound**. This is the one place where a counter is legitimate evidence here, because the claim is "this value never changes", which two samples can support, unlike a rate.
+
+**And the routing-preference theory is dead.** A previous revision of this paragraph noted that `en0`'s default was unscoped (`UGScg`) while `pdp_ip0`'s carried the IFSCOPE flag (`UGScIg`), and suggested that was simply "cellular available, WiFi primary". With WiFi off, `pdp_ip0`'s default becomes unscoped, so iOS has actively chosen that path, and the probes above still fail over it.
+
+Everything checkable on the device is correct: the context reports `state=2`, the correct `airtelgprs.com` APN, `ipFamily=3`, `suspended=0`, a routable carrier CGNAT address, good link quality at 52.43 Mbps, and a SIM reporting `(present, good, exposed, voice+data)`. `publicNetAllowed=0` looked like the gate and is not one: `setPublicNetAllowed:` has a single caller in CommCenter which only marshals a struct byte into the reply object, and the unscoped default route shows the local stack is not withholding traffic regardless. That last sentence used to continue "a session the PGW created and then refuses to carry is policy enforcement above the radio", offered as an inference and pointing at the SIM in another phone as the next measurement. The measurement was taken, and the inference is wrong.
+
+**The SIM carries data normally in another handset**, so the fault is this device. Three more candidates died after that:
+
+- **A zombie context**, where the network had torn the bearer down without iOS noticing. Airplane mode on and off rebuilds it completely, with a different address each time (`100.75.137.63`, then `100.82.236.190`, then `100.87.63.36`), and every probe still fails with `Ipkts` unmoved.
+- **A walled garden or carrier filtering.** The network's own PCO hands the device two IPv4 and two IPv6 DNS servers inside Airtel's core, which is exactly what a restricted bootstrap APN would still allow. All six probes against `117.96.122.156` and `117.96.122.40` fail too. There is no garden to be walled into.
+- **The APN.** Checked directly: `airtelgprs.com` is present, correct, set as the `AttachAPN`, IPv4v6, blank user and password as Airtel expects.
+
+Meanwhile the control plane is not merely working but fully provisioned on every cycle:
+
+```
+DataContextIPActivatedDriver: activation status = 0, is_pco_present = 1,
+  pDnsIPv4_addr_array_length=2, pDnsIPv6_addr_array_length=2, ip_type = 3,
+  v4.ip = 100.87.63.36, apn = airtelgprs.com, cid = 0
+handleDataContextActivated: Activation succeeded on kDataContextBB
+associateDataPath: cid = 0 mode = 0 queueSetId = 0 txFilters=0 rxFilters=0
+setChannelState: IBIContextCommunicationChannelState::WAITING_FOR_START_INDICATION->STABLE
+```
+
+and the radio is demonstrably alive, with live `RSRP -90 … -95 dBm` and `RSRQ -7.5 … -13 dB` from the serving cell, plus an attach that could not have happened without working uplink. The one anomaly is that RRC never leaves idle while 1221 packets are handed to the interface, where a modem with uplink data pending would run a Service Request and go connected.
+
+**Inference, not measured:** the break is in the user-plane path between the AP and the air, below iOS and at or inside the baseband, and the most probable cause is that this CFW runs the baseband with calibration unsealed through `l8fdr.dylib`'s demotion answers, a state in which control-plane signalling evidently works and the user plane evidently does not. That has a mechanism but is not confirmed. Testing it means restoring to stock and retrying the same SIM, which costs the current state.
+
+**What this closes for anyone reading these patches:** cellular data is not reachable from CommCenter. Gates 4, 5 and 6 activate the context and there is no further gate in that family to find, because CommCenter is not the component refusing anything. Every value it reports about this connection is correct.
+
+VoLTE turned out not to follow from the bearer, which corrects an earlier prediction in this document. With the bearer up and WiFi off, calls and SMS still do not work, and the reason is explicit:
+
+```
+SSP/AP - Transport[BB(CS)] ... IMSFeature-required[0] IMSFeatureEnabled[0]
+                               IMSRegistration-required[0] IMSRegistered[0]
+ImsRegMaskUp: IMSRegistered[kNotRegistered] qualifiedToBringupPDN[1] qualifiedToRegister[0]
+Connectivity(true): [ConnectionAvailable(BB: true, iWLAN: false), ...]
+refreshAllDataSettings: APN info not present or does not support iWLan
+getPreferredContextType: cannot activate on IWLAN
+```
+
+`qualifiedToBringupPDN[1] qualifiedToRegister[0]` is the shape to note: the device is allowed a bearer and is **not qualified to register IMS**. So IMS-over-cellular is not refused for want of a bearer, it is never attempted. That is a provisioning gate, not a plumbing one.
+
+What does work is IMS over WiFi, and the log names the transport rather than leaving it to inference:
+
+```
+ImsRegistrationState: UE is Registered for Voice+Sms on iWLAN (CarrierBundle)
+IMSRegistrationState: ... isWifi: true
+```
+
+`iWLAN` is IMS over WLAN. Hence calls and SMS working only with WiFi plus WiFi Calling. One reported quirk is consistent with `qualifiedToRegister[0]`: registration does not come up on its own, and toggling network selection in Settings forces it once before it lapses again.
+
+The cheap explanations are ruled out rather than merely unchecked. **Cellular Data and Data Roaming are both on**, confirmed in Settings. CommCenter is not refusing data in general, since the bearer activates and the IMS-over-WiFi connection registers. And WiFi being connected is a reason for iOS to prefer WiFi, not a reason for a cellular session to carry nothing.
+
+**Traced since.** `qualifiedToRegister` is computed in `libSystemDetermination.dylib`, and `sd::IMSSubscriberModel::isQualifiedToRegister()` at `0x24b59998c` decompiles to:
+
+```c
+if ( config->isIMSUnprovisionedAllowed()                       // reads AllowIMSUnprovisioned
+     && this[17]->vtable[464]( this[17], this->getSimSlot() ) ) {
+    os_log("Proceeding with unprovisioned SIM.");
+    mask = this + 272;        // fUnprovisionedImsRegMaskQualifier
+} else {
+    mask = this + 268;        // fImsRegMaskQualifier
+}
+v8 = this->isRegMaskSet(mask);
+```
+
+`isIMSUnprovisionedAllowed()` reads the carrier-bundle key `AllowIMSUnprovisioned`, which Airtel's `IMSConfig` does not set while several US bundles do. So this is a carrier-bundle value, not a signed ticket, not SEP, and not the activation record. Push is separate and does still sit behind SEP.
+
+Two cautions for anyone re-deriving this. The vtable dispatch offsets the decompiler prints are relative to the **vptr**, which is the vtable symbol plus 16: a C++ vtable object begins with offset-to-top and typeinfo words. Indexing from the symbol instead shifts every slot by two and yields confident nonsense; an earlier revision of this section did exactly that and named the wrong key. The cheap check is to read the first two words at the symbol, and then to ask whether the resulting call sites mean anything — `setImsPref` dispatches on the same object at `vptr+384` and `vptr+376`, which must read as `isIMSUnprovisionedAllowed() && isCDMALessEnabled()` to match its own log line about dropping the VoWiFi IMS pref for an unprovisioned SIM.
+
+**Condition B, identified, and it closes this route.** `this[17]->vtable[464]` is `sd::IMSSubscriberEventHandler`'s method at `vptr+464`, which is a per-SIM-slot lookup of the baseband's own provisioned state:
+
+```c
+bool handler_vptr464(sd::IMSSubscriberEventHandler *this, int slot)
+{
+    node = map_find(*(this + 3816), slot);          // keyed on the SimSlot
+    if (!node) return false;                        // slot not present
+    os_log("Baseband service provisioned state: %s", asString(node->state));
+    return (node->state & 0xFD) == 1;
+}
+```
+
+`__Z8asString31BasebandServiceProvisionedState` in `libCommCenterBase.dylib` compiles to a bounds check plus a 5-entry jump table, which gives the enum exactly rather than by guessing from the order the names appear in logs:
+
+| value | name | `(v & 0xFD) == 1` |
+|---|---|---|
+| 0 | `kUnknown` | no, `0` |
+| 1 | `kNotProvisioned` | **yes** |
+| 2 | `kProvisioned` | no, `0` |
+| 3 | `kInProgress` | **yes** |
+| 4 | `kUnavailable` | no, `4` |
+
+`0xFD` clears bit 1, so condition B accepts exactly `kNotProvisioned` and `kInProgress`. It asks "is the baseband currently telling me this slot is not provisioned?", which is the sensible companion to condition A: the pair means "this SIM is unprovisioned **and** the carrier permits unprovisioned IMS, so register anyway."
+
+**And on this device it has never held.** Three independent checks over every log captured during the investigation, 234 `provisioned state` lines in total:
+
+- Condition B's own format string is `"Baseband service provisioned state: %s"` with **no space** before the colon. `CommCenter` has five near-identical format strings for this state and the other four all have a space, a slot tag, or the word `changing`. The no-space variant has **zero** occurrences, so condition B was never even reached, which is what the short-circuit predicts while condition A is false.
+- `"Proceeding with unprovisioned SIM."` has **zero** occurrences, which says the same thing from the other side of the branch.
+- The values ever observed, from the other log sites: `kUnknown` 115, `kUnavailable` 102, `kProvisioned` 17. **`kNotProvisioned` and `kInProgress` have never appeared.**
+
+So setting `AllowIMSUnprovisioned` satisfies condition A and then fails at condition B, against a state that has only ever held values B rejects. The carrier-bundle route is **measurably not sufficient**, not merely unproven. That is worth knowing before spending effort on it, because the effort is substantial and all of it was already closed or expensive: `carrier.plist` is covered by `signatures/common.plist` (`CBSignature2` RSA, `CBSignature3` ECDSA), so editing it gets the bundle rejected and loses the WiFi Calling that currently works; there is no Data-volume override, since `com.apple.commcenter.carrier_bundle.plist` is a path index rather than merged settings; and neither `isIMSUnprovisionedAllowed` nor condition B can be patched directly, because both live in `libSystemDetermination.dylib`, which is not a file on disk but a member of the dyld shared cache.
+
+The remaining route, patching the *call site* of the signature check in CommCenter (`nm -u` lists `VerifyCarrierBundleSignature` as undefined, `otool -L` shows CommCenter linking `libCommCenterBase.dylib` directly), is the same shape as gate 6 but harder: no log string at the failure branch to anchor on, and the failure handling sits in the cache-only callee. It is now also pointless on its own, since it only opens condition A.
+
+**What VoLTE would actually need** is for the baseband to report `kNotProvisioned` for the slot, which is a radio and network fact rather than a value in a plist, and which sits downstream of the activation wall at the Secure Enclave. Patching cannot produce it.
+
+**Locating all of this, for anyone repeating it.** The handle that worked was the vptr PAC discriminator. It is per-class, emitted as an immediate (`MOVK X17, #0xD7D, LSL#48`, encoding `0xF2E1AFB1`, bytes `b1 af e1 f2`), and therefore byte-searchable with no symbols: 0 sites in `libCommCenterBase.dylib`, 70 in `CommCenter`, which settles where the class is defined without reading either. Of those 70, the two using `PACDA` rather than `AUTDA` are the constructors, because a vptr is signed only where it is written, and both name the class outright: `_ZTVN2sd25IMSSubscriberEventHandlerE` and `__ZTVN2sd27IMSSubscriberEventInterfaceE`. Both also carry `ADD X16, X16, #0x10` before signing, which is the compiler confirming the `vptr = symbol + 16` rule above rather than me asserting it.
+
+Cellular data carrying traffic remains unexplained and is not addressed by any of the above.
 
 Also not fixed:
 

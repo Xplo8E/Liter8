@@ -254,6 +254,7 @@ state. The failure chains and fixes are written up in the docs.
 - [Debugging platform daemons](docs/design/DEBUGGING_PLATFORM_DAEMONS.md)
 - [Baseband and cellular](docs/design/BASEBAND_AND_CELLULAR.md) — how each problem was found, and what failed
 - [How the cellular patches work](docs/design/CELLULAR_PATCHES.md) — what each patch targets, changes and verifies
+- [Cellular data blocker](docs/CELLULAR_DATA_BLOCKER.md) — self-contained handover: why data still does not flow, what has been ruled out, and what is worth researching next
 - [Performance backlog](docs/BACKLOG.md)
 
 ## Contributing
