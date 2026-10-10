@@ -14,36 +14,19 @@ And it's iPhone 11 only, `n104ap`. I don't own another A13 device so that's all 
 
 ## What works
 
-Normal boot to the home screen, root SSH, apt and Sileo, TrollStore, apps launch.
-
-Cellular, with no flags needed. SIM ready, carrier bundle matched,
-registered on the network. The modem gets its firmware from the restore, and
-`l8fdr.dylib` lets CommCenter unseal the baseband calibration whose FDR seal was made
-against an AP identity key this device can no longer reproduce.
-
-Phone calls and SMS, over IMS, **carried by WiFi Calling**. That took two more
-patches on top of the calibration fix, because CommCenter refuses a data context on
-a device whose activation was short-circuited rather than performed, and without one
-there is no IMS at all. With the gates open IMS registers and calls work.
-
-Read the qualifier though: IMS comes up over an IPsec tunnel to the carrier on
-WiFi, not over LTE, because the cellular data bearer is still not raised. So calls
-and SMS need WiFi connected *and* WiFi Calling enabled. True VoLTE needs cellular
-data working, which is the open problem below.
-[the whole chain, measured](docs/design/BASEBAND_AND_CELLULAR.md), and
-[what each patch actually does](docs/design/CELLULAR_PATCHES.md)
+- Normal boot to the home screen, root SSH, apt and Sileo, TrollStore, apps launch
+- Cellular, no flags needed. SIM ready, carrier bundle matched, registered on the network
+- Calls and SMS over IMS, **carried by WiFi Calling**, so they need WiFi connected *and* WiFi Calling on
+- USB lockdown pairing, same-boot RemoteXPC reconnect, QuickTime capture, and CoreDevice process listing and screenshots once the DeveloperDiskImage jobs are up
 
 ## What doesn't
 
 - SEP
 - passcode
-- cellular *data*, and so VoLTE with it. The `Internet` network agent is published and
-  no longer refused, but the bearer is never raised and there is no cellular route at
-  all. That is also why calls need WiFi Calling: IMS has no cellular transport, so it
-  registers over an IPsec tunnel on WiFi instead. One open problem, two symptoms
-- Apple services. Push has no token, because minting one needs a real activation record,
-  which needs a SEP-attested key. Measured, not assumed
+- **Cellular data**, and VoLTE with it. The bearer comes up with a real carrier address and the modem acknowledges every instruction, but nothing ever comes back. Narrowed to inside the baseband, with everything above it ruled out: [the blocker, and what was eliminated](docs/CELLULAR_DATA_BLOCKER.md)
+- Apple services. Push has no token, because minting one needs a real activation record, which needs a SEP-attested key. Measured, not assumed
 - xTweak injection. It injects, but it's nowhere near as solid as vphone
+- MobileBackup2. Both clients reach the service and negotiate, then the backup fails because the boot has no normal persona state
 - 11 Pro and Pro Max. profiles exist but no device to test on
 
 PRs welcome on any of these, especially SEP. The Pro and Pro Max are open too, if you own one and want to take the port on, i'll help where i can. Or if you'd rather help on the hardware side, there's a [coffee link](https://buymeacoffee.com/xplo8e) and that's what it'd go towards. Either route is fine, and so is neither.
@@ -227,20 +210,6 @@ docs/
 ```
 
 It's all one Swift target. The folders are there so i can find things, nothing more.
-
-## Rough edges
-
-`fw get-rd` and `fw get-boot` rebuild far more than they need to. It's slow and i know it, it's on the list.
-
-USB lockdown pairing, same-boot RemoteXPC reconnect and QuickTime capture now
-work on the validated iPhone 11 `24A446` SEP-less profile. CoreDevice process
-listing and screenshots also work after starting the DeveloperDiskImage jobs.
-The provisioning workflow now adds a System-volume watcher to perform that
-registration when the image appears. Automatic registration and CoreDevice
-process enumeration are validated on the same device; the normal Xcode/LLDB
-flow remains open. These are scoped compatibility fixes, not replacements for
-SEP, keybags or content protection. MobileBackup2 still stops at missing persona
-state. The failure chains and fixes are written up in the docs.
 
 ## Docs
 
