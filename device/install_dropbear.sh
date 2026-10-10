@@ -33,10 +33,11 @@ cd "${0:A:h}"
 
 PKG=ssh.tar.gz
 STAGE=${TMPDIR:-/tmp}/dropbear-stage-$$
-# Prefer a native sshpass. The bundled one is x86_64, so it needs Rosetta
-# on Apple Silicon. See https://github.com/Xplo8E/Liter8/issues/2.
-SSHPASS=$(command -v sshpass || true)
-"$SSHPASS" -V >/dev/null 2>&1 || SSHPASS=../tools/sshpass
+# ssh's own askpass hook rather than sshpass, which races this dropbear's
+# password prompt and intermittently sends the wrong secret. The shim keeps the
+# `-p <password> ssh|scp ...` call shape, so the call sites below are unchanged.
+# Its header has the measurements.
+SSHPASS=${0:A:h}/askpass-sshpass
 
 # ssh takes -p <port>, scp takes -P <port>. Keeping them as separate arrays avoids the
 # obvious trap: `-p 2222` inside one array is TWO elements, so trying to rewrite it with a
@@ -74,7 +75,35 @@ HOST_KEYS=(
 [[ -f "$PKG" ]]     || { print -u2 "[!] missing $PKG"; exit 1; }
 [[ -x "$SSHPASS" ]] || { print -u2 "[!] missing $SSHPASS"; exit 1; }
 
-sshdev() { "$SSHPASS" -p alpine ssh "${SSH_OPTS[@]}" root@localhost "$@"; }
+# Insurance on a physical link, not a workaround for a known fault: the
+# password-prompt race that used to make this look flaky was sshpass, and
+# askpass-sshpass fixed it. iproxy over USB can still drop a connection under
+# load, so one transport failure is not treated as the device being
+# unreachable. 255 is ssh's own transport/auth failure; every other status is
+# the remote command's result and must be passed through untouched, because
+# callers use this for boolean tests.
+sshdev() {
+    # Not named `status`: zsh reserves that as a read-only alias for $?.
+    local -i attempt rc
+    for attempt in 1 2 3 4; do
+        "$SSHPASS" -p alpine ssh "${SSH_OPTS[@]}" root@localhost "$@"
+        rc=$?
+        (( rc == 255 )) || return $rc
+        sleep 1
+    done
+    return 255
+}
+
+# Same reasoning. scp has no status that means "the file legitimately
+# did not copy", so retrying any failure is safe.
+scpdev() {
+    local -i attempt
+    for attempt in 1 2 3 4; do
+        "$SSHPASS" -p alpine scp "${SCP_OPTS[@]}" "$@" && return 0
+        sleep 1
+    done
+    return 1
+}
 
 # A following workflow phase may need the same local port immediately. Merely
 # sending SIGTERM leaves a small window where the old forward still accepts a
@@ -199,7 +228,7 @@ print ""
 for e in "${FILES[@]}"; do
     src="${e%%|*}"; dst="${e##*|}"
     printf "  %-56s " "$dst"
-    if "$SSHPASS" -p alpine scp "${SCP_OPTS[@]}" "$STAGE/$src" "root@localhost:$dst" >/dev/null 2>&1; then
+    if scpdev "$STAGE/$src" "root@localhost:$dst" >/dev/null 2>&1; then
         print "sent"
     else
         print "FAILED"

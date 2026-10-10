@@ -41,10 +41,11 @@ LAUNCHCTL=launchctl/launchctl
 LAUNCHCTL_SHA=c46e143151f4d56fd9e3c088d74e231f4b6f4ff7477aad080359454821ec0125
 STAGE=${TMPDIR:-/tmp}/bootstrap-stage-$$
 TGZ=$STAGE/bootstrap.tar.gz
-# Prefer a native sshpass. The bundled one is x86_64, so it needs Rosetta
-# on Apple Silicon. See https://github.com/Xplo8E/Liter8/issues/2.
-SSHPASS=$(command -v sshpass || true)
-"$SSHPASS" -V >/dev/null 2>&1 || SSHPASS=../tools/sshpass
+# ssh's own askpass hook rather than sshpass, which races this dropbear's
+# password prompt and intermittently sends the wrong secret. The shim keeps the
+# `-p <password> ssh|scp ...` call shape, so the call sites below are unchanged.
+# Its header has the measurements.
+SSHPASS=${0:A:h}/askpass-sshpass
 
 DEV_TGZ=/mnt2/_bootstrap.tar.gz     # transferred archive, removed on success
 DEV_STAGE=/mnt2/_bsstage            # unpack target, removed on success
@@ -70,7 +71,50 @@ Acquire::AllowInsecureRepositories "true";
 Acquire::AllowDowngradeToInsecureRepositories "true";
 APT::Get::AllowUnauthenticated "true";'
 
-sshdev() { "$SSHPASS" -p alpine ssh "${SSH_OPTS[@]}" root@localhost "$@"; }
+# Insurance on a physical link, not a workaround for a known fault: the
+# password-prompt race that used to make this look flaky was sshpass, and
+# askpass-sshpass fixed it (measured 0 failures in 70 connections, and a full
+# bootstrap and provision with no retries). iproxy over USB can still drop a
+# connection under load, and restarting provisioning is expensive, so one
+# transport failure is not treated as the device being unreachable. 255 is ssh's
+# own transport/auth failure; every other status is the remote command's result
+# and must be passed through untouched, because callers use this for boolean
+# tests.
+sshdev() {
+    # Not named `status`: zsh reserves that as a read-only alias for $?.
+    local -i attempt rc
+    for attempt in 1 2 3 4; do
+        "$SSHPASS" -p alpine ssh "${SSH_OPTS[@]}" root@localhost "$@"
+        rc=$?
+        (( rc == 255 )) || return $rc
+        sleep 1
+    done
+    return 255
+}
+
+# Same reasoning. scp has no status that means "the file legitimately
+# did not copy", so retrying any failure is safe.
+scpdev() {
+    local -i attempt
+    for attempt in 1 2 3 4; do
+        "$SSHPASS" -p alpine scp "${SCP_OPTS[@]}" "$@" && return 0
+        sleep 1
+    done
+    return 1
+}
+
+# Streams a local file into a remote command's stdin. The source is a file
+# rather than a pipe because a consumed pipe cannot be replayed, and the retry
+# has to send the whole payload again from the start.
+sshdev_send() {
+    local src=$1 remote=$2
+    local -i attempt
+    for attempt in 1 2 3 4; do
+        "$SSHPASS" -p alpine ssh "${SSH_OPTS[@]}" root@localhost "$remote" < "$src" && return 0
+        sleep 1
+    done
+    return 1
+}
 
 trust_state() {
     local got
@@ -173,7 +217,7 @@ if (( ! RESUME )); then
 
     # ------------------------------------------------------------ transfer
     print "[*] sending $(du -h "$TGZ" | awk '{print $1}') to $DEV_TGZ"
-    "$SSHPASS" -p alpine scp "${SCP_OPTS[@]}" "$TGZ" "root@localhost:$DEV_TGZ" || {
+    scpdev "$TGZ" "root@localhost:$DEV_TGZ" || {
         print -u2 "[!] transfer failed"; exit 1; }
 
     # ------------------------------------------------------------- extract
@@ -200,9 +244,14 @@ if (( ! RESUME )); then
     print "[*] moving into place: $DEV_STAGE/var/jb -> $DEV_JB"
     sshdev "/bin/mv '$DEV_STAGE/var/jb' '$DEV_JB'" || { print -u2 "[!] move failed"; exit 1; }
 
-    # rmdir refuses non-empty paths, so cleanup doubles as a staging check.
-    sshdev "/bin/rmdir '$DEV_STAGE/var' '$DEV_STAGE' 2>/dev/null; /bin/rm -f '$DEV_TGZ'; sync" >/dev/null 2>&1
 fi
+
+# Outside the branch on purpose. A run that died between transfer and move
+# leaves the archive and the staging tree behind, and the next run takes the
+# resume path, so cleanup placed inside the branch above would never reach them
+# and --check would report the leftovers forever.
+# rmdir refuses non-empty paths, so cleanup doubles as a staging check.
+sshdev "/bin/rmdir '$DEV_STAGE/var' '$DEV_STAGE' 2>/dev/null; /bin/rm -f '$DEV_TGZ'; sync" >/dev/null 2>&1
 
 # ---------------------------------------------------------------- launchctl
 # Procursus launchctl 1:1.1.1 imports _launch_active_user_switch strongly, and
@@ -221,8 +270,7 @@ sshdev "[ -f '$DEV_JB/usr/bin/launchctl.procursus' ] || \
 # Staged next to the target and renamed, so an interrupted transfer can never
 # leave a truncated launchctl in place. cat rather than scp: the ramdisk ships
 # no sftp-server, and scp -r would dereference symlinks anyway.
-"$SSHPASS" -p alpine ssh "${SSH_OPTS[@]}" root@localhost \
-    "/bin/cat > '$DEV_JB/usr/bin/launchctl.new'" < "$LAUNCHCTL" \
+sshdev_send "$LAUNCHCTL" "/bin/cat > '$DEV_JB/usr/bin/launchctl.new'" \
     || { print -u2 "[!] could not transfer launchctl"; exit 1; }
 
 DEV_LAUNCHCTL_SIZE=$(sshdev "stat -f %z '$DEV_JB/usr/bin/launchctl.new'" 2>/dev/null | tr -d ' \r')
@@ -280,10 +328,11 @@ sshdev "/bin/mkdir -p '$DEV_JB/var/lib/apt/sileolists/partial' && \
 print "[*] declaring repo trust globally (Sileo cannot parse per-repo trust)"
 sshdev "/bin/mkdir -p '$DEV_JB/etc/apt/apt.conf.d'" \
     || { print -u2 "[!] could not create apt configuration directory"; exit 1; }
-print -r -- "$APT_TRUST_CONFIG" | \
-    "$SSHPASS" -p alpine ssh "${SSH_OPTS[@]}" root@localhost \
-        "/bin/cat > '$DEV_JB/etc/apt/apt.conf.d/99-sileo-unsigned-repos'" \
-    || { print -u2 "[!] could not write 99-sileo-unsigned-repos"; exit 1; }
+TRUST_FILE=$(mktemp) || exit 1
+print -r -- "$APT_TRUST_CONFIG" > "$TRUST_FILE"
+sshdev_send "$TRUST_FILE" "/bin/cat > '$DEV_JB/etc/apt/apt.conf.d/99-sileo-unsigned-repos'" \
+    || { rm -f "$TRUST_FILE"; print -u2 "[!] could not write 99-sileo-unsigned-repos"; exit 1; }
+rm -f "$TRUST_FILE"
 
 # ---------------------------------------------------------------- verify
 print "\n[*] verifying on the device\n"

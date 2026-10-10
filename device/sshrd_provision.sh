@@ -58,10 +58,11 @@ esac
 
 wants() { case " $WANT " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
-# Prefer a native sshpass. The bundled one is x86_64, so it needs Rosetta
-# on Apple Silicon. See https://github.com/Xplo8E/Liter8/issues/2.
-SSHPASS=$(command -v sshpass || true)
-"$SSHPASS" -V >/dev/null 2>&1 || SSHPASS="$TOOLS/sshpass"
+# ssh's own askpass hook rather than sshpass, which races this dropbear's
+# password prompt and intermittently sends the wrong secret. The shim keeps the
+# `-p <password> ssh|scp ...` call shape, so the call sites below are unchanged.
+# Its header has the measurements.
+SSHPASS="$BASE/askpass-sshpass"
 # Prefer a native ldid. The bundled one is arm64 only, so it cannot run on an
 # Intel Mac. See https://github.com/Xplo8E/Liter8/issues/2.
 LDID="$TOOLS/ldid_macosx_arm64"
@@ -172,10 +173,11 @@ stop_owned_iproxy() {
 
 # ---------------------------------------------------------------- preflight
 say "preflight"
-# -x passes for an arm64 binary on an Intel Mac, so run each one instead. These
-# fail far into provisioning otherwise, with only "Bad CPU type in executable".
-"$SSHPASS" -V >/dev/null 2>&1 \
-    || die "sshpass at $SSHPASS cannot run on this host; brew install sshpass"
+# -x passes for an arm64 binary on an Intel Mac, so the native helpers below are
+# run rather than just tested. They fail far into provisioning otherwise, with
+# only "Bad CPU type in executable". askpass-sshpass is a /bin/sh script with no
+# architecture to get wrong, so -x is the whole check for it.
+[ -x "$SSHPASS" ] || die "missing $SSHPASS"
 "$LDID" -v 2>&1 | grep -q "Link Identity Editor" \
     || die "ldid at $LDID cannot run on this host; brew install ldid-procursus"
 "$GTAR" --version >/dev/null 2>&1 \

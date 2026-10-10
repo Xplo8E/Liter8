@@ -22,10 +22,11 @@ SSHOPT=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
         -p "${LITER8_SSH_PORT:-2222}")
 DEV="root@${LITER8_SSH_HOST:-localhost}"
 PW=alpine
-# Prefer a native sshpass. The bundled one is x86_64, so it needs Rosetta
-# on Apple Silicon. See https://github.com/Xplo8E/Liter8/issues/2.
-SSHPASS=$(command -v sshpass || true)
-"$SSHPASS" -V >/dev/null 2>&1 || SSHPASS=../tools/sshpass
+# ssh's own askpass hook rather than sshpass, which races this dropbear's
+# password prompt and intermittently sends the wrong secret. The shim keeps the
+# `-p <password> ssh|scp ...` call shape, so the call sites below are unchanged.
+# Its header has the measurements.
+SSHPASS=${0:A:h}/askpass-sshpass
 CHECK_ONLY=0
 [[ "${1:-}" == "--check" ]] && CHECK_ONLY=1
 
@@ -39,8 +40,7 @@ die()  { printf '    [!] %s\n' "$1"; exit 1 }
 
 sh_dev() { "$SSHPASS" -p "$PW" ssh "${SSHOPT[@]}" "$DEV" "$@" }
 
-"$SSHPASS" -V >/dev/null 2>&1 \
-    || die "sshpass at $SSHPASS cannot run on this host; brew install sshpass"
+[[ -x "$SSHPASS" ]] || die "missing $SSHPASS"
 [[ -x setup_shell.sh ]] || die "setup_shell.sh is missing beside finalize.sh"
 
 say "normal-boot connection"
