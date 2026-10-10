@@ -63,7 +63,6 @@ DS_PATH=/var/jb/usr/lib/llvm-16/bin/debugserver
 # apt resolves each deb's dependencies on the device, so this script never has
 # to know about libllvm16, libclang-cpp16, ldid or libplist3. That needs working
 # internet on the phone, which is checked before anything is installed.
-PROBE_URL=https://apt.procurs.us/dists/1900/InRelease
 
 say "checking payloads"
 for f in debugserver "$DEBUGSERVER_DEB" "$TROLLSTORE_DEB"; do
@@ -106,16 +105,20 @@ sh_dev "$RPATH; command -v apt-get >/dev/null" \
 # the repo itself rather than a generic host: a captive portal or a DNS-only
 # answer would pass a ping and then fail the install halfway through.
 #
-# wget, not curl: the bootstrap ships wget and has no curl.
+# `apt-get update` is the probe, not wget. A fresh Procursus bootstrap has no
+# wget, no curl, no nc and no ping, so probing with any of them reports "cannot
+# reach the repo" on exactly the first run this check exists to protect. apt is
+# guaranteed present because the install below needs it, and succeeding here
+# proves the one thing that has to work.
 say "checking device internet"
 IFACE_STATE=$(sh_dev "$RPATH; ifconfig en0 2>/dev/null | grep -c 'status: active'" | tr -d '\r')
-if ! sh_dev "$RPATH; wget -q --spider --timeout=10 --tries=1 $PROBE_URL" >/dev/null 2>&1; then
+if ! sh_dev "$RPATH; apt-get update -o Acquire::Retries=1" >/dev/null 2>&1; then
     if [[ "$IFACE_STATE" == "0" ]]; then
         die "the device has no Wi-Fi connection. Connect it to Wi-Fi and run this again."
     fi
-    die "the device is on Wi-Fi but cannot reach apt.procurs.us. Check its internet connection and run this again."
+    die "the device is on Wi-Fi but apt could not reach its repositories. Check its internet connection and run this again."
 fi
-ok "device can reach apt.procurs.us"
+ok "device package lists updated"
 
 # The device has no shasum and no openssl, so the file is read back and hashed
 # on the Mac. Same approach as the uicache staging check in sshrd_provision.sh.
