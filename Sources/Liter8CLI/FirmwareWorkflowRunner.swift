@@ -275,6 +275,9 @@ enum FirmwareWorkflowRunner {
             selectedEnvironment["LITER8_SETUP_METHODS"] = String(
                 profile.setupControllerMethodCount
             )
+            // Always written, as 0 or 1, so an inherited value cannot decide
+            // whether CommCenter is patched.
+            selectedEnvironment["LITER8_HAS_BASEBAND"] = profile.hasBaseband ? "1" : "0"
         }
         if profile.validationState == .experimental {
             selectedEnvironment["LITER8_EXPERIMENTAL_WORKFLOW"] = "1"

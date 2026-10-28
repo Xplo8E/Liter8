@@ -36,6 +36,7 @@ let resolverGroups: [String: [String: String]] = [
         "ibec-restore": IBECRestoreResolver.name,
         "ibss-ramdisk": IBSSRamdiskResolver.name,
         "ibss-skip-display-init": IBSSSkipDisplayInitResolver.name,
+        "ibec-allow-duplicate-trust-cache": IBECAllowDuplicateTrustCacheResolver.name,
         "ibec-ignore-pinot-failure": IBECPinotIgnoreFailureResolver.name,
         "ibec-force-pinot-id": IBECPinotForceIDResolver.name,
     ],
@@ -208,6 +209,9 @@ func resolveRecords(
     case IBECPinotIgnoreFailureResolver.name:
         try options.requireNoTuning(resolver: name)
         return try IBECPinotIgnoreFailureResolver().resolve(in: image)
+    case IBECAllowDuplicateTrustCacheResolver.name:
+        try options.requireNoTuning(resolver: name)
+        return try IBECAllowDuplicateTrustCacheResolver().resolve(in: image)
     case IBECPinotForceIDResolver.name:
         guard options.bootArguments == nil else {
             throw ValidationError("\(name) does not accept --boot-args")

@@ -117,6 +117,18 @@ public enum DeviceIBSSAdditionalPlan: String, Codable, Equatable, Sendable {
     case skipDisplayInitialization = "ibss-skip-display-init"
 }
 
+/// Extra iBEC operations for the normal boot, selected by the profile.
+///
+/// Same contract as `DeviceIBSSAdditionalPlan`: raw values are the CLI plan
+/// spellings, Swift writes them into the workflow context, Python applies
+/// them to the normal-boot iBEC only. SSHRD's iBEC never takes them.
+public enum DeviceIBECAdditionalPlan: String, Codable, Equatable, Sendable {
+    /// iBoot 26.7.2 rejects a second trust cache of a type it holds, and its
+    /// normal `bootx` loads the StaticTrustCache from storage after Liter8
+    /// has sent the same one. See IBECAllowDuplicateTrustCacheResolver.
+    case allowDuplicateTrustCache = "ibec-allow-duplicate-trust-cache"
+}
+
 /// Hardware-selected additions to the otherwise generic boot recipes.
 ///
 /// Normal boot and SSHRD are separate because a future board may need the
@@ -125,6 +137,9 @@ public enum DeviceIBSSAdditionalPlan: String, Codable, Equatable, Sendable {
 public struct DeviceBootPlan: Codable, Equatable, Sendable {
     public let normalIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan]
     public let restoreIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan]
+    /// Applied to the normal-boot iBEC after `ibss-normal`. Empty for every
+    /// profile whose iBEC boots as shipped.
+    public let normalIBECAdditionalPlans: [DeviceIBECAdditionalPlan]
     /// Re-encode patched IM4P payloads in their shipped compression instead
     /// of uncompressed. n104 boots uncompressed images; the j171aap iBoot
     /// rejects them and only accepts restricted LZFSE (see FirmwareArtifact).
@@ -147,12 +162,14 @@ public struct DeviceBootPlan: Codable, Equatable, Sendable {
     public init(
         normalIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan],
         restoreIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan],
+        normalIBECAdditionalPlans: [DeviceIBECAdditionalPlan] = [],
         preservesIM4PCompression: Bool = false,
         normalBootUsesStaticTrustCache: Bool = false,
         optionalPassthroughFirmware: [String] = []
     ) {
         self.normalIBSSAdditionalPlans = normalIBSSAdditionalPlans
         self.restoreIBSSAdditionalPlans = restoreIBSSAdditionalPlans
+        self.normalIBECAdditionalPlans = normalIBECAdditionalPlans
         self.preservesIM4PCompression = preservesIM4PCompression
         self.normalBootUsesStaticTrustCache = normalBootUsesStaticTrustCache
         self.optionalPassthroughFirmware = optionalPassthroughFirmware
@@ -195,6 +212,13 @@ public struct DeviceWorkflowProfile: Equatable, Sendable {
     /// Keeping this in the exact workflow profile prevents Python from
     /// silently applying an n104 workaround to every future device.
     public let bootPlan: DeviceBootPlan
+    /// Whether the board has a cellular modem. Provisioning's `cellular` step
+    /// (CommCenter's data-context patch and the libFDR calibration bypass) has
+    /// nothing to fix on a Wi-Fi-only board, and its CommCenter resolver was
+    /// written for the iOS 27 iPhone builds, so a profile that sets this false
+    /// leaves the step out and `verify` stops expecting it. Defaults to true,
+    /// which is every iPhone profile; j171aap is the one Wi-Fi-only board.
+    public var hasBaseband: Bool = true
 
     public func supports(_ identity: IPSWIdentity) -> Bool {
         guard identity.productVersion == productVersion,
@@ -492,6 +516,81 @@ public enum DeviceWorkflowRegistry {
                 normalIBSSAdditionalPlans: [],
                 restoreIBSSAdditionalPlans: []
             )
+        ),
+        // iPad 8 Wi-Fi, A12 / T8020, iPadOS 26.7.1. CFW restore, SSHRD,
+        // provisioning and a normal boot with the 123-record boot-jit kernel
+        // were observed on one iPadOS 26.7.1 iPad11,6; no repeat-boot record
+        // exists yet, so it stays experimental. No SPTM/TXM in this identity,
+        // and therefore no SPTM, PMP or WCH: those are the only passthrough
+        // images it may lack. Guards measured from the 23H30 System volume.
+        // The display workaround has no candidate on this iBSS and is not
+        // carried over. See docs/runs/IPAD8_J171AAP_23H30.md.
+        DeviceWorkflowProfile(
+            id: "ipad11,6-j171aap-23H30",
+            productVersion: "26.7.1",
+            build: "23H30",
+            productType: "iPad11,6",
+            deviceClass: "j171aap",
+            chipID: 0x8020,
+            boardID: 0x24,
+            extractedDirectoryName: "iPad11,6_26.7.1_23H30_Restore",
+            validationState: .experimental,
+            launchdSHA256: "1b37dae048542729a622a1a3f4b77ec8829d32e918f0d6a0c0c037f32d9e84b1",
+            launchdCacheSHA256: "af9183685525a0833fea7a16c7a81b3f85e14372ea33d49f3e1ec6ab1a90ca4f",
+            launchdCacheDaemonCount: 672,
+            setupControllerMethodCount: 58,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: [],
+                preservesIM4PCompression: true,
+                normalBootUsesStaticTrustCache: true,
+                optionalPassthroughFirmware: [
+                    "Ap,SecurePageTableMonitor", "PMP", "WCHFirmwareUpdater",
+                ]
+            ),
+            // iPad11,6 is the Wi-Fi model; the cellular j172aap has no
+            // workflow profile.
+            hasBaseband: false
+        ),
+        // iPad 8 Wi-Fi on iPadOS 26.7.2, the point update after 23H30. Every
+        // kernel, iBoot and userland plan resolves the same record ids with the
+        // same original/replacement bytes as 23H30, except for PC-relative and
+        // page-offset fields, at offsets shifted by the new layout. Guards
+        // measured from the 23H128 System volume with `survey --guards`:
+        // launchd and its cache changed, the daemon and Setup method counts
+        // did not. iBSS/iBEC resolve at the same code offsets as 23H30, but
+        // the 23H128 iBEC rejects the duplicate StaticTrustCache a normal
+        // bootx ends up with, so its iBEC also takes the duplicate-trust-cache
+        // plan. Measured on iPad11,6: without it bootx stays in Recovery,
+        // even with an unpatched kernel; with the 23H30 iBoot, which allows
+        // the duplicate, the same 23H128 boot set boots. The patched 23H128
+        // iBEC itself has not been booted yet. See
+        // docs/runs/IPAD8_J171AAP_23H128.md.
+        DeviceWorkflowProfile(
+            id: "ipad11,6-j171aap-23H128",
+            productVersion: "26.7.2",
+            build: "23H128",
+            productType: "iPad11,6",
+            deviceClass: "j171aap",
+            chipID: 0x8020,
+            boardID: 0x24,
+            extractedDirectoryName: "iPad_10.2_2020_26.7.2_23H128_Restore",
+            validationState: .experimental,
+            launchdSHA256: "5385426b090d98b3ecbb5822e7391ae85f85e7f92ac438ad5fcd497abf399bdb",
+            launchdCacheSHA256: "a7d74278ca1b89d4d39a3ef2ea0d1904428dda2c629049f350a2b0e8947b9945",
+            launchdCacheDaemonCount: 672,
+            setupControllerMethodCount: 58,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: [],
+                normalIBECAdditionalPlans: [.allowDuplicateTrustCache],
+                preservesIM4PCompression: true,
+                normalBootUsesStaticTrustCache: true,
+                optionalPassthroughFirmware: [
+                    "Ap,SecurePageTableMonitor", "PMP", "WCHFirmwareUpdater",
+                ]
+            ),
+            hasBaseband: false
         ),
     ]
 

@@ -228,6 +228,80 @@ public enum KernelResolverProfileRegistry {
                 ),
             ]
         ),
+        KernelResolverProfile(
+            // iPad 8, A12 / T8020, iPadOS 26.7.1. A different SoC and XNU
+            // major from every other profile here. The Wi-Fi and Cellular
+            // boards share this kernelcache.
+            id: "ios26-23H30-j171aap",
+            productVersion: "26.7.1",
+            builds: ["23H30"],
+            boards: ["j171aap", "j172aap"],
+            component: "kernelcache.release.ipad11b",
+            embeddedFingerprint: "xnu-12377.162.13.700.38~2/RELEASE_ARM64_T8020",
+            resolverVariants: [
+                // T8020 PPL makes its own trust decision; see
+                // KernelPPLTrustCacheResolver.
+                "kernel-ppl-trust-cache": ResolverVariantProfile(
+                    signature: "t8020-loaded-trust-cache-v1",
+                    payload: "loaded-trust-cache-true-v1"
+                ),
+                // 25 entries, not 26. See
+                // KernelCredentialManagerSignatures.release23H30V1.
+                "kernel-credential-manager": ResolverVariantProfile(
+                    signature: "ios26-23H30-acm-v1",
+                    payload: "acm-return-success-v1"
+                ),
+                // Opt-in: include the code-signing-invalid patches in the
+                // kernel-boot-jit plan so runtime tweak hooks are not killed.
+                // Each resolves to one site on the 23H30 kernelcache. See
+                // KernelCodeSigningResolver.
+                "kernel-codesign-invalid": ResolverVariantProfile(
+                    signature: "t8020-codesign-invalid-v1",
+                    payload: "codesign-invalid-allow-v1"
+                ),
+            ],
+            // No scoped Sandbox predecessor, so no Valeria cave. Not ported.
+            //
+            // The exception-port enforcement byte is not ported either. Its
+            // resolver was written for 27.x kernels, where the byte is a
+            // __DATA_CONST constant; in xnu-12377 it was a boot-arg tunable,
+            // and the resolver has not been run against this kernel. The
+            // exact boot-jit fixture was measured without the kernel record.
+            // Consequence: a platform-binary app that registers an
+            // EXCEPTION_DEFAULT handler (crash SDKs) can still be killed.
+            omittedResolvers: [KernelValeriaResolver.name, KernelExceptionPortResolver.name]
+        ),
+        KernelResolverProfile(
+            // iPad 8, iPadOS 26.7.2. A new XNU string, so a new profile, even
+            // though it is a point update of the 23H30 kernel: every plan
+            // resolves the same record ids with the same bytes apart from
+            // ADRP/BL/LDR immediates and one moved policy-table pointer, at
+            // offsets shifted by the new layout. The ACM roster reuses the
+            // 23H30 shapes because all 25 still match one distinct function
+            // each; give this build its own variant if one ever has to change.
+            // See docs/runs/IPAD8_J171AAP_23H128.md.
+            id: "ios26-23H128-j171aap",
+            productVersion: "26.7.2",
+            builds: ["23H128"],
+            boards: ["j171aap", "j172aap"],
+            component: "kernelcache.release.ipad11b",
+            embeddedFingerprint: "xnu-12377.162.13.701.45~1/RELEASE_ARM64_T8020",
+            resolverVariants: [
+                "kernel-ppl-trust-cache": ResolverVariantProfile(
+                    signature: "t8020-loaded-trust-cache-v1",
+                    payload: "loaded-trust-cache-true-v1"
+                ),
+                "kernel-credential-manager": ResolverVariantProfile(
+                    signature: "ios26-23H30-acm-v1",
+                    payload: "acm-return-success-v1"
+                ),
+                "kernel-codesign-invalid": ResolverVariantProfile(
+                    signature: "t8020-codesign-invalid-v1",
+                    payload: "codesign-invalid-allow-v1"
+                ),
+            ],
+            omittedResolvers: [KernelValeriaResolver.name, KernelExceptionPortResolver.name]
+        ),
     ]
 
     /// Detect a profile using evidence embedded in the artifact itself.

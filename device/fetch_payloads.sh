@@ -163,6 +163,25 @@ mkdir -p "$OUT" "$WORK"
 WANT="${*:-sileo helpers cache injection tweaks pairing cellular}"
 wants() { case " $WANT " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
+# A board without a modem has nothing for the cellular payload to fix; see
+# LITER8_HAS_BASEBAND in sshrd_provision.sh. Required only when cellular is
+# wanted, like the profile values below.
+if wants cellular; then
+    case "${LITER8_HAS_BASEBAND:-}" in
+        1) ;;
+        0)
+            [ $# -eq 0 ] \
+                || die "this firmware profile has no baseband; the cellular payload does not apply"
+            no_cellular=
+            for item in $WANT; do
+                [ "$item" = cellular ] || no_cellular="$no_cellular $item"
+            done
+            WANT=${no_cellular# }
+            ;;
+        *) die "Liter8 did not provide the reviewed baseband policy" ;;
+    esac
+fi
+
 # Assert the boot-critical profile values only for the components that use them.
 if wants injection; then
     [ -n "$LAUNCHD_SHA" ] \

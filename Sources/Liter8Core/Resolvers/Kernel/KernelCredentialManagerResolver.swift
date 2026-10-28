@@ -1,8 +1,8 @@
 import Foundation
 
-/// Resolves the 26 AppleCredentialManager entry points patched by the normal
-/// boot kernel plan. Every resolved function becomes `mov w0, #0; ret`, for a
-/// total of 52 guarded patch records.
+/// Resolves the build-specific AppleCredentialManager entry points patched by
+/// the normal boot kernel plan. Every resolved function becomes
+/// `mov w0, #0; ret` with two guarded patch records.
 ///
 /// There are deliberately two resolution paths:
 ///
@@ -72,7 +72,13 @@ public struct KernelCredentialManagerResolver: Sendable {
             }
             return offset
         }
-        guard zip(ordered, ordered.dropFirst()).allSatisfy({ $0.0 < $0.1 }) else {
+        guard Set(ordered).count == ordered.count else {
+            throw PatchfinderError.invalidFixture(
+                "AppleCredentialManager signatures resolved to duplicate function entries"
+            )
+        }
+        guard !signatures.requiresReferenceOrder
+                || zip(ordered, ordered.dropFirst()).allSatisfy({ $0.0 < $0.1 }) else {
             throw PatchfinderError.invalidFixture(
                 "AppleCredentialManager functions did not resolve in reference order"
             )
@@ -86,7 +92,13 @@ public struct KernelCredentialManagerResolver: Sendable {
             // Ten of these methods have no direct branch reference at all on RC
             // 24A435 and are reached only through a taken address, so the stub
             // starts after any BTI C landing pad rather than on top of it.
-            let start = ARM64.stubStart(atEntry: entry, in: image)
+            var start = ARM64.stubStart(atEntry: entry, in: image)
+            if signatures.preserveBareBTI,
+               (try image.readUInt32(at: entry)) == ARM64.btiC {
+                // A PAC-less leaf can start with its own BTI C. Keep that
+                // landing pad too: indirect callers must still land on BTI.
+                start = entry + 4
+            }
             patches.append(try credentialPatch(
                 id: "kernel.credential-manager.\(descriptor.id).result",
                 offset: start,

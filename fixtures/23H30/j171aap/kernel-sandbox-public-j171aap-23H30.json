@@ -1,0 +1,80 @@
+{
+  "expectedOutputSHA256" : "3e0f63f7534743e423f85346ee4f03d21806316aeefb03ea229575472ebb8191",
+  "expectedPatches" : [
+    {
+      "id" : "kernel.sandbox.vnode-check-exec.target",
+      "offset" : 15491904,
+      "originalBytes" : "ccdf7d02",
+      "replacementBytes" : "242e7d02"
+    },
+    {
+      "id" : "kernel.sandbox.file-check-mmap.result",
+      "offset" : 41758244,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sandbox.file-check-mmap.return",
+      "offset" : 41758248,
+      "originalBytes" : "fc6fbda9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-mount.result",
+      "offset" : 41751628,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-mount.return",
+      "offset" : 41751632,
+      "originalBytes" : "fc6fbda9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-remount.result",
+      "offset" : 41751188,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-remount.return",
+      "offset" : 41751192,
+      "originalBytes" : "fc6fbca9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-unmount.result",
+      "offset" : 41750784,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sandbox.mount-check-unmount.return",
+      "offset" : 41750788,
+      "originalBytes" : "fc6fbca9",
+      "replacementBytes" : "c0035fd6"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-rename.result",
+      "offset" : 41728664,
+      "originalBytes" : "7f2303d5",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "kernel.sandbox.vnode-check-rename.return",
+      "offset" : 41728668,
+      "originalBytes" : "e923b96d",
+      "replacementBytes" : "c0035fd6"
+    }
+  ],
+  "expectedSize" : 59031552,
+  "resolver" : "kernel-sandbox-compatibility",
+  "sha256" : "eee662eba10dc9302a8999677361adf12ce86a61078ed387181ab9a183c334be",
+  "target" : {
+    "board" : "j171aap",
+    "build" : "23H30",
+    "component" : "kernelcache",
+    "device" : "iPad 8 (Wi-Fi)"
+  }
+}

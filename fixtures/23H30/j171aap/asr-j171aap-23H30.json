@@ -1,0 +1,20 @@
+{
+  "expectedOutputSHA256" : "3251c08457700a2c3239d1dc4ffbaefcd9e2bbf29533a09bb727dcbb719fbe11",
+  "expectedPatches" : [
+    {
+      "id" : "asr.signature-mismatch-branch",
+      "offset" : 150412,
+      "originalBytes" : "80310035",
+      "replacementBytes" : "1f2003d5"
+    }
+  ],
+  "expectedSize" : 396864,
+  "resolver" : "asr-signature",
+  "sha256" : "0871b0a3fc7ef35664150c76d918059f42f704b2013459eb672ccfb7bf4af7f2",
+  "target" : {
+    "board" : "j171aap",
+    "build" : "23H30",
+    "component" : "asr",
+    "device" : "iPad 8 (Wi-Fi)"
+  }
+}

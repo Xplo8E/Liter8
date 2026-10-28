@@ -78,22 +78,24 @@ final class FirmwareProfileTests: XCTestCase {
     /// The resolver scores four bodies against the entries either side of them,
     /// so a family that dropped or reordered an entry would still resolve and
     /// would silently patch the wrong function.
+    ///
+    /// 23H30 is the one recorded exception: updateAnalytics has no distinct
+    /// entry on that build, so its family names the other 25, in the same order.
     func testEveryACMVariantDescribesTheSameTwentySixMethods() throws {
         let ids = KernelResolverProfileRegistry.profiles.compactMap {
             $0.variants(for: KernelCredentialManagerResolver.name)?.signature
         }
         XCTAssertFalse(ids.isEmpty)
 
-        var reference: [String]?
+        let reference = KernelCredentialManagerSignatures.release24A435V1.functions.map(\.name)
+        XCTAssertEqual(reference.count, 26)
         for id in ids {
             let variant = try XCTUnwrap(KernelCredentialManagerSignatures.variant(named: id))
             let names = variant.functions.map(\.name)
-            XCTAssertEqual(names.count, 26, "\(id) must describe 26 methods")
-            if let reference {
-                XCTAssertEqual(names, reference, "\(id) must keep the shared method order")
-            } else {
-                reference = names
-            }
+            let expected = id == KernelCredentialManagerSignatures.release23H30V1.id
+                ? reference.filter { $0 != "updateAnalytics" }
+                : reference
+            XCTAssertEqual(names, expected, "\(id) must keep the shared method order")
         }
     }
 

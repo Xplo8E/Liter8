@@ -33,6 +33,16 @@ public struct KernelExceptionPortResolver: Sendable {
 
     public init() {}
 
+    /// Records for the composite boot plans. A kernel profile may omit this
+    /// family (j171aap/23H30 does, see its profile); `resolve` itself never
+    /// skips, so the standalone plan still fails on an unported kernel.
+    static func compositeRecords(in image: BinaryImage) throws -> [PatchRecord] {
+        if KernelResolverProfileRegistry.detect(in: image)?.omittedResolvers.contains(name) == true {
+            return []
+        }
+        return try Self().resolve(in: image)
+    }
+
     public func resolve(in image: BinaryImage) throws -> [PatchRecord] {
         let layout = try MachOLayout(image: image)
         let anchors = image.findAll(Data([0]) + Data(Self.anchor.utf8) + Data([0]))
