@@ -250,6 +250,12 @@ enum FirmwareWorkflowRunner {
         print("  iOS/build: \(profile.productVersion) (\(profile.build))")
         print("  device/board: \(profile.productType) / \(profile.deviceClass)")
         fflush(stdout)
+        if workflowEnvironment["LITER8_TFP0"] == "1",
+           !profile.bootPlan.supportsTFP0KernelTaskPort {
+            throw PatchfinderError.invalidFixture(
+                "tfp0 is not supported for firmware profile \(profile.id)"
+            )
+        }
         let sourceRoot = workDirectory.appendingPathComponent(profile.extractedDirectoryName)
         let context = try FirmwareWorkflowContext.load(
             profile: profile,

@@ -1280,6 +1280,12 @@ class ContextTests(unittest.TestCase):
         # j171aap has no SPTM/TXM: only the kernel half applies there.
         self.assertEqual(normal_boot_plans(patch_txm=False), ("boot-jit", None))
 
+    def test_normal_boot_plans_with_explicit_tfp0(self):
+        self.assertEqual(
+            normal_boot_plans(patch_txm=True, tfp0=True),
+            ("boot-tfp0", "boot-permissive"),
+        )
+
     def test_boot_sequence_uses_only_firmware_in_the_identity(self):
         # The j171aap 23H30 erase identity has no SPTM/TXM, PMP or WCH, and its
         # profile says so. The absence alone is not enough any more.

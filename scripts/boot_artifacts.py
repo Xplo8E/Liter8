@@ -89,19 +89,24 @@ def has_txm(components: dict[str, str], mode: str) -> bool:
     return has_monitor
 
 
-def normal_boot_plans(*, patch_txm: bool) -> tuple[str, str | None]:
+def normal_boot_plans(*, patch_txm: bool, tfp0: bool = False) -> tuple[str, str | None]:
     """Kernel and TXM plans for a normal boot, as (kernel_plan, txm_plan).
 
     Every normal boot is built for runtime function hooks with TXM's policy
-    flags on, by operator decision; there is no switch. Both plans weaken code
-    signing for every process, and each covers one code-signing monitor and is
-    inert where that monitor is absent: kernel boot-jit carries the PPL patches
-    (only a kernel profile that opts in gets any) and clears the exception-port
-    behavior enforcement byte, and txm boot-permissive turns on the policy flags
-    and lets TXM approve the debug mapping a modified code page needs before it
-    can execute again. No TXM in the identity means no TXM plan.
+    flags on, by operator decision; there is no switch for that part. Both
+    plans weaken code signing for every process, and each covers one
+    code-signing monitor and is inert where that monitor is absent: the kernel
+    plan carries the PPL patches (only a kernel profile that opts in gets any)
+    and clears the exception-port behavior enforcement byte, and txm
+    boot-permissive turns on the policy flags and lets TXM approve the debug
+    mapping a modified code page needs before it can execute again. No TXM in
+    the identity means no TXM plan.
+
+    `tfp0` is the one caller-visible choice here. It swaps the kernel plan for
+    boot-tfp0, which is boot-jit plus the task_for_pid(0) patches, and is only
+    reachable for a profile whose boot plan opts in.
     """
-    return "boot-jit", "boot-permissive" if patch_txm else None
+    return ("boot-tfp0" if tfp0 else "boot-jit"), "boot-permissive" if patch_txm else None
 
 
 def ticket_from_environment() -> Path:
@@ -196,7 +201,10 @@ def build_normal_boot() -> None:
         optional_firmware=context.optional_passthrough_firmware,
     )
     patch_txm = has_txm(context.components, "normal")
-    kernel_plan, txm_plan = normal_boot_plans(patch_txm=patch_txm)
+    kernel_plan, txm_plan = normal_boot_plans(
+        patch_txm=patch_txm,
+        tfp0=os.environ.get("LITER8_TFP0") == "1",
+    )
 
     # Build beside .liter8 first. A failed resolver or signing step leaves the
     # operator's previous Ramdisk directory intact.

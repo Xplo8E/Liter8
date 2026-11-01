@@ -53,6 +53,8 @@ public enum KernelOptInResolvers {
         case KernelPPLAllowInvalidResolver.name, KernelVMFaultCSBypassResolver.name,
              KernelVMMapProtectResolver.name:
             return KernelCodeSigningResolver.variantKey
+        case KernelBootTFP0Resolver.name:
+            return KernelTFP0Resolver.variantKey
         default:
             return nil
         }

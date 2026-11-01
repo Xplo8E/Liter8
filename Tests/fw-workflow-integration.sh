@@ -115,6 +115,7 @@ assert document["bootPlan"] == {
     "preservesIM4PCompression": False,
     "normalBootUsesStaticTrustCache": False,
     "optionalPassthroughFirmware": [],
+    "supportsTFP0KernelTaskPort": False,
 }
 ''')
 PY

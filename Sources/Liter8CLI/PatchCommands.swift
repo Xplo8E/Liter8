@@ -25,7 +25,7 @@ COMPONENTS AND PLANS:
   kernel      restore, ppl-trust-cache, boot-policy, aks, sep-silence, sep,
               credential-manager, sandbox, sandbox-public, ppl-allow-invalid,
               vm-fault-cs-bypass, vm-map-protect, valeria, exception-port, boot,
-              boot-public, boot-jit, diagnostic
+              boot-public, boot-jit, boot-tfp0, diagnostic
   txm         restore, boot, debug-mapping, boot-debug, permissive-flags,
               boot-permissive
   userland    restored-fdr, asr, coreauthd, ctkd, mobileactivationd, commcenter

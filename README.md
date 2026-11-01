@@ -2,7 +2,7 @@
 
 Patch and boot custom iOS 27 on an iPhone 11, from a Mac. Built on the usbliter8 exploit.
 
-![iOS](https://img.shields.io/badge/iOS-27.0%20to%2027.2%20beta%202-2ea043?style=flat-square)
+![iOS](https://img.shields.io/badge/iOS-27.0%20to%2027.2%20beta%204-2ea043?style=flat-square)
 
 <img src="./docs/iphone11-sileo.jpg" alt="iPhone 11 running patched iOS 27 with Sileo" width="760">
 
@@ -143,6 +143,12 @@ pwn DFU again.
 Take the SIM out before going through Setup on a fresh restore. Cellular data doesn't work, so Setup can hang waiting on the network. Put it back once you're on the home screen.
 
 `fw get-boot` builds TXM with its code-signing policy flags turned on (any signature, unrestricted local signing, relaxed profile trust, CS enforcement disabled, unrestricted task_for_pid) plus the patches C function hooks need. CoreTrust stays enforced. The boot manifest records it as `txmPlan: boot-permissive`.
+
+On iPhone 11 (`iPhone12,1` / `n104ap`) from iOS 27.0 through iOS 27.2, use
+`fw get-boot --tfp0` to add the tfp0 kernel patches used by `libkrw0-tfp0`. It
+is off by default. The slide is handed out only when the kernel task is the one
+being asked about, so every other process keeps its real `TASK_DYLD_INFO` and
+lldb still sees a module list.
 
 ### 7. Finish the bootstrap
 

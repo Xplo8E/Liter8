@@ -56,6 +56,7 @@ let resolverGroups: [String: [String: String]] = [
         "exception-port": KernelExceptionPortResolver.name,
         "boot": KernelBootResolver.name,
         "boot-jit": KernelBootJITResolver.name,
+        "boot-tfp0": KernelBootTFP0Resolver.name,
         // Keep the public CLI spelling stable while the Swift type describes
         // the plan's real cross-build compatibility contract.
         "boot-public": KernelBootCompatibilityResolver.name,
@@ -267,6 +268,9 @@ func resolveRecords(
     case KernelBootJITResolver.name:
         try options.requireNoTuning(resolver: name)
         return try KernelBootJITResolver().resolve(in: image)
+    case KernelBootTFP0Resolver.name:
+        try options.requireNoTuning(resolver: name)
+        return try KernelBootTFP0Resolver().resolve(in: image)
     case KernelDiagnosticResolver.name:
         try options.requireNoTuning(resolver: name)
         return try KernelDiagnosticResolver().resolve(in: image)
@@ -368,7 +372,8 @@ func reportProfile(
         "  boards: \(profile.boards.joined(separator: ", "))",
         "  component: \(profile.component)",
     ]
-    if let variants = profile.variants(for: resolver) {
+    let variantKey = KernelOptInResolvers.optInKey(forResolver: resolver) ?? resolver
+    if let variants = profile.variants(for: variantKey) {
         lines.append("  signature variant: \(variants.signature) [\(variants.support.rawValue)]")
         lines.append("  payload variant: \(variants.payload)")
     } else {
