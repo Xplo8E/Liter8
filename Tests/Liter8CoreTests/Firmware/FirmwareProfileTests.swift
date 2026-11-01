@@ -135,6 +135,17 @@ final class FirmwareProfileTests: XCTestCase {
         ])
     }
 
+    /// Two builds must never claim one XNU string: `detect` returns nil on a
+    /// tie, which would silently disable every kernel resolver for both.
+    func testKernelResolverFingerprintsAreUnique() {
+        let fingerprints = KernelResolverProfileRegistry.profiles.map(\.embeddedFingerprint)
+        XCTAssertEqual(
+            fingerprints.count,
+            Set(fingerprints).count,
+            "duplicate embedded fingerprint: \(fingerprints.sorted())"
+        )
+    }
+
     func testEarlyBetasShareACMSignaturesAndPayload() throws {
         let beta2 = try XCTUnwrap(
             KernelResolverProfileRegistry.profiles.first { $0.covers(build: "24A5370h") }
