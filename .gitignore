@@ -49,3 +49,4 @@ device/personafix/l8persona.dylib
 # Host-built/downloaded device payloads; always reproduced by fetch_payloads.sh.
 device/payload/
 .run-ios272b4/
+.ios272r/

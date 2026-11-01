@@ -228,6 +228,26 @@ public enum KernelResolverProfileRegistry {
                 ),
             ]
         ),
+        KernelResolverProfile(
+            // The 27.2 release build, and the fifth distinct 27.2 XNU string.
+            // It shares beta 4's base version and differs only in the build
+            // suffix (~28 against ~13), but `detect` matches the whole string,
+            // so that is a different fingerprint and needs its own entry.
+            id: "ios272-24B119-n104ap",
+            productVersion: "27.2",
+            builds: ["24B119"],
+            boards: ["n104ap"],
+            component: "kernelcache.release.iphone12b",
+            embeddedFingerprint: "xnu-13432.42.3~28/RELEASE_ARM64_T8030",
+            resolverVariants: [
+                // Shape-identical to beta 4; see
+                // KernelCredentialManagerSignatures.release24B119V1.
+                "kernel-credential-manager": ResolverVariantProfile(
+                    signature: "ios272-24B119-acm-v1",
+                    payload: "acm-return-success-v1"
+                ),
+            ]
+        ),
     ]
 
     /// Detect a profile using evidence embedded in the artifact itself.

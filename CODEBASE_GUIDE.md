@@ -58,21 +58,33 @@ Swift decides, Python plumbs. Swift picks the firmware profile, parses the binar
 
 ## Supported builds
 
-Five `DeviceWorkflowProfile` entries, all `.reviewed`, all iPhone 11 `n104ap`:
+Twelve `DeviceWorkflowProfile` entries. Eight are iPhone 11 `n104ap`, and all
+eight are `.reviewed`:
 
-| Build | Version |
-| --- | --- |
-| `24A5390f` | 27.0 beta 4 |
-| `24A435` | 27.0 |
-| `24A446` | 27.0.1 |
-| `24B5084k` | 27.2 beta 1 |
-| `24B5089g` | 27.2 beta 2 |
+| Build | Version | State |
+| --- | --- | --- |
+| `24A5390f` | 27.0 beta 4 | reviewed |
+| `24A435` | 27.0 | reviewed |
+| `24A446` | 27.0.1 | reviewed |
+| `24B5084k` | 27.2 beta 1 | reviewed |
+| `24B5089g` | 27.2 beta 2 | reviewed |
+| `24B5099f` | 27.2 beta 3 | reviewed |
+| `24B5110a` | 27.2 beta 4 | reviewed |
+| `24B119` | 27.2 | reviewed |
+
+The remaining four are `.experimental` entries for `d421ap` and `d431ap` on
+`24A437` and `24A446`, which have no device run on those boards.
 
 `supports()` requires an exact build match, so anything else fails at `fw prepare`.
 
 Resolver profiles are a separate list and do not line up one to one. `ios27-24A435-n104ap` covers `24A435`, `24A437` and `24A446` because the kernels share an XNU fingerprint. `ios27-beta2-24A5370h-d421ap` exists only as a credential-manager signature reference for `d421ap`/`d431ap`, with no workflow behind it. A resolver profile existing says nothing about whether the device workflow is supported.
 
-Nothing is currently marked `.experimental`. The flag and the gate are wired up and waiting for the next port.
+`.experimental` means the build's exact-build data is recorded and every plan
+resolves, but no restore or boot has been run on that board. `fw prepare` and
+every prepared device action refuse such a build unless `--experimental` is
+passed. The four `d421ap`/`d431ap` entries are in that state: their oracles were
+measured from their own root filesystems, but nobody has restored or booted an
+11 Pro or Pro Max.
 
 ## Flags and environment
 

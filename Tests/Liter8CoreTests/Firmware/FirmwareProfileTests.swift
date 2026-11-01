@@ -207,4 +207,115 @@ final class FirmwareProfileTests: XCTestCase {
         XCTAssertEqual(point.setupControllerMethodCount, release.setupControllerMethodCount)
         XCTAssertNotEqual(point.launchdCacheSHA256, release.launchdCacheSHA256)
     }
+
+    /// Every 27.2 seed, the release included, names its own ACM family.
+    ///
+    /// The early betas deliberately share one family, so this is not a global
+    /// rule: it is the 27.2 rule, and it exists because these builds are
+    /// shape-identical. `MaskedInstructionPattern` pre-masks its values at
+    /// construction and does not retain the raw reference words, so two
+    /// shape-identical families compare equal however differently they were
+    /// recorded. The difference a shared family would hide is therefore not
+    /// observable here, which is exactly why the separation has to be enforced
+    /// by identity instead: each profile must point at a family of its own,
+    /// registered under its own id.
+    func testEveryTwoSevenTwoSeedNamesItsOwnACMFamily() throws {
+        let builds = ["24B5084k", "24B5089g", "24B5099f", "24B5110a", "24B119"]
+        var signatures: [String] = []
+
+        for build in builds {
+            let profile = try XCTUnwrap(
+                KernelResolverProfileRegistry.profiles.first { $0.covers(build: build) },
+                "no kernel profile covers \(build)"
+            )
+            let variants = try XCTUnwrap(
+                profile.variants(for: KernelCredentialManagerResolver.name)
+            )
+            let family = try XCTUnwrap(
+                KernelCredentialManagerSignatures.variant(named: variants.signature),
+                "\(build) names an unregistered ACM family"
+            )
+            // Catches a profile pointed at another build's family, and a
+            // `variant(named:)` case that returns the wrong one.
+            XCTAssertEqual(family.id, variants.signature)
+            XCTAssertEqual(variants.payload, "acm-return-success-v1")
+            XCTAssertEqual(variants.support, .supported)
+            signatures.append(variants.signature)
+        }
+
+        XCTAssertEqual(
+            signatures.count, Set(signatures).count,
+            "two 27.2 seeds share an ACM family: \(signatures)"
+        )
+    }
+
+    /// The 27.2 release family must describe the same 26 methods as beta 4, and
+    /// locate the same two of them positionally.
+    ///
+    /// The scored entries are ranked inside the interval their exact-matching
+    /// neighbours establish, so their identity depends on their index in this
+    /// list. A family that scored a different pair, or kept the pair but moved
+    /// it, would still resolve and would silently patch another function.
+    func testTwoSevenTwoReleaseScoresTheSameTwoMethodsAsBeta4() throws {
+        let beta4 = try XCTUnwrap(
+            KernelCredentialManagerSignatures.variant(named: "ios272b4-24B5110a-acm-v1")
+        )
+        let release = try XCTUnwrap(
+            KernelCredentialManagerSignatures.variant(named: "ios272-24B119-acm-v1")
+        )
+
+        XCTAssertEqual(release.functions.map(\.name), beta4.functions.map(\.name))
+        XCTAssertEqual(
+            release.functions.filter(\.needsScoring).map(\.name),
+            ["updateAnalytics", "unlockItem"]
+        )
+        XCTAssertEqual(
+            release.functions.map(\.needsScoring),
+            beta4.functions.map(\.needsScoring)
+        )
+        // Word counts are part of the shape: a shortened descriptor would
+        // match more sites, and the scored entries are sized to span the
+        // drifted tail that makes them ambiguous in the first place.
+        XCTAssertEqual(
+            release.functions.map { $0.pattern.values.count },
+            beta4.functions.map { $0.pattern.values.count }
+        )
+    }
+
+    /// 27.2 release became reviewed after its own erase restore and repeat boot.
+    ///
+    /// This test started life asserting `.experimental`, which was the right
+    /// guarantee while the build had resolved and been measured but never
+    /// booted. The guarantee that matters now is the same one stated forwards:
+    /// the promotion happened, so the entry must keep carrying the oracles that
+    /// were measured from this build rather than quietly inheriting beta 4's.
+    ///
+    /// Device run on 2026-10-31: erase restore, SSHRD provisioning, normal
+    /// boot, repeat boot, finalization and setup-debugger. Repeat boot is the
+    /// gate that took the longest to meet, and /var/mobile/jbboot.log carrying
+    /// two appended `=== jbboot start ===` blocks is what closed it.
+    ///
+    /// The oracles are pinned against beta 4's as well. Two entries agreeing on
+    /// every oracle would be the signature of one having been copied from the
+    /// other instead of measured: these share the Setup count and differ on the
+    /// daemon count and both digests.
+    func testTwoSevenTwoReleaseWorkflowIsReviewedAfterItsOwnDeviceRun() throws {
+        let release = try XCTUnwrap(
+            DeviceWorkflowRegistry.profiles.first { $0.build == "24B119" }
+        )
+        let beta4 = try XCTUnwrap(
+            DeviceWorkflowRegistry.profiles.first { $0.build == "24B5110a" }
+        )
+
+        XCTAssertEqual(release.validationState, .reviewed)
+        XCTAssertEqual(release.productVersion, "27.2")
+        XCTAssertEqual(release.deviceClass, "n104ap")
+        XCTAssertEqual(release.launchdCacheDaemonCount, 732)
+        XCTAssertEqual(release.setupControllerMethodCount, 64)
+
+        XCTAssertEqual(release.setupControllerMethodCount, beta4.setupControllerMethodCount)
+        XCTAssertNotEqual(release.launchdCacheDaemonCount, beta4.launchdCacheDaemonCount)
+        XCTAssertNotEqual(release.launchdSHA256, beta4.launchdSHA256)
+        XCTAssertNotEqual(release.launchdCacheSHA256, beta4.launchdCacheSHA256)
+    }
 }

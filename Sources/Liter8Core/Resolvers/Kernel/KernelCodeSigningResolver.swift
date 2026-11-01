@@ -20,8 +20,11 @@ import Foundation
 ///
 /// These are deliberately NOT part of `boot-public`. They weaken code signing
 /// for every process, so they live in the separate `boot-jit` plan, which `fw
-/// get-boot` always builds. On a kernel profile without the opt-in it is
-/// identical to `boot-public`.
+/// get-boot` always builds. On a kernel profile without the opt-in they
+/// contribute nothing, but `boot-jit` is still not identical to `boot-public`:
+/// it also clears the exception-port behavior enforcement byte, and that
+/// resolver is unconditional. Measured on both 24B119 and 24B5099f, where
+/// `boot-public` resolves 134 records and `boot-jit` resolves 135.
 public enum KernelCodeSigningResolver {
     /// Opt-in variant key a kernel profile sets to request these patches.
     static let variantKey = "kernel-codesign-invalid"

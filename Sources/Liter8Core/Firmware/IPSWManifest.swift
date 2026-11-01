@@ -364,6 +364,65 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
             )
         ),
+        // iOS 27.2, the release build. Device-validated on an iPhone 11 on
+        // 2026-10-31: erase restore, SSHRD provisioning, normal boot, repeat
+        // boot, Procursus finalization and setup-debugger all passed.
+        //
+        // Repeat boot is recorded separately because a first boot that works
+        // and a second that does not is a failure mode this device has
+        // produced before. The evidence is /var/mobile/jbboot.log, which the
+        // per-boot job appends to and which lives on the Data volume the erase
+        // restore wiped: it carries two `=== jbboot start ===` blocks, and the
+        // second adds `injection enabled for this boot` and a SpringBoard
+        // restart so its tweaks load. The booted kernel reports
+        // xnu-13432.42.3~28/PATCHED_ARM64_T8030, which is both this profile's
+        // fingerprint and proof the kernel identity records applied.
+        //
+        // `finalize --check` reported complete on both boots: root SSH,
+        // per-device Dropbear host keys, bootstrap shells, ElleKit 1.2, the
+        // re-sign hook with every TweakInject dylib ad-hoc signed, injection
+        // auto-enable, the one-time System application registration, persona
+        // 99, the icon read token and a running PosterBoard repair watcher.
+        //
+        // All four oracles were measured from this build's own root filesystem
+        // with `survey --guards`. The daemon count is 732, one fewer than beta
+        // 4's 733 and equal to beta 3's; the Setup controller count matches
+        // beta 4 at 64. Both are read values: the two digests differ from
+        // every other entry, so the images are not the same and the counts
+        // were not carried across.
+        //
+        // Not exercised, and deliberately not claimed: the on-screen verbose
+        // boot log. Both the restore and normal-boot artifacts for this run
+        // were built with `--serial`, so the console was on the UART by
+        // design. The boot plan is n104's display behaviour and the device
+        // reached SpringBoard, but the on-screen log path itself was not
+        // observed on this build. SEP, cellular data, Apple services and
+        // MobileBackup2 remain the project-wide gaps they are elsewhere.
+        //
+        // One observation left unexplained: load average ran 129-295 in the
+        // first two minutes after boot and still fluctuated 15-43 after two
+        // and a half hours of uptime, while every one of 421 processes read
+        // 0.0% CPU and SpringBoard stayed up. Nothing was spinning, so this is
+        // recorded rather than diagnosed.
+        DeviceWorkflowProfile(
+            id: "iphone12,1-n104ap-24B119",
+            productVersion: "27.2",
+            build: "24B119",
+            productType: "iPhone12,1",
+            deviceClass: "n104ap",
+            chipID: 0x8030,
+            boardID: 0x04,
+            extractedDirectoryName: "iPhone12,1_27.2_24B119_Restore",
+            validationState: .reviewed,
+            launchdSHA256: "0776cff26027264644dbf7a36049e8bc9c10fa296a787d1c62f174ccccaf40d3",
+            launchdCacheSHA256: "7e241a31f72fdd6026c156180b9c43fc415a8fcd897c6b9399b75844fbeb42c6",
+            launchdCacheDaemonCount: 732,
+            setupControllerMethodCount: 64,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [.skipDisplayInitialization],
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
+            )
+        ),
         // iOS 27.0.1, device-validated on an iPhone 11: erase restore, SSHRD
         // provisioning, normal boot, repeat boot, Procursus finalization,
         // Dropbear, persona 99, icon token and PosterBoard repair all passed.

@@ -43,6 +43,7 @@ PRs welcome on any of these, especially SEP. The Pro and Pro Max are open too, i
 | iOS 27.2 beta 2 | `24B5089g` | run       | -            | -            |
 | iOS 27.2 beta 3 | `24B5099f` | run       | -            | -            |
 | iOS 27.2 beta 4 | `24B5110a` | run       | -            | -            |
+| iOS 27.2        | `24B119`   | run       | -            | -            |
 
 "Run" means i did an erase restore, booted it normally, then rebooted and it came back up. "Experimental" means unverified. It resolves and you can use it with `--experimental`, but nobody has confirmed it on that phone. If you own one and are willing to try, share what happens and i'll change the tag.
 
