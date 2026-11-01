@@ -35,9 +35,18 @@ struct MaskedInstructionPattern: Sendable {
     /// load/store instructions. Kernel C++ objects move fields between builds,
     /// while the base register, destination register, width and operation stay
     /// stable. No other arithmetic or register fields are relaxed.
-    init(name: String, referenceWords: [UInt32], allowDataLayoutDrift: Bool = false) {
-        let masks = referenceWords.map {
-            Self.mask(for: $0, allowDataLayoutDrift: allowDataLayoutDrift)
+    init(
+        name: String,
+        referenceWords: [UInt32],
+        allowDataLayoutDrift: Bool = false,
+        ignoring ignored: Set<Int> = []
+    ) {
+        precondition(ignored.allSatisfy(referenceWords.indices.contains))
+        let masks = referenceWords.indices.map {
+            ignored.contains($0) ? 0 : Self.mask(
+                for: referenceWords[$0],
+                allowDataLayoutDrift: allowDataLayoutDrift
+            )
         }
         self.init(
             name: name,

@@ -133,6 +133,8 @@ public struct DeviceBootPlan: Codable, Equatable, Sendable {
     /// n104 boots both modes with the restore cache; j171aap's normal boot
     /// needs the System-volume cache. SSHRD always uses the restore cache.
     public let normalBootUsesStaticTrustCache: Bool
+    /// Whether this exact device profile supports `fw get-boot --tfp0`.
+    public let supportsTFP0KernelTaskPort: Bool
     /// Passthrough firmware this board legitimately does not ship.
     ///
     /// Empty is the safe default and the state of every profile registered
@@ -149,12 +151,14 @@ public struct DeviceBootPlan: Codable, Equatable, Sendable {
         restoreIBSSAdditionalPlans: [DeviceIBSSAdditionalPlan],
         preservesIM4PCompression: Bool = false,
         normalBootUsesStaticTrustCache: Bool = false,
+        supportsTFP0KernelTaskPort: Bool = false,
         optionalPassthroughFirmware: [String] = []
     ) {
         self.normalIBSSAdditionalPlans = normalIBSSAdditionalPlans
         self.restoreIBSSAdditionalPlans = restoreIBSSAdditionalPlans
         self.preservesIM4PCompression = preservesIM4PCompression
         self.normalBootUsesStaticTrustCache = normalBootUsesStaticTrustCache
+        self.supportsTFP0KernelTaskPort = supportsTFP0KernelTaskPort
         self.optionalPassthroughFirmware = optionalPassthroughFirmware
     }
 }
@@ -248,7 +252,8 @@ public enum DeviceWorkflowRegistry {
             setupControllerMethodCount: 66,
             bootPlan: DeviceBootPlan(
                 normalIBSSAdditionalPlans: [.skipDisplayInitialization],
-                restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization],
+                supportsTFP0KernelTaskPort: true
             )
         ),
         // Device-validated on an iPhone 11: erase restore, normal boot, repeat
@@ -283,7 +288,8 @@ public enum DeviceWorkflowRegistry {
             setupControllerMethodCount: 65,
             bootPlan: DeviceBootPlan(
                 normalIBSSAdditionalPlans: [.skipDisplayInitialization],
-                restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization],
+                supportsTFP0KernelTaskPort: true
             )
         ),
         // iOS 27.2 beta 2. Every plan resolves and all four oracles below were
@@ -311,7 +317,8 @@ public enum DeviceWorkflowRegistry {
             setupControllerMethodCount: 65,
             bootPlan: DeviceBootPlan(
                 normalIBSSAdditionalPlans: [.skipDisplayInitialization],
-                restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization],
+                supportsTFP0KernelTaskPort: true
             )
         ),
         // iOS 27.2 beta 3, device-validated on an iPhone 11: erase restore and
@@ -335,7 +342,8 @@ public enum DeviceWorkflowRegistry {
             setupControllerMethodCount: 65,
             bootPlan: DeviceBootPlan(
                 normalIBSSAdditionalPlans: [.skipDisplayInitialization],
-                restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization],
+                supportsTFP0KernelTaskPort: true
             )
         ),
         // iOS 27.2 beta 4, device-validated on an iPhone 11: erase restore, SSHRD
@@ -361,7 +369,8 @@ public enum DeviceWorkflowRegistry {
             setupControllerMethodCount: 64,
             bootPlan: DeviceBootPlan(
                 normalIBSSAdditionalPlans: [.skipDisplayInitialization],
-                restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization],
+                supportsTFP0KernelTaskPort: true
             )
         ),
         // iOS 27.2, the release build. Device-validated on an iPhone 11 on
@@ -420,7 +429,8 @@ public enum DeviceWorkflowRegistry {
             setupControllerMethodCount: 64,
             bootPlan: DeviceBootPlan(
                 normalIBSSAdditionalPlans: [.skipDisplayInitialization],
-                restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization],
+                supportsTFP0KernelTaskPort: true
             )
         ),
         // iOS 27.0.1, device-validated on an iPhone 11: erase restore, SSHRD
@@ -464,7 +474,8 @@ public enum DeviceWorkflowRegistry {
             setupControllerMethodCount: 66,
             bootPlan: DeviceBootPlan(
                 normalIBSSAdditionalPlans: [.skipDisplayInitialization],
-                restoreIBSSAdditionalPlans: [.skipDisplayInitialization]
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization],
+                supportsTFP0KernelTaskPort: true
             )
         ),
         // Same IPSW as the D431 entry below, so the guards are shared: one root

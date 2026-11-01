@@ -88,6 +88,17 @@ public struct KernelBootJITResolver: Sendable {
     }
 }
 
+/// Normal boot with the profile-gated tfp0 patches.
+public struct KernelBootTFP0Resolver: Sendable {
+    public static let name = "kernel-boot-tfp0"
+    public init() {}
+
+    public func resolve(in image: BinaryImage) throws -> [PatchRecord] {
+        let tfp0 = try KernelTFP0Resolver.requiredRecords(in: image)
+        return try KernelBootJITResolver().resolve(in: image) + tfp0
+    }
+}
+
 /// Diagnostic kernel plan: retain the anti-hang AKS changes, but deliberately
 /// omit SEP panic silencing, CredentialManager suppression, USB restore-mode
 /// forcing, persona changes, and Sandbox relaxation. If SEP still fails, this

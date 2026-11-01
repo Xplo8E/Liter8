@@ -121,6 +121,69 @@ final class ReleaseFixtureTests: XCTestCase {
         XCTAssertEqual(checked, 219, "every 27.2 record must be covered")
     }
 
+    func testTFP0ResolverMatchesEverySupportedKernel() throws {
+        let cases: [(build: String, offsets: [UInt64], slide: String)] = [
+            ("24A435", [0x31B6640, 0x36BF37C, 0x31B7FA8, 0x32003F8], "68d3feb008b547f9df0200f9"),
+            ("24A446", [0x31B6640, 0x36BF37C, 0x31B7FA8, 0x32003F8], "68d3feb008b547f9df0200f9"),
+            ("24B5084k", [0x32EB87C, 0x37FA368, 0x32ED1E4, 0x3335880], "88cbfeb008a540f9df0200f9"),
+            ("24B5089g", [0x32EF810, 0x37FEA40, 0x32F1178, 0x333981C], "68cbfeb008a540f9df0200f9"),
+            ("24B5099f", [0x3207830, 0x3716BA8, 0x3209198, 0x3251854], "88d1feb0089140f9df0200f9"),
+            ("24B5110a", [0x320B830, 0x371AE48, 0x320D198, 0x3255854], "68d1feb0089140f9df0200f9"),
+            ("24B119", [0x31F28D4, 0x36FE7AC, 0x31F423C, 0x323C784], "e8d1fed0085940f9df0200f9"),
+        ]
+        let available = cases.filter {
+            let url = binary("kernelcache.release.iphone12b.bin", build: $0.build)
+            return FileManager.default.fileExists(atPath: url.path)
+        }
+        if available.isEmpty { throw XCTSkip("local tfp0 kernel fixtures are absent") }
+
+        for (build, offsets, slide) in available {
+            let url = binary("kernelcache.release.iphone12b.bin", build: build)
+            let image = try BinaryImage(contentsOf: url)
+            let records = try KernelTFP0Resolver.requiredRecords(in: image)
+            XCTAssertEqual(records.map(\.offset), offsets, build)
+            XCTAssertEqual(
+                records.prefix(3).compactMap(\.replacementWord),
+                [0xEB1F03FF, ARM64.nop, 0x1400000A],
+                build
+            )
+            XCTAssertEqual(records.last?.replacementBytes.hexadecimalString, slide, build)
+            if build == "24A435" || build == "24A446" {
+                try manifest("kernel-tfp0-n104-\(build).json", build: build)
+                    .verify(resolved: records, in: image)
+            }
+
+            let first = try GuardedPatchApplier.apply(records, to: image)
+            let patched = BinaryImage(data: first.data)
+            let secondRecords = try KernelTFP0Resolver.requiredRecords(in: patched)
+            XCTAssertEqual(secondRecords, records, build)
+            let second = try GuardedPatchApplier.apply(secondRecords, to: patched)
+            XCTAssertTrue(second.dispositions.values.allSatisfy { $0 == .alreadyApplied }, build)
+            XCTAssertEqual(second.data, first.data, build)
+        }
+    }
+
+    func testTFP0SlideResolverRejectsDamagedPreimage() throws {
+        let url = binary("kernelcache.release.iphone12b.bin", build: "24A446")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("local 24A446 kernelcache fixture is absent")
+        }
+        let clean = try BinaryImage(contentsOf: url)
+        var damagedPreimage = clean.data
+        var nop = ARM64.nop.littleEndian
+        withUnsafeBytes(of: &nop) { bytes in
+            damagedPreimage.replaceSubrange(0x32003F8..<(0x32003F8 + 4), with: bytes)
+        }
+        XCTAssertThrowsError(
+            try KernelTFP0Resolver.requiredRecords(in: BinaryImage(data: damagedPreimage))
+        ) { error in
+            guard case let PatchfinderError.invalidPatch(id, _) = error else {
+                return XCTFail("unexpected error \(error)")
+            }
+            XCTAssertEqual(id, "kernel.tfp0.dyld-info-slide")
+        }
+    }
+
     /// 27.2 must describe the same operations as the release builds.
     ///
     /// This is the comparison that matters most of the three, because 27.2
@@ -199,7 +262,7 @@ final class ReleaseFixtureTests: XCTestCase {
         let fileManager = FileManager.default
 
         let releaseFiles = try fileManager.contentsOfDirectory(atPath: releaseRoot.path)
-            .filter { $0.hasSuffix(".json") }
+            .filter { $0.hasSuffix(".json") && !$0.hasPrefix("kernel-tfp0-") }
         let betaFiles = try fileManager.contentsOfDirectory(atPath: betaRoot.path)
             .filter { $0.hasSuffix(".json") }
         XCTAssertEqual(releaseFiles.count, betaFiles.count)

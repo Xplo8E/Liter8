@@ -108,6 +108,33 @@ final class FirmwareProfileTests: XCTestCase {
         XCTAssertFalse(release.covers(build: "24A5390f"))
     }
 
+    func testTFP0SupportCoversIPhone11From270Through272() {
+        let resolverBuilds = KernelResolverProfileRegistry.profiles
+            .filter { $0.variants(for: KernelTFP0Resolver.variantKey) != nil }
+            .flatMap(\.builds)
+            .sorted()
+        XCTAssertEqual(resolverBuilds, [
+            "24A435", "24A437", "24A446",
+            "24B119", "24B5084k", "24B5089g", "24B5099f", "24B5110a",
+        ])
+
+        let enabledProfiles = DeviceWorkflowRegistry.profiles
+            .filter { $0.bootPlan.supportsTFP0KernelTaskPort }
+        XCTAssertTrue(enabledProfiles.allSatisfy {
+            $0.productType == "iPhone12,1" && $0.deviceClass == "n104ap"
+        })
+
+        XCTAssertEqual(enabledProfiles.map(\.id).sorted(), [
+            "iphone12,1-n104ap-24A435",
+            "iphone12,1-n104ap-24A446",
+            "iphone12,1-n104ap-24B119",
+            "iphone12,1-n104ap-24B5084k",
+            "iphone12,1-n104ap-24B5089g",
+            "iphone12,1-n104ap-24B5099f",
+            "iphone12,1-n104ap-24B5110a",
+        ])
+    }
+
     func testEarlyBetasShareACMSignaturesAndPayload() throws {
         let beta2 = try XCTUnwrap(
             KernelResolverProfileRegistry.profiles.first { $0.covers(build: "24A5370h") }

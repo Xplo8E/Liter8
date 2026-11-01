@@ -345,6 +345,12 @@ struct Firmware: ParsableCommand {
         )
         var ticket: String?
 
+        @Flag(
+            name: .customLong("tfp0"),
+            help: "Add the iPhone 11 task_for_pid(0) patches for libkrw0-tfp0."
+        )
+        var tfp0 = false
+
         @OptionGroup var common: FirmwareCommonOptions
         @OptionGroup var prepared: FirmwarePreparedOptions
         @OptionGroup var serial: SerialConsoleOption
@@ -361,6 +367,7 @@ struct Firmware: ParsableCommand {
                 ticket: resolved,
                 environment: serial.environment
                     .merging(demotion.environment) { _, new in new }
+                    .merging(["LITER8_TFP0": tfp0 ? "1" : "0"]) { _, new in new }
             )
         }
     }
