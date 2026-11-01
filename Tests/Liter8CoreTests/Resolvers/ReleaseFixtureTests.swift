@@ -122,14 +122,33 @@ final class ReleaseFixtureTests: XCTestCase {
     }
 
     func testTFP0ResolverMatchesEverySupportedKernel() throws {
-        let cases: [(build: String, offsets: [UInt64], slide: String)] = [
-            ("24A435", [0x31B6640, 0x36BF37C, 0x31B7FA8, 0x32003F8], "68d3feb008b547f9df0200f9"),
-            ("24A446", [0x31B6640, 0x36BF37C, 0x31B7FA8, 0x32003F8], "68d3feb008b547f9df0200f9"),
-            ("24B5084k", [0x32EB87C, 0x37FA368, 0x32ED1E4, 0x3335880], "88cbfeb008a540f9df0200f9"),
-            ("24B5089g", [0x32EF810, 0x37FEA40, 0x32F1178, 0x333981C], "68cbfeb008a540f9df0200f9"),
-            ("24B5099f", [0x3207830, 0x3716BA8, 0x3209198, 0x3251854], "88d1feb0089140f9df0200f9"),
-            ("24B5110a", [0x320B830, 0x371AE48, 0x320D198, 0x3255854], "68d1feb0089140f9df0200f9"),
-            ("24B119", [0x31F28D4, 0x36FE7AC, 0x31F423C, 0x323C784], "e8d1fed0085940f9df0200f9"),
+        // Offsets are task conversion, PID zero, kernel map, the shim cave, and
+        // the TASK_DYLD_INFO site that now branches into it.
+        let cases: [(build: String, offsets: [UInt64], cave: String, branch: String)] = [
+            ("24A435", [0x31B6640, 0x36BF37C, 0x31B7FA8, 0x39FD53C, 0x32003F8],
+             "6893fed0083145f99f0208ebc10000548893fe9008b547f9df0200f9c80600f9ab0be01788f241f9c80200f988f641f9c80600f9a60be017",
+             "51f41f14"),
+            ("24A437", [0x31B6640, 0x36BF37C, 0x31B7FA8, 0x39FD53C, 0x32003F8],
+             "6893fed0083145f99f0208ebc10000548893fe9008b547f9df0200f9c80600f9ab0be01788f241f9c80200f988f641f9c80600f9a60be017",
+             "51f41f14"),
+            ("24A446", [0x31B6640, 0x36BF37C, 0x31B7FA8, 0x39FD53C, 0x32003F8],
+             "6893fed0083145f99f0208ebc10000548893fe9008b547f9df0200f9c80600f9ab0be01788f241f9c80200f988f641f9c80600f9a60be017",
+             "51f41f14"),
+            ("24B5084k", [0x32EB87C, 0x37FA368, 0x32ED1E4, 0x3B3D53C, 0x3335880],
+             "288bfed0082146f99f0208ebc1000054488bfeb008a540f9df0200f9c80600f9cde0df1788f241f9c80200f988f641f9c80600f9c8e0df17",
+             "2f1f2014"),
+            ("24B5089g", [0x32EF810, 0x37FEA40, 0x32F1178, 0x3B4153C, 0x333981C],
+             "088bfed0082146f99f0208ebc1000054288bfeb008a540f9df0200f9c80600f9b4e0df1788f241f9c80200f988f641f9c80600f9afe0df17",
+             "481f2014"),
+            ("24B5099f", [0x3207830, 0x3716BA8, 0x3209198, 0x3A5953C, 0x3251854],
+             "2891fed0080d46f99f0208ebc10000544891feb0089140f9df0200f9c80600f9c2e0df1788f241f9c80200f988f641f9c80600f9bde0df17",
+             "3a1f2014"),
+            ("24B5110a", [0x320B830, 0x371AE48, 0x320D198, 0x3A5D53C, 0x3255854],
+             "0891fed0080d46f99f0208ebc10000542891feb0089140f9df0200f9c80600f9c2e0df1788f241f9c80200f988f641f9c80600f9bde0df17",
+             "3a1f2014"),
+            ("24B119", [0x31F28D4, 0x36FE7AC, 0x31F423C, 0x3A3D53C, 0x323C784],
+             "c891fed008d545f99f0208ebc1000054e891feb0085940f9df0200f9c80600f98efcdf1788f241f9c80200f988f641f9c80600f989fcdf17",
+             "6e032014"),
         ]
         let available = cases.filter {
             let url = binary("kernelcache.release.iphone12b.bin", build: $0.build)
@@ -137,7 +156,7 @@ final class ReleaseFixtureTests: XCTestCase {
         }
         if available.isEmpty { throw XCTSkip("local tfp0 kernel fixtures are absent") }
 
-        for (build, offsets, slide) in available {
+        for (build, offsets, cave, branch) in available {
             let url = binary("kernelcache.release.iphone12b.bin", build: build)
             let image = try BinaryImage(contentsOf: url)
             let records = try KernelTFP0Resolver.requiredRecords(in: image)
@@ -147,7 +166,11 @@ final class ReleaseFixtureTests: XCTestCase {
                 [0xEB1F03FF, ARM64.nop, 0x1400000A],
                 build
             )
-            XCTAssertEqual(records.last?.replacementBytes.hexadecimalString, slide, build)
+            // The slide reaches only the kernel task now: the cave tests X20
+            // against kernel_task and replays the four stock words otherwise.
+            XCTAssertEqual(records[3].replacementBytes.hexadecimalString, cave, build)
+            XCTAssertTrue(records[3].originalBytes.allSatisfy { $0 == 0 }, build)
+            XCTAssertEqual(records[4].replacementBytes.hexadecimalString, branch, build)
             if build == "24A435" || build == "24A446" {
                 try manifest("kernel-tfp0-n104-\(build).json", build: build)
                     .verify(resolved: records, in: image)
@@ -180,7 +203,7 @@ final class ReleaseFixtureTests: XCTestCase {
             guard case let PatchfinderError.invalidPatch(id, _) = error else {
                 return XCTFail("unexpected error \(error)")
             }
-            XCTAssertEqual(id, "kernel.tfp0.dyld-info-slide")
+            XCTAssertEqual(id, "kernel.tfp0.dyld-info-cave")
         }
     }
 

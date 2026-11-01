@@ -3,16 +3,11 @@ import Foundation
 /// Profile-gated kernel patches for libkrw's tfp0 backend.
 struct KernelTFP0Resolver: Sendable {
     static let variantKey = "kernel-tfp0"
-    static let signatureID = "ios27-24A435-tfp0-v2"
-    static let payloadID = "task-for-pid-zero-slide-v2"
+    static let signatureID = "ios27-tfp0-v2"
+    static let payloadID = "task-for-pid-zero-slide-v3"
 
     private static let slideFormat = "KernelCache slide: 0x%016lx\n"
     private static let slideRecordID = "kernel.tfp0.dyld-info-slide"
-    // LDR X8,[X20,#0x3e0]; STR X8,[X22]; LDR X8,[X20,#0x3e8].
-    private static let slideOriginal = instructionData([
-        0xF941_F288, 0xF900_02C8, 0xF941_F688,
-    ])
-
     // The count checks and final +8 store identify TASK_DYLD_INFO. The three
     // result instructions are ignored so clean and already-patched input match.
     private static let taskDyldInfoPattern = MaskedInstructionPattern(
@@ -128,68 +123,219 @@ struct KernelTFP0Resolver: Sendable {
                 evidence: ["unique \(pattern.name) instruction sequence"]
             )
         }
-        return records + [try slideRecord(in: image, layout: layout)]
+        return records + (try scopedSlideRecords(in: image, layout: layout))
     }
 
-    private func slideRecord(in image: BinaryImage, layout: MachOLayout) throws -> PatchRecord {
+    private static let scopedSlideRecordID = "kernel.tfp0.dyld-info-slide-scoped"
+    private static let caveRecordID = "kernel.tfp0.dyld-info-cave"
+    private static let shimWords = 14
+    // LDR X8,[X20,#0x3e0]; STR X8,[X22]; LDR X8,[X20,#0x3e8]; STR X8,[X22,#8].
+    private static let stockDyldInfoWords: [UInt32] = [
+        0xF941_F288, 0xF900_02C8, 0xF941_F688, 0xF900_06C8,
+    ]
+
+    /// Return the slide only when the queried task is the kernel task.
+    ///
+    /// The shipped slide patch rewrites the shared TASK_DYLD_INFO result path
+    /// without testing which task was asked about, so every task loses its real
+    /// dyld info. This routes the site through a cave that compares the task in
+    /// X20 against `kernel_task` and replays the four displaced instructions
+    /// unchanged for everyone else.
+    private func scopedSlideRecords(
+        in image: BinaryImage,
+        layout: MachOLayout
+    ) throws -> [PatchRecord] {
         let slide = try kernelSlideGlobal(in: image, layout: layout)
+        let kernelTask = try kernelTaskGlobal(in: image, layout: layout)
         let sequence = try Self.taskDyldInfoPattern.uniqueMatch(in: image, layout: layout)
         let site = sequence + 12
-        let finalStore = try image.readUInt32(at: site + 12)
+        let cave = try resolveCave(in: image, layout: layout, patchedSite: site)
 
-        guard finalStore & 0xFFC0_0000 == 0xF900_0000,
-              Self.unsignedByteOffset(finalStore) == 8
-        else {
+        // The four instructions the stock path needs. A clean image holds all
+        // four; an already-patched one holds our branch in the first slot and
+        // keeps the other three, so accept that state and replay the constant.
+        let live = try (0..<4).map { try image.readUInt32(at: site + UInt64($0 * 4)) }
+        let stock = Self.stockDyldInfoWords
+        let outputRegister = (stock[3] >> 5) & 0x1F
+        let clean = live == stock
+        // Decode in virtual-address space, the same space the branch was
+        // encoded in, then map back to compare file offsets.
+        let liveBranchTarget = layout.virtualAddress(forFileOffset: site)
+            .flatMap { ARM64.directBranchTarget(instruction: live[0], at: $0) }
+            .flatMap { layout.fileOffset(forVirtualAddress: $0) }
+        let applied = Array(live[1...]) == Array(stock[1...]) && liveBranchTarget == cave
+        guard clean || applied, outputRegister != 31 else {
             throw PatchfinderError.invalidPatch(
-                id: Self.slideRecordID,
-                reason: "TASK_DYLD_INFO second field is not a 64-bit +8 store"
-            )
-        }
-
-        let valueRegister = finalStore & 0x1F
-        let outputRegister = (finalStore >> 5) & 0x1F
-        guard valueRegister != 31,
-              outputRegister != 31,
-              slide.isMultiple(of: 8),
-              let siteAddress = layout.virtualAddress(forFileOffset: site),
-              let page = ARM64.encodeADRP(
-                register: valueRegister,
-                instructionOffset: siteAddress,
-                target: slide
-              )
-        else {
-            throw PatchfinderError.invalidPatch(
-                id: Self.slideRecordID,
-                reason: "cannot encode the TASK_DYLD_INFO slide transport"
-            )
-        }
-
-        // ADRP Xv,slide@page; LDR Xv,[Xv,#pageoff]; STR XZR,[Xout].
-        let scaledOffset = UInt32(slide & 0xFFF) / 8
-        let load = 0xF940_0000 | (scaledOffset << 10)
-            | (valueRegister << 5) | valueRegister
-        let clearAddress = 0xF900_001F | (outputRegister << 5)
-        let replacement = Self.instructionData([page, load, clearAddress])
-        let current = try image.bytes(at: site, count: replacement.count)
-        guard current == Self.slideOriginal || current == replacement else {
-            throw PatchfinderError.invalidPatch(
-                id: Self.slideRecordID,
+                id: Self.caveRecordID,
                 reason: "unexpected TASK_DYLD_INFO result construction"
             )
         }
 
-        return PatchRecord(
-            id: Self.slideRecordID,
-            component: "kernelcache",
-            offset: site,
-            originalBytes: Self.slideOriginal,
-            replacementBytes: replacement,
-            summary: "Return vm_kernel_slide through TASK_DYLD_INFO for libkrw0-tfp0",
-            evidence: [
-                "unique TASK_DYLD_INFO result construction",
-                "vm_kernel_slide recovered from the unique kernel slide log call",
-            ]
+        guard let siteAddress = layout.virtualAddress(forFileOffset: site),
+              let caveAddress = layout.virtualAddress(forFileOffset: cave),
+              let branchToCave = ARM64.encodeDirectBranch(
+                link: false, instructionOffset: siteAddress, target: caveAddress
+              ),
+              let kernelTaskPage = ARM64.encodeADRP(
+                register: 8, instructionOffset: caveAddress, target: kernelTask
+              ),
+              let slidePage = ARM64.encodeADRP(
+                register: 8, instructionOffset: caveAddress + 16, target: slide
+              ),
+              // Both tails rejoin the stock dispatch after the fourth word.
+              let kernelReturn = ARM64.encodeDirectBranch(
+                link: false, instructionOffset: caveAddress + 32, target: siteAddress + 16
+              ),
+              let stockReturn = ARM64.encodeDirectBranch(
+                link: false, instructionOffset: caveAddress + 52, target: siteAddress + 16
+              ),
+              slide.isMultiple(of: 8), kernelTask.isMultiple(of: 8)
+        else {
+            throw PatchfinderError.invalidPatch(
+                id: Self.caveRecordID,
+                reason: "cannot encode the scoped TASK_DYLD_INFO shim"
+            )
+        }
+
+        let shim: [UInt32] = [
+            kernelTaskPage,                                   // ADRP X8,kernel_task@page
+            0xF940_0108 | ((UInt32(kernelTask & 0xFFF) / 8) << 10),  // LDR X8,[X8,#off]
+            0xEB08_029F,                                      // CMP X20,X8
+            0x5400_00C1,                                      // B.NE stock (+6 words)
+            slidePage,                                        // ADRP X8,vm_kernel_slide@page
+            0xF940_0108 | ((UInt32(slide & 0xFFF) / 8) << 10),       // LDR X8,[X8,#off]
+            0xF900_001F | (outputRegister << 5),              // STR XZR,[Xout]
+            stock[3],                                         // STR X8,[Xout,#8] - the slide
+            kernelReturn,                                     // B back past the fourth word
+            stock[0], stock[1], stock[2], stock[3],           // stock path, replayed verbatim
+            stockReturn,                                      // B back past the fourth word
+        ]
+
+        let shimBytes = Self.instructionData(shim)
+        let blank = Data(repeating: 0, count: shimBytes.count)
+        let currentCave = try image.bytes(at: cave, count: shimBytes.count)
+        guard currentCave == blank || currentCave == shimBytes else {
+            throw PatchfinderError.invalidPatch(
+                id: Self.caveRecordID,
+                reason: "tfp0 cave at \(cave.hex) is neither clean padding nor this shim"
+            )
+        }
+
+        return [
+            PatchRecord(
+                id: Self.caveRecordID,
+                component: "kernelcache",
+                offset: cave,
+                originalBytes: blank,
+                replacementBytes: shimBytes,
+                summary: "kernel_task-scoped TASK_DYLD_INFO slide shim",
+                evidence: [
+                    "zero-filled executable padding after the Sandbox and Valeria reservations",
+                    "kernel_task recovered from the unique task-conversion ADRP/LDR pair",
+                    "vm_kernel_slide recovered from the unique kernel slide log call",
+                ]
+            ),
+            PatchRecord(
+                id: Self.scopedSlideRecordID,
+                component: "kernelcache",
+                offset: site,
+                original: stock[0],
+                replacement: branchToCave,
+                summary: "Route TASK_DYLD_INFO through the kernel_task-scoped slide shim",
+                evidence: ["unique TASK_DYLD_INFO result construction"]
+            ),
+        ]
+    }
+
+    /// `kernel_task`, taken from the ADRP/LDR pair the task-conversion site
+    /// already uses to load it.
+    private func kernelTaskGlobal(in image: BinaryImage, layout: MachOLayout) throws -> UInt64 {
+        guard let site = Self.sites.first(where: { $0.id == "kernel.tfp0.task-conversion" })
+        else { throw PatchfinderError.missingAnchor("task-conversion site") }
+
+        let pattern = MaskedInstructionPattern(
+            name: site.name,
+            referenceWords: site.words,
+            allowDataLayoutDrift: site.allowDataLayoutDrift,
+            ignoring: [site.patchIndex]
         )
+        let start = try pattern.uniqueMatch(in: image, layout: layout)
+        let pageOffset = start + 24
+        let page = try image.readUInt32(at: pageOffset)
+        let load = try image.readUInt32(at: pageOffset + 4)
+
+        guard page & 0x9F00_0000 == 0x9000_0000,
+              load & 0xFFC0_0000 == 0xF940_0000,
+              (load >> 5) & 0x1F == page & 0x1F,
+              let pageAddress = layout.virtualAddress(forFileOffset: pageOffset)
+        else {
+            throw PatchfinderError.noCandidate("kernel_task ADRP/LDR pair")
+        }
+
+        let address = ARM64.adrpTarget(instruction: page, at: pageAddress)
+            &+ UInt64(Self.unsignedByteOffset(load))
+        guard let fileOffset = layout.fileOffset(forVirtualAddress: address),
+              layout.segments.contains(where: {
+                $0.fileRange.contains(fileOffset) && !$0.isExecutable
+              })
+        else {
+            throw PatchfinderError.invalidPatch(
+                id: Self.caveRecordID,
+                reason: "kernel_task does not resolve to mapped data"
+            )
+        }
+        return address
+    }
+
+    /// Executable padding after the words KernelSandboxResolver and
+    /// KernelValeriaResolver already own, so the three shims never overlap.
+    private func resolveCave(
+        in image: BinaryImage,
+        layout: MachOLayout,
+        patchedSite: UInt64
+    ) throws -> UInt64 {
+        // Mirrors KernelValeriaResolver's reservations. A committed version
+        // would share one owner for this padding instead of restating it.
+        let predecessor = MaskedInstructionPattern(
+            name: "completed function before shared kernel executable padding",
+            values: [0xF940_07EF, 0xF82D_798F, 0x1400_0000, 0x9100_43FF, 0xD65F_03C0],
+            masks:  [0xFFFF_FFFF, 0xFFFF_FFFF, 0xFC00_0000, 0xFFFF_FFFF, 0xFFFF_FFFF]
+        )
+        let sandboxReservedWords = 33
+        let valeriaReservedWords = 14
+
+        let tail = try predecessor.uniqueMatch(in: image, layout: layout)
+        let sandboxCave = tail + UInt64(predecessor.values.count * 4)
+        let cave = sandboxCave
+            + UInt64(sandboxReservedWords * 4)
+            + UInt64(valeriaReservedWords * 4)
+        let caveRange = cave..<(cave + UInt64(Self.shimWords * 4))
+
+        guard layout.executableFileRanges.contains(where: {
+            $0.lowerBound <= caveRange.lowerBound && $0.upperBound >= caveRange.upperBound
+        }) else {
+            throw PatchfinderError.noCandidate("file-backed executable tfp0 cave")
+        }
+        for range in layout.executableFileRanges {
+            var offset = (range.lowerBound + 3) & ~UInt64(3)
+            while offset + 4 <= range.upperBound {
+                if offset == patchedSite { offset += 4; continue }
+                let instruction = try image.readUInt32(at: offset)
+                if let sourceAddress = layout.virtualAddress(forFileOffset: offset),
+                   let targetAddress = ARM64.directBranchTarget(
+                    instruction: instruction, at: sourceAddress
+                   ),
+                   let target = layout.fileOffset(forVirtualAddress: targetAddress),
+                   caveRange.contains(target)
+                {
+                    throw PatchfinderError.invalidFixture(
+                        "direct branch at \(offset.hex) targets the proposed tfp0 cave"
+                    )
+                }
+                offset += 4
+            }
+        }
+        return cave
     }
 
     private func kernelSlideGlobal(in image: BinaryImage, layout: MachOLayout) throws -> UInt64 {
