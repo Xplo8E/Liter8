@@ -246,7 +246,23 @@ public enum KernelResolverProfileRegistry {
             id: "ios272-24B119-n104ap",
             productVersion: "27.2",
             builds: ["24B119"],
-            boards: ["n104ap"],
+            // The 11 Pro and Pro Max ship a different kernelcache from the
+            // iPhone 11 (`kernelcache.release.iphone12`, 67862528 bytes against
+            // iphone12b's 67796992) but it embeds the same XNU string, so
+            // `detect` selects this profile for all three boards and they
+            // cannot be split into separate entries: two profiles sharing one
+            // fingerprint make `detect` return nil for both.
+            //
+            // Measured on the iPhone12,3/iPhone12,5 24B119 IPSW rather than
+            // assumed from the shared build ID. Every kernel plan resolves on
+            // the Pro kernelcache with the record count this build produces on
+            // n104: credential-manager 52, sep 32, sandbox 46, restore 20,
+            // boot 169, aks 22, diagnostic 42, valeria 15. `acm-probe` against
+            // ios272-24B119-acm-v1 reports 24/26 exact with only the two
+            // scored entries ambiguous, which is what a family looks like on
+            // the build it was recorded from. Offsets differ between the two
+            // kernelcaches, as they must: they are rediscovered per image.
+            boards: ["n104ap", "d421ap", "d431ap"],
             component: "kernelcache.release.iphone12b",
             embeddedFingerprint: "xnu-13432.42.3~28/RELEASE_ARM64_T8030",
             resolverVariants: [

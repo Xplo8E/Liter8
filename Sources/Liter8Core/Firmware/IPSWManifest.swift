@@ -563,6 +563,141 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: []
             )
         ),
+        // iPhone 11 Pro and Pro Max on 27.2, resolver-verified and measured,
+        // with no device run on either board. Nothing here was carried over
+        // from the n104 24B119 entry.
+        //
+        // What was exercised, all on the host: `fw prepare` on the
+        // iPhone12,3/iPhone12,5 24B119 IPSW, `survey` on the extracted tree,
+        // every iBoot plan resolved against each board's *own* iBSS and iBEC
+        // rather than only the d421 pair `survey` happens to pick, `acm-probe`,
+        // `survey --guards` for the four oracles below, and `fw make-cfw` for
+        // each board, each reporting six verified restore artifacts. Every
+        // plan resolves with the record count this build produces on n104, on
+        // both boards, with one deliberate exception recorded below.
+        //
+        // The two make-cfw runs cross-check each other: `kernel-restore` and
+        // `txm-restore` come out byte-identical because both boards share one
+        // kernelcache and one TXM, while iBSS, iBEC and DeviceTree differ
+        // because each board ships its own. They need one work directory each,
+        // since `prepare_cfw` refuses a CFW built for another profile ID.
+        //
+        // All six userland plans resolve against this IPSW's own binaries, and
+        // none of them is per-board. `restored-fdr` (1) and `asr` (1) come
+        // from the restore ramdisk and were resolved by both make-cfw runs at
+        // identical offsets, because one ramdisk serves both boards.
+        // `coreauthd` (1), `ctkd` (2), `mobileactivationd` (5) and
+        // `commcenter` (3) live in the AEA rootfs, which make-cfw never opens,
+        // so they were resolved separately against the mounted root
+        // filesystem. Resolved only: `fw provision`, which is what applies
+        // them, was not run.
+        //
+        // Those four rootfs binaries are byte-identical to the ones in the
+        // iPhone12,1 24B119 rootfs, and every record lands on the same offset
+        // with the same id. The two IPSWs do ship different OS volumes, which
+        // Apple names RaveB24B119.N104OS and RaveB24B119.D421D431OS, and
+        // /System/Library/xpc/launchd.plist differs between them exactly as
+        // the two profiles' `launchdCacheSHA256` values record. So the volumes
+        // are genuinely different images that happen to carry the same
+        // userland executables, not one image reused.
+        //
+        // `devicetree` is resolved separately too, for both plans and both
+        // boards, because `survey` sweeps only iboot/txm/kernel and make-cfw
+        // reaches `restore` alone. The three boards ship genuinely different
+        // trees (237068, 240096 and n104's 234920 bytes) and all three take
+        // the same edits: `normal` removes content-protect, adds
+        // no-effaceable-storage and boot-ios-diagnostics and updates
+        // ephemeral-storage for +44 bytes, `restore` removes content-protect
+        // for -36.
+        //
+        // That completes the plan surface: every plan `fw get-rd` and
+        // `fw get-boot` would apply (ibss-ramdisk/ibss-normal on both iBSS and
+        // the raw iBEC, txm restore/boot, devicetree restore/normal, kernel
+        // restore and a boot plan) now resolves on each board's own
+        // components. Neither phase was run, because both need an APTicket and
+        // that comes from the phone, not the IPSW. What is missing there is a
+        // signature, not a patch.
+        //
+        // What was not exercised, and is therefore not claimed: nothing past
+        // make-cfw. No APTicket, no erase restore, no SSHRD, no provisioning,
+        // no boot, no repeat boot, no finalization. A verified restore
+        // artifact set is four levels short of a booting phone, and nobody
+        // owns an 11 Pro or Pro Max to close that gap. SEP, cellular data,
+        // Apple services and MobileBackup2 remain the project-wide gaps they
+        // are on n104.
+        //
+        // The guards come from this IPSW's own root filesystem. One rootfs
+        // (141-09290-215.dmg.aea) serves both boards, so the two entries share
+        // all four values by construction and the IPSW is what makes that
+        // true, not a copy between entries. `launchdSHA256` equals n104's
+        // because /sbin/launchd is byte-identical across the boards; the
+        // daemon count of 732 and the Setup count of 64 equal n104's as read
+        // values, not carry-overs, and `launchdCacheSHA256` differs from
+        // n104's, which is what proves these were measured from a different
+        // image.
+        //
+        // `ibec-ignore-pinot-failure` resolves on n104 and finds nothing here.
+        // That is correct: Pinot is the iPhone 11 LCD driver and these boards
+        // carry a Summit OLED controller, so the hardware the plan patches is
+        // absent. See `IBECPinotDriver`. It is a diagnostic reached only
+        // through `resolve`, `apply`, `survey` and the fixture manifest; no
+        // boot or restore artifact path uses it, so no device action loses a
+        // patch on these boards.
+        //
+        // Empty boot plans follow the d421/d431 24A446 and 24A437 entries
+        // above. `skipDisplayInitialization` is n104's display behaviour and
+        // `ibss-skip-display-init` does resolve on both Pro boards, but
+        // whether either needs it is a question only the hardware answers, and
+        // applying an n104 workaround to a board that was never measured is
+        // exactly what DeviceBootPlan exists to prevent. tfp0 is off for the
+        // same reason: the plan resolves on this kernelcache, but the libkrw
+        // runtime evidence under docs/runs is n104-only.
+        //
+        // `preservesIM4PCompression` is left at its uncompressed default, as
+        // on the 24A437 and 24A446 Pro entries. That is an inference from the
+        // shared SoC, not a measurement: these boards are T8030 like n104, so
+        // their iBoot is expected to accept uncompressed payloads the way
+        // n104's does and unlike j171aap's. It is the first thing to suspect
+        // if a Pro board ever rejects the boot chain outright, and the
+        // discriminating test is one `fw boot` attempt with this flipped.
+        DeviceWorkflowProfile(
+            id: "iphone12,3-d421ap-24B119",
+            productVersion: "27.2",
+            build: "24B119",
+            productType: "iPhone12,3",
+            deviceClass: "d421ap",
+            chipID: 0x8030,
+            boardID: 0x06,
+            extractedDirectoryName: "iPhone12,3,iPhone12,5_27.2_24B119_Restore",
+            validationState: .experimental,
+            launchdSHA256: "0776cff26027264644dbf7a36049e8bc9c10fa296a787d1c62f174ccccaf40d3",
+            launchdCacheSHA256: "7c9724d4e2e0de815b1f676d975c5ead2480bbc13d147a17a04b2abdc7f4e465",
+            launchdCacheDaemonCount: 732,
+            setupControllerMethodCount: 64,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
+        DeviceWorkflowProfile(
+            id: "iphone12,5-d431ap-24B119",
+            productVersion: "27.2",
+            build: "24B119",
+            productType: "iPhone12,5",
+            deviceClass: "d431ap",
+            chipID: 0x8030,
+            boardID: 0x02,
+            extractedDirectoryName: "iPhone12,3,iPhone12,5_27.2_24B119_Restore",
+            validationState: .experimental,
+            launchdSHA256: "0776cff26027264644dbf7a36049e8bc9c10fa296a787d1c62f174ccccaf40d3",
+            launchdCacheSHA256: "7c9724d4e2e0de815b1f676d975c5ead2480bbc13d147a17a04b2abdc7f4e465",
+            launchdCacheDaemonCount: 732,
+            setupControllerMethodCount: 64,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
     ]
 
     /// Every profile this IPSW could be restored with.

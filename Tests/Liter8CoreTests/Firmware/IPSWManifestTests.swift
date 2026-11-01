@@ -199,7 +199,7 @@ struct IPSWManifestTests {
 
     /// Both Pro boards read their guards from the one root filesystem the
     /// 24A437 IPSW ships, so a change to either entry alone is a mistake.
-    @Test(arguments: ["24A437", "24A446"])
+    @Test(arguments: ["24A437", "24A446", "24B119"])
     func proBoardsShareTheirMeasuredGuards(build: String) {
         let pro = DeviceWorkflowRegistry.profiles.filter {
             $0.build == build && $0.deviceClass.hasPrefix("d4")
@@ -211,5 +211,54 @@ struct IPSWManifestTests {
         #expect(Set(pro.map(\.setupControllerMethodCount)).count == 1)
         #expect(Set(pro.map(\.extractedDirectoryName)).count == 1)
         #expect(Set(pro.map(\.boardID)) == [0x06, 0x02])
+    }
+
+    /// 27.2 on the Pro boards must behave exactly like 27.0 did: ambiguous
+    /// until a board is named, refused without `--experimental`, and never
+    /// answering with the iPhone 11 entry that shares this build ID.
+    ///
+    /// The identity here is the real one from
+    /// `iPhone12,3,iPhone12,5_27.2_24B119_Restore.ipsw`.
+    @Test func proBoardsOn272AreExperimentalAndBoardDisambiguated() throws {
+        let manifest: [String: Any] = [
+            "ProductVersion": "27.2",
+            "ProductBuildVersion": "24B119",
+            "SupportedProductTypes": ["iPhone12,3", "iPhone12,5"],
+            "BuildIdentities": [
+                ["ApBoardID": "0x06", "ApChipID": "0x8030",
+                 "Info": ["DeviceClass": "d421ap"]],
+                ["ApBoardID": "0x02", "ApChipID": "0x8030",
+                 "Info": ["DeviceClass": "d431ap"]],
+            ],
+        ]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: manifest, format: .binary, options: 0
+        )
+        let identity = try IPSWManifestInspector.parse(data)
+
+        // Neither board has a device run, so the default lookup must refuse
+        // even though a reviewed n104 entry exists for this same build.
+        #expect(DeviceWorkflowRegistry.matchingProfiles(for: identity).isEmpty)
+
+        let both = DeviceWorkflowRegistry.matchingProfiles(
+            for: identity, includeExperimental: true
+        )
+        #expect(both.count == 2)
+        #expect(DeviceWorkflowRegistry.profile(for: identity, includeExperimental: true) == nil)
+
+        for (board, expected) in [
+            ("d421ap", "iphone12,3-d421ap-24B119"),
+            ("d431ap", "iphone12,5-d431ap-24B119"),
+        ] {
+            let picked = DeviceWorkflowRegistry.profile(
+                for: identity, includeExperimental: true, board: board
+            )
+            #expect(picked?.id == expected)
+            #expect(picked?.validationState == .experimental)
+        }
+
+        // The reviewed iPhone 11 entry shares the build and the chip ID and
+        // differs only in board ID, so it must not match this IPSW at all.
+        #expect(!both.contains { $0.deviceClass == "n104ap" })
     }
 }

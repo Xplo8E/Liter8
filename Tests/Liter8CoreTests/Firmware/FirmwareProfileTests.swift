@@ -338,8 +338,11 @@ final class FirmwareProfileTests: XCTestCase {
     /// other instead of measured: these share the Setup count and differ on the
     /// daemon count and both digests.
     func testTwoSevenTwoReleaseWorkflowIsReviewedAfterItsOwnDeviceRun() throws {
+        // By id, not by build: 24B119 also carries two experimental Pro
+        // entries, and `first { $0.build == ... }` would depend on array order
+        // to keep finding the iPhone 11 one.
         let release = try XCTUnwrap(
-            DeviceWorkflowRegistry.profiles.first { $0.build == "24B119" }
+            DeviceWorkflowRegistry.profiles.first { $0.id == "iphone12,1-n104ap-24B119" }
         )
         let beta4 = try XCTUnwrap(
             DeviceWorkflowRegistry.profiles.first { $0.build == "24B5110a" }
@@ -355,5 +358,61 @@ final class FirmwareProfileTests: XCTestCase {
         XCTAssertNotEqual(release.launchdCacheDaemonCount, beta4.launchdCacheDaemonCount)
         XCTAssertNotEqual(release.launchdSHA256, beta4.launchdSHA256)
         XCTAssertNotEqual(release.launchdCacheSHA256, beta4.launchdCacheSHA256)
+    }
+
+    /// The 27.2 Pro entries must stay experimental and keep their own measured
+    /// service-cache digest.
+    ///
+    /// They legitimately share `launchdSHA256`, the daemon count and the Setup
+    /// count with the iPhone 11 entry, because /sbin/launchd is byte-identical
+    /// across the boards and the other two were read from the Pro rootfs and
+    /// came back equal. That makes the service-cache digest the only oracle
+    /// that can show these were measured rather than copied from the reviewed
+    /// n104 entry, so it is pinned as different here.
+    func testTwoSevenTwoProEntriesAreExperimentalAndMeasuredSeparately() throws {
+        let n104 = try XCTUnwrap(
+            DeviceWorkflowRegistry.profiles.first { $0.id == "iphone12,1-n104ap-24B119" }
+        )
+        let pro = DeviceWorkflowRegistry.profiles.filter {
+            $0.build == "24B119" && $0.deviceClass.hasPrefix("d4")
+        }
+        XCTAssertEqual(pro.map(\.id).sorted(), [
+            "iphone12,3-d421ap-24B119",
+            "iphone12,5-d431ap-24B119",
+        ])
+
+        for entry in pro {
+            XCTAssertEqual(entry.validationState, .experimental)
+            XCTAssertEqual(entry.productVersion, "27.2")
+            XCTAssertEqual(entry.chipID, 0x8030)
+            XCTAssertEqual(entry.launchdSHA256, n104.launchdSHA256)
+            XCTAssertEqual(entry.launchdCacheDaemonCount, n104.launchdCacheDaemonCount)
+            XCTAssertEqual(entry.setupControllerMethodCount, n104.setupControllerMethodCount)
+            XCTAssertNotEqual(entry.launchdCacheSHA256, n104.launchdCacheSHA256)
+
+            // No device has run these, so neither the n104 display workaround
+            // nor the n104-only tfp0 runtime evidence may leak onto them.
+            XCTAssertEqual(entry.bootPlan.normalIBSSAdditionalPlans, [])
+            XCTAssertEqual(entry.bootPlan.restoreIBSSAdditionalPlans, [])
+            XCTAssertFalse(entry.bootPlan.supportsTFP0KernelTaskPort)
+        }
+    }
+
+    /// One XNU fingerprint covers all three 24B119 boards, so the kernel
+    /// profile has to name them rather than being split in two.
+    ///
+    /// Splitting would give two profiles the same fingerprint, and `detect`
+    /// returns nil on a tie: every kernel plan would silently lose variant
+    /// selection on both. The `builds` list must stay single-entry for the
+    /// same reason `testNoBuildIDIsClaimedByTwoProfiles` exists.
+    func testTwoSevenTwoKernelProfileCoversBothProBoards() throws {
+        let profile = try XCTUnwrap(
+            KernelResolverProfileRegistry.profiles.first { $0.id == "ios272-24B119-n104ap" }
+        )
+        XCTAssertEqual(profile.boards.sorted(), ["d421ap", "d431ap", "n104ap"])
+        XCTAssertEqual(profile.builds, ["24B119"])
+
+        let claiming = KernelResolverProfileRegistry.profiles.filter { $0.covers(build: "24B119") }
+        XCTAssertEqual(claiming.map(\.id), [profile.id])
     }
 }

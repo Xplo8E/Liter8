@@ -58,6 +58,25 @@ public struct IBSSSkipDisplayInitResolver: Sendable {
     }
 }
 
+/// Whether an iBoot image carries the Pinot display driver at all.
+///
+/// Pinot drives the n104 (iPhone 11) LCD. The 11 Pro and Pro Max boards use a
+/// Summit OLED controller instead and their iBEC contains no Pinot code.
+/// Measured on 24B119: `pinot-panel-id` appears in `iBEC.n104.RELEASE.im4p`
+/// and in neither `iBEC.d421.RELEASE.im4p` nor `iBEC.d431.RELEASE.im4p`, both
+/// of which advertise `summit-panel-id` in its place.
+///
+/// This exists so a caller can tell "this board has no Pinot hardware" apart
+/// from "the Pinot signature stopped matching", which a bare `noCandidate`
+/// cannot express. It is deliberately not consulted by the resolvers below:
+/// on a board that does have Pinot they must still fail closed, and the only
+/// consumer is `survey`, which reports rather than patches.
+public enum IBECPinotDriver {
+    /// The driver's own environment-variable name, read by its panel-ID
+    /// lookup. A board without the driver has no reason to carry the string.
+    public static let environmentVariable = "pinot-panel-id"
+}
+
 /// Diagnostic only: if Pinot's panel-ID read leaves zero, report success by
 /// branching to the routine's existing success return instead of its failure
 /// teardown. It does not attempt panel programming with an invalid zero ID.
