@@ -1212,6 +1212,66 @@ class ContextTests(unittest.TestCase):
         self.assertIn("method_setImplementation", coreauth_source)
         self.assertIn('"coreauthd": ("/usr/lib/l8coreauth.dylib"', fixups)
 
+    def test_airport_credential_shim_is_narrow_and_marker_gated(self):
+        source = (DEVICE / "wififix/l8wifi.c").read_text()
+        builder = (DEVICE / "wififix/build.sh").read_text()
+        payload_builder = (DEVICE / "fetch_payloads.sh").read_text()
+        provisioner = (DEVICE / "sshrd_provision.sh").read_text()
+        fixups = (DEVICE / "userland_fixups.py").read_text()
+
+        # The shim claims exactly the AirPort generic-password item and
+        # leaves every other keychain request to the real implementation.
+        self.assertIn('CFSTR("AirPort")', source)
+        self.assertIn("kSecClassGenericPassword", source)
+        self.assertIn("kSecUseSystemKeychain", source)
+        self.assertIn("is_airport_password_query", source)
+        self.assertIn("fallback_enabled()", source)
+        self.assertIn('strcmp(program, L8WIFI_TARGET_PROGRAM)', source)
+        self.assertIn("O_NOFOLLOW", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemCopyMatching", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemAdd", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemUpdate", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemDelete", source)
+
+        # The marker is what turns the shim on, and it must be the operator's
+        # to create: root-owned and not group or other writable.
+        self.assertIn("L8WIFI_MARKER_UID 0", source)
+        self.assertIn("S_ISREG(status.st_mode)", source)
+        self.assertIn("(status.st_mode & (S_IWGRP | S_IWOTH)) == 0", source)
+
+        # The store holds the password, so it must be private.
+        self.assertIn("S_IRUSR | S_IWUSR", source)
+        self.assertIn("kMaximumStoreBytes", source)
+
+        # The dylib belongs on the sealed System volume: a restricted platform
+        # binary declines to load a dylib from anywhere else.
+        self.assertIn("-install_name /usr/lib/l8wifi.dylib", builder)
+        self.assertIn("-framework Security", builder)
+        self.assertIn("-not_for_dyld_shared_cache", builder)
+        self.assertIn('"wifid": ("/usr/lib/l8wifi.dylib"', fixups)
+        self.assertIn('"wifid.load-l8wifi"', fixups)
+
+        # The payload set builds and ships it, and the provisioning step
+        # deploys the dylib, patches wifid and enables the marker.
+        self.assertIn("wififix/l8wifi.dylib", payload_builder)
+        self.assertIn('"/usr/lib/l8wifi.dylib"', fixups)
+        self.assertIn("deploy_wifi_library", provisioner)
+        self.assertIn("deploy_userland_daemon wifid", provisioner)
+        self.assertIn("enable_wifi_credentials", provisioner)
+        self.assertIn("verify_userland_patch wifid /mnt1/usr/sbin/wifid", provisioner)
+        self.assertIn('note "l8wifi dylib"', provisioner)
+        self.assertIn("AirPort credential marker", provisioner)
+        self.assertIn("/mnt1/usr/lib/.liter8-wifi-credentials", provisioner)
+        self.assertIn("/mnt1/usr/lib/l8wifi.dylib", provisioner)
+        self.assertLessEqual(
+            {"sileo", "helpers", "cache", "injection", "pairing", "wifi"},
+            default_step_set(payload_builder, r'^WANT="\$\{\*:-([^}]*)\}"'),
+        )
+        self.assertLessEqual(
+            {"ticket", "setup", "userland", "pairing", "wifi"},
+            default_step_set(provisioner, r'^STEPS="([^"]*)"'),
+        )
+
     def test_userland_builder_preserves_identity_and_entitlements(self):
         liter8 = SCRIPTS.parent / ".build/debug/liter8"
         ldid = SCRIPTS.parent / "tools/ldid_macosx_arm64"

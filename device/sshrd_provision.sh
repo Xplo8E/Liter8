@@ -26,7 +26,7 @@ cd "$BASE"
 # it is resolved once here rather than spelled out at each call site.
 TOOLS="$BASE/../tools"
 
-STEPS="mounts ticket setup userland pairing cellular screentime injection tweaks cache jbtools sileo resolv apps verify"
+STEPS="mounts ticket setup userland pairing wifi cellular screentime injection tweaks cache jbtools sileo resolv apps verify"
 
 usage() {
     echo "steps: $STEPS"
@@ -35,6 +35,7 @@ usage() {
     echo "  setup    patch Setup.app to skip unavailable first-run panes"
     echo "  userland patch and re-sign the SEP/activation daemons"
     echo "  pairing  install lockdownd, coreauthd companion guard and RemoteXPC repair"
+    echo "  wifi     keep Wi-Fi network passwords across reboots without SEP"
     echo "  cellular unseal baseband calibration and stop CommCenter refusing a data context"
     echo "  screentime make Setup's unavailable ScreenTime requests fail fast"
     echo "  injection install launchd hook plus icon grant, disabled for first boot"
@@ -465,6 +466,45 @@ echo DONE_OK
     ok "l8coreauth.dylib deployed and read back ($C_WANT)"
 }
 
+deploy_wifi_library() {
+    W_LOCAL=payload/l8wifi.dylib
+    # Sealed System volume on purpose: see the comment in userland_fixups.py.
+    W_DEVICE=/mnt1/usr/lib/l8wifi.dylib
+    W_STAGED=$W_DEVICE.liter8-new
+    W_READBACK=payload/.work/userland/l8wifi.readback
+    mkdir -p payload/.work/userland
+
+    [ -f "$W_LOCAL" ] || die "missing $W_LOCAL; run fetch_payloads.sh wifi"
+    codesign -v "$W_LOCAL" || die "l8wifi.dylib has an invalid CodeDirectory"
+    W_WANT=$(shasum -a 256 "$W_LOCAL" | awk '{print $1}')
+    put "$W_LOCAL" "$W_STAGED"
+    must_dev "
+[ -f '$W_DEVICE' ] && [ ! -f '$W_DEVICE.orig' ] && cp '$W_DEVICE' '$W_DEVICE.orig'
+chmod 0755 '$W_STAGED'
+mv -f '$W_STAGED' '$W_DEVICE'
+echo DONE_OK
+" "could not activate l8wifi.dylib"
+    sh_dev "/bin/cat '$W_DEVICE'" > "$W_READBACK" \
+        || die "could not read back l8wifi.dylib"
+    W_GOT=$(shasum -a 256 "$W_READBACK" | awk '{print $1}')
+    [ "$W_GOT" = "$W_WANT" ] || die "l8wifi.dylib readback hash mismatch"
+    ok "l8wifi.dylib deployed and read back ($W_WANT)"
+}
+
+# The shim is inert without this marker, so a device whose Wi-Fi misbehaves is
+# recovered by deleting one file from SSHRD rather than by restoring a
+# re-signed binary. It sits beside the dylib on the System volume.
+enable_wifi_credentials() {
+    W_MARKER=/mnt1/usr/lib/.liter8-wifi-credentials
+    must_dev "
+: > '$W_MARKER.new'
+chmod 0600 '$W_MARKER.new'
+mv -f '$W_MARKER.new' '$W_MARKER'
+echo DONE_OK
+" "could not enable the AirPort credential shim marker"
+    ok "wifid AirPort credential fallback enabled by scoped marker"
+}
+
 enable_pairing_fallback() {
     P_DIR=/mnt2/root/Library/Lockdown
     P_MARKER=$P_DIR/.liter8-pairing-fallback
@@ -539,6 +579,9 @@ deploy_userland_daemon() {
         remotepairingdeviced)
             U_DEVICE=/mnt1/usr/libexec/remotepairingdeviced
             ;;
+        wifid)
+            U_DEVICE=/mnt1/usr/sbin/wifid
+            ;;
         CommCenter)
             U_DEVICE=/mnt1/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter
             ;;
@@ -575,6 +618,24 @@ if wants pairing && [ "$CHECK_ONLY" = 0 ]; then
         deploy_userland_daemon "$U_NAME"
     done
     enable_pairing_fallback
+fi
+
+# ------------------------------------------------------------------- wifi
+# Without SEP the system keychain cannot retain the generic-password record
+# that carries a Wi-Fi network password, so the device forgets it on the next
+# boot and a password-protected network has to be typed again. The dylib keeps
+# that one record in a file on Data instead, and only while the marker is
+# present.
+#
+# The shim stores the password unencrypted, protected only by Unix mode 0600.
+# That is an explicit security tradeoff of the experimental SEP-less system,
+# and the same one the pairing fallback already makes for the lockdownd RSA
+# key.
+if wants wifi && [ "$CHECK_ONLY" = 0 ]; then
+    say "AirPort credential fallback"
+    deploy_wifi_library
+    deploy_userland_daemon wifid
+    enable_wifi_credentials
 fi
 
 # -------------------------------------------------------------- cellular
@@ -1632,6 +1693,7 @@ verify_userland_patch ctkd \
     /mnt1/System/Library/Frameworks/CryptoTokenKit.framework/ctkd
 verify_userland_patch lockdownd /mnt1/usr/libexec/lockdownd
 verify_userland_patch remotepairingdeviced /mnt1/usr/libexec/remotepairingdeviced
+verify_userland_patch wifid /mnt1/usr/sbin/wifid
 verify_userland_patch CommCenter \
     /mnt1/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter
 
@@ -1680,6 +1742,21 @@ else
     coreauth_library_state=MISSING
 fi
 note "l8coreauth dylib" "$coreauth_library_state"
+if [ -f payload/l8wifi.dylib ]; then
+    wifi_want=$(shasum -a 256 payload/l8wifi.dylib | awk '{print $1}')
+    sh_dev '/bin/cat /mnt1/usr/lib/l8wifi.dylib' \
+        > payload/.work/verify.l8wifi 2>/dev/null || true
+    if [ -s payload/.work/verify.l8wifi ] && \
+       [ "$(shasum -a 256 payload/.work/verify.l8wifi | awk '{print $1}')" = "$wifi_want" ] && \
+       codesign -v payload/.work/verify.l8wifi >/dev/null 2>&1; then
+        wifi_library_state=OK
+    else
+        wifi_library_state=MISMATCH
+    fi
+else
+    wifi_library_state=MISSING
+fi
+note "l8wifi dylib" "$wifi_library_state"
 if [ -f payload/l8fdr.dylib ]; then
     fdr_want=$(shasum -a 256 payload/l8fdr.dylib | awk '{print $1}')
     sh_dev '/bin/cat /mnt1/usr/lib/l8fdr.dylib' \
@@ -1700,6 +1777,7 @@ note "l8fdr dylib" "$fdr_library_state"
 note "FDR sik bypass marker" "$(required_marker /mnt1/usr/lib/.liter8-fdr-sik-bypass)"
 note "pairing fallback marker" "$(required_marker /mnt2/root/Library/Lockdown/.liter8-pairing-fallback)"
 note "RemoteXPC fallback marker" "$(required_marker /mnt1/usr/lib/.liter8-remotepairing-fallback)"
+note "AirPort credential marker" "$(required_marker /mnt1/usr/lib/.liter8-wifi-credentials)"
 note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_pairing_key.der ] && echo generated || echo pending' | tr -d '\r')"
 
 sh_dev '/bin/cat /mnt2/db/com.apple.xpc.launchd/disabled.plist' \

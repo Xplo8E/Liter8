@@ -63,6 +63,27 @@ other policies, and all other errors pass through unchanged. Consequently,
 this profile retains the explicit Trust decision but cannot provide genuine
 SEP-backed passcode proof; removing the marker disables this fallback too.
 
+`wifid` weak-loads `/usr/lib/l8wifi.dylib`. Without SEP the system keychain
+cannot retain the generic-password record that carries a Wi-Fi network
+password, so the device forgets it on the next boot and a password-protected
+network has to be typed again. The dylib keeps that one record in a file on
+the Data volume instead, at
+`/private/var/preferences/SystemConfiguration/com.liter8.wifi-passwords.plist`.
+
+It is active only while the root-owned `/usr/lib/.liter8-wifi-credentials`
+marker exists, and only inside `wifid`. It interposes the four `SecItem`
+operations for exactly one class of item: service `AirPort`, class
+`kSecClassGenericPassword`. Every other service, every other item class, and
+every request that does not match pass through to the real implementation, as
+does every request made by any process other than `wifid`. A record's
+system-keychain selection is part of its identity, so it is kept in the store
+key along with the account.
+
+The stored password is not encrypted: the file is protected only by Unix mode
+`0600`, the same tradeoff the pairing fallback already makes for the
+lockdownd RSA key. Removing the marker from SSHRD returns the loaded dylib to
+complete pass-through behavior.
+
 `coreauthd` also weak-loads `/usr/lib/l8coreauth.dylib`. On the SEP-less boot
 path ACM can return an empty DTO ratchet-state `NSData` without an error;
 LocalAuthenticationCore 24A446 otherwise copies 75 bytes from offset `0x100`
