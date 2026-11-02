@@ -34,4 +34,21 @@ done
 lipo -create "$BASE/l8wifi_arm64.dylib" "$BASE/l8wifi_arm64e.dylib" -output "$OUT"
 rm -f "$BASE/l8wifi_arm64.dylib" "$BASE/l8wifi_arm64e.dylib"
 "$LDID" -S -Cadhoc "$OUT"
-echo "[+] $OUT (arm64 + arm64e, adhoc-signed)"
+
+archs=$(lipo -archs "$OUT")
+case " $archs " in *" arm64 "*) ;; *) echo "[!] missing arm64 slice" >&2; exit 1 ;; esac
+case " $archs " in *" arm64e "*) ;; *) echo "[!] missing arm64e slice" >&2; exit 1 ;; esac
+for arch in arm64 arm64e; do
+    interpose_size=$(otool -arch "$arch" -l "$OUT" \
+        | awk '/sectname __interpose/{found=1} found && /size/{print $2; exit}')
+    [ "$interpose_size" = 0x0000000000000040 ] \
+        || { echo "[!] l8wifi $arch does not contain exactly four interposers" >&2; exit 1; }
+done
+otool -arch arm64 -L "$OUT" | grep -q '/System/Library/Frameworks/Security.framework/Security' \
+    || { echo "[!] l8wifi does not link Security.framework" >&2; exit 1; }
+# The shim runs inside wifid and borrows the daemon's keychain access, so it
+# must not carry entitlements of its own.
+[ -z "$("$LDID" -e "$OUT")" ] \
+    || { echo "[!] l8wifi unexpectedly carries entitlements" >&2; exit 1; }
+
+echo "[+] $OUT ($archs, marker-gated AirPort credential shim)"
