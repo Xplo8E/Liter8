@@ -195,6 +195,34 @@ static CFDictionaryRef add_with_sync(const char *acct, const char *password,
                               &kCFTypeDictionaryValueCallBacks);
 }
 
+/* An add that names a label. */
+static CFDictionaryRef add_with_label(const char *acct, const char *password,
+                                      const char *label) {
+    CFDataRef data = CFDataCreate(NULL, (const UInt8 *)password, (CFIndex)strlen(password));
+    const void *keys[4] = {kSecValueData, kSecAttrAccount, kSecAttrService,
+                           kSecAttrLabel};
+    const void *values[4] = {data, cfstr(acct), cfstr("AirPort"), cfstr(label)};
+    return CFDictionaryCreate(NULL, keys, values, 4,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
+/* A query that names a label. */
+static CFDictionaryRef query_with_label(const char *svc, const char *acct,
+                                        int want_data, const char *label) {
+    const void *keys[5];
+    const void *values[5];
+    int count = 0;
+    keys[count] = kSecAttrService; values[count] = cfstr(svc); count++;
+    if (acct) { keys[count] = kSecAttrAccount; values[count] = cfstr(acct); count++; }
+    keys[count] = kSecClass; values[count] = cfstr("genp"); count++;
+    if (want_data) { keys[count] = kSecReturnData; values[count] = kCFBooleanTrue; count++; }
+    if (label) { keys[count] = kSecAttrLabel; values[count] = cfstr(label); count++; }
+    return CFDictionaryCreate(NULL, keys, values, count,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
 /* The store file as it is on disk, for checking that a refused write left
  * it alone. */
 static uint8_t *read_file(const char *path, size_t *length) {
@@ -547,6 +575,109 @@ int main(int argc, char **argv) {
         if (status != errSecSuccess) {
             fail("a readable store must accept a credential again");
         }
+    } else if (strcmp(mode, "label") == 0) {
+        /* A query can match on the label, so a delete restricted to one
+         * label must not take the records it excludes, and a copy must not
+         * answer with a record whose label does not match. */
+        CFDictionaryRef labelled = add_with_label("labelled", "labelledpassword", "Work");
+        CFTypeRef added = NULL;
+        status = l8_SecItemAdd(labelled, &added);
+        if (added) { CFRelease(added); }
+        CFDictionaryRef plain = add_with_label("plain", "plainpassword", "Home");
+        added = NULL;
+        status = l8_SecItemAdd(plain, &added);
+        if (added) { CFRelease(added); }
+
+        /* An account-less delete naming a label must remove only that
+         * label's records. */
+        CFDictionaryRef delete_labelled = query_with_label("AirPort", NULL, 0, "Work");
+        probe_called_count = 0;
+        status = l8_SecItemDelete(delete_labelled);
+        if (status != errSecSuccess || probe_called_count != 0) {
+            fail("a labelled bulk delete must succeed without the real keychain");
+        }
+
+        CFDictionaryRef gone = query_with_label("AirPort", "labelled", 1, NULL);
+        CFTypeRef result = NULL;
+        status = l8_SecItemCopyMatching(gone, &result);
+        if (status == errSecSuccess) {
+            fail("a labelled bulk delete must remove the labelled record");
+        }
+        CFDictionaryRef kept = query_with_label("AirPort", "plain", 1, NULL);
+        result = NULL;
+        status = l8_SecItemCopyMatching(kept, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("a labelled bulk delete must leave the other record alone");
+        }
+
+        /* A copy that names a label must not answer with a record whose
+         * label is a different one. */
+        CFDictionaryRef wrong_label = query_with_label("AirPort", "plain", 1, "Work");
+        result = NULL;
+        status = l8_SecItemCopyMatching(wrong_label, &result);
+        if (status == errSecSuccess) {
+            fail("a copy naming a label must not answer with another label's record");
+        }
+    } else if (strcmp(mode, "addresult") == 0) {
+        /* The caller asks for a shape of result, so it gets that shape. A
+         * caller that asked for the attributes cannot use a CFData. */
+        const void *keys[5];
+        const void *values[5];
+        int count = 0;
+        keys[count] = kSecAttrService; values[count] = cfstr("AirPort"); count++;
+        keys[count] = kSecAttrAccount; values[count] = cfstr("shape"); count++;
+        keys[count] = kSecValueData; values[count] = CFDataCreate(NULL, (const UInt8 *)"secret", 6); count++;
+        keys[count] = kSecReturnAttributes; values[count] = kCFBooleanTrue; count++;
+        CFDictionaryRef attributes = CFDictionaryCreate(NULL, keys, values, count,
+                                                        &kCFTypeDictionaryKeyCallBacks,
+                                                        &kCFTypeDictionaryValueCallBacks);
+        CFTypeRef result = NULL;
+        status = l8_SecItemAdd(attributes, &result);
+        if (status != errSecSuccess) {
+            fail("the add must succeed");
+        }
+        if (result == NULL || CFGetTypeID(result) != CFDictionaryGetTypeID()) {
+            fail("an add that asks for the attributes must answer with a dictionary");
+        } else {
+            CFTypeRef account = CFDictionaryGetValue((CFDictionaryRef)result, kSecAttrAccount);
+            if (account == NULL || !CFEqual(account, cfstr("shape"))) {
+                fail("the returned attributes must carry the account");
+            }
+            if (CFDictionaryGetValue((CFDictionaryRef)result, kSecValueData) != NULL) {
+                fail("the returned attributes must not carry the password unasked");
+            }
+            CFRelease(result);
+        }
+    } else if (strcmp(mode, "oversize") == 0) {
+        /* A write that would produce a store the reader rejects must be
+         * refused, and the readable store must be left alone. */
+        int stored = 0;
+        OSStatus last = errSecSuccess;
+        for (int index = 0; index < 400; index++) {
+            char account[32];
+            snprintf(account, sizeof(account), "over%03d", index);
+            CFDictionaryRef add = add_with(account, "paddingpassword");
+            CFTypeRef result = NULL;
+            last = l8_SecItemAdd(add, &result);
+            if (result) { CFRelease(result); }
+            if (last != errSecSuccess) { break; }
+            stored++;
+        }
+        if (last == errSecSuccess) {
+            fail("a write past the store limit must be refused");
+        }
+        if (stored < 1) {
+            fail("the credentials written before the limit must exist");
+        }
+        /* The credentials written before the refused one must still be
+         * readable: the store was not replaced by one holding only the last
+         * credential. */
+        CFDictionaryRef first = query_with("AirPort", "over000", "genp", 1);
+        CFTypeRef result = NULL;
+        status = l8_SecItemCopyMatching(first, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("a refused write must leave the earlier credentials readable");
+        }
     } else if (strcmp(mode, "check") == 0) {
         /* A different service must pass through to the real keychain. */
         probe_called_count = 0;
@@ -787,7 +918,6 @@ with tempfile.TemporaryDirectory(prefix="l8-wifi-") as work:
     flags = [
         "-Wall", "-Wextra", "-Werror",
         f'-DL8WIFI_ENABLE_PATH="{marker}"',
-        f'-DL8WIFI_STORE_PATH="{store}"',
         # The test binary presents itself as wifid so the process gate opens.
         '-DL8WIFI_TARGET_PROGRAM="wifitest"',
         # The marker must be root-owned on the device. The test runs as an
@@ -799,6 +929,7 @@ with tempfile.TemporaryDirectory(prefix="l8-wifi-") as work:
     binary = work / "wifitest"
     subprocess.run([
         "xcrun", "clang", *flags,
+        f'-DL8WIFI_STORE_PATH="{store}"',
         str(harness_c),
         "-framework", "CoreFoundation", "-framework", "Security",
         "-o", str(binary),
@@ -895,9 +1026,38 @@ with tempfile.TemporaryDirectory(prefix="l8-wifi-") as work:
     if result.returncode != 0:
         raise SystemExit(f"FAIL: unreadable store\n{result.stdout}{result.stderr}")
 
+    # A label narrows a match, and the add's result has the shape asked for.
+    result = subprocess.run([str(binary), "label"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: label selection\n{result.stdout}{result.stderr}")
+    result = subprocess.run([str(binary), "addresult"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: add result shape\n{result.stdout}{result.stderr}")
+
+    # The store limit is read from the same constant the write path uses, so
+    # a second build with a small limit reaches it without writing a
+    # megabyte. It has to keep the process name, because the shim only acts
+    # inside wifid.
+    small = work / "small"
+    small.mkdir()
+    small_store = small / "store.plist"
+    small_binary = small / "wifitest"
+    subprocess.run([
+        "xcrun", "clang", *flags,
+        "-DL8WIFI_MAXIMUM_STORE_BYTES=4096",
+        f'-DL8WIFI_STORE_PATH="{small_store}"',
+        str(harness_c),
+        "-framework", "CoreFoundation", "-framework", "Security",
+        "-o", str(small_binary),
+    ], check=True)
+    result = subprocess.run([str(small_binary), "oversize"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: store limit\n{result.stdout}{result.stderr}")
+
     print("PASS: AirPort-only interception, foreign service and class pass through, "
           "add/copy/update/delete round-trip, marker-gated inertness, 0600 store, "
           "store path fits a device-sized thread stack, a bulk delete clears one "
           "keychain only, a malformed account selector is rejected, the "
-          "synchronizable attribute is part of the selection, an unreadable store "
-          "is not overwritten")
+          "synchronizable attribute and the label are part of the selection, an "
+          "unreadable store is not overwritten, an add answers with the shape "
+          "asked for")

@@ -97,7 +97,14 @@
 static const char *kEnablePath = L8WIFI_ENABLE_PATH;
 static const char *kStorePath = L8WIFI_STORE_PATH;
 
-enum { kMaximumStoreBytes = 1024 * 1024 };
+/* The largest store the shim will read. A write that would produce a larger
+ * one is refused, so the store never becomes unreadable. Overridable so a
+ * test can reach the limit without writing a megabyte. */
+#ifndef L8WIFI_MAXIMUM_STORE_BYTES
+#define L8WIFI_MAXIMUM_STORE_BYTES (1024 * 1024)
+#endif
+
+enum { kMaximumStoreBytes = L8WIFI_MAXIMUM_STORE_BYTES };
 
 static pthread_mutex_t gStoreLock = PTHREAD_MUTEX_INITIALIZER;
 static __thread bool gInsideHook;
@@ -359,6 +366,15 @@ static bool write_store(CFDictionaryRef store)
     if (bytes == NULL) {
         return false;
     }
+    /* The reader rejects a store above kMaximumStoreBytes, so a write that
+     * would produce one must be refused. Publishing it would make every
+     * saved password unreadable, and the store could not be shrunk again
+     * because loading it fails first. */
+    if ((size_t)CFDataGetLength(bytes) > kMaximumStoreBytes) {
+        syslog(LOG_ERR, "l8wifi: the credential store would exceed its limit");
+        CFRelease(bytes);
+        return false;
+    }
 
     char temporary[PATH_MAX];
     if (snprintf(temporary, sizeof(temporary), "%s.tmp.%d", kStorePath,
@@ -390,7 +406,8 @@ static bool write_store(CFDictionaryRef store)
 }
 
 static CFMutableDictionaryRef new_entry(CFStringRef account, CFDataRef data,
-                                        bool synchronizable, bool system)
+                                        bool synchronizable, bool system,
+                                        CFStringRef label)
 {
     CFMutableDictionaryRef entry = CFDictionaryCreateMutable(
         kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks,
@@ -401,6 +418,9 @@ static CFMutableDictionaryRef new_entry(CFStringRef account, CFDataRef data,
     CFDateRef now = CFDateCreate(kCFAllocatorDefault, CFAbsoluteTimeGetCurrent());
     CFDictionarySetValue(entry, CFSTR("account"), account);
     CFDictionarySetValue(entry, CFSTR("data"), data);
+    if (label != NULL) {
+        CFDictionarySetValue(entry, CFSTR("label"), label);
+    }
     CFDictionarySetValue(entry, CFSTR("synchronizable"),
                          synchronizable ? kCFBooleanTrue : kCFBooleanFalse);
     CFDictionarySetValue(entry, CFSTR("system"),
@@ -438,10 +458,14 @@ static CFMutableDictionaryRef result_attributes(CFDictionaryRef entry,
     CFTypeRef data = CFDictionaryGetValue(entry, CFSTR("data"));
     CFTypeRef synchronizable = CFDictionaryGetValue(entry, CFSTR("synchronizable"));
     CFTypeRef modified = CFDictionaryGetValue(entry, CFSTR("modified"));
+    CFTypeRef label = CFDictionaryGetValue(entry, CFSTR("label"));
     CFDictionarySetValue(result, kSecClass, kSecClassGenericPassword);
     CFDictionarySetValue(result, kSecAttrService, CFSTR("AirPort"));
     if (account != NULL) {
         CFDictionarySetValue(result, kSecAttrAccount, account);
+    }
+    if (label != NULL) {
+        CFDictionarySetValue(result, kSecAttrLabel, label);
     }
     if (synchronizable != NULL) {
         CFDictionarySetValue(result, kSecAttrSynchronizable, synchronizable);
@@ -455,10 +479,38 @@ static CFMutableDictionaryRef result_attributes(CFDictionaryRef entry,
     return result;
 }
 
+/* The label the caller gave the record. A query can match on it, so it is
+ * kept rather than dropped. */
+static CFStringRef query_label(CFDictionaryRef attributes)
+{
+    if (attributes == NULL) {
+        return NULL;
+    }
+    CFTypeRef value = CFDictionaryGetValue(attributes, kSecAttrLabel);
+    return value != NULL && CFGetTypeID(value) == CFStringGetTypeID()
+               ? (CFStringRef)value
+               : NULL;
+}
+
+/* Whether the query's label selects this record. A query without a label
+ * matches every record; a query with one matches only the record that
+ * carries it. */
+static bool query_accepts_label(CFDictionaryRef query, CFDictionaryRef entry)
+{
+    CFStringRef wanted = query_label(query);
+    if (wanted == NULL) {
+        return true;
+    }
+    CFTypeRef stored =
+        entry == NULL ? NULL : CFDictionaryGetValue(entry, CFSTR("label"));
+    return stored != NULL && CFEqual(stored, wanted);
+}
+
 /* Store one AirPort credential. The account and the password are both
  * required: a record without a password has nothing to keep. */
 static OSStatus store_credential(CFDictionaryRef query, CFDataRef data,
-                                 bool synchronizable)
+                                 bool synchronizable,
+                                 CFDictionaryRef *entry_out)
 {
     CFStringRef account = query_account(query);
     if (account == NULL || data == NULL) {
@@ -471,11 +523,24 @@ static OSStatus store_credential(CFDictionaryRef query, CFDataRef data,
     CFStringRef key = store_key(account, system);
     OSStatus status = errSecNotAvailable;
     if (store != NULL && key != NULL) {
+        /* The label, like the synchronizable attribute, is kept unless the
+         * caller names a new one. */
+        CFDictionaryRef existing = find_entry(store, key);
+        CFStringRef label = query_label(query);
+        if (label == NULL && existing != NULL) {
+            CFTypeRef stored = CFDictionaryGetValue(existing, CFSTR("label"));
+            if (stored != NULL && CFGetTypeID(stored) == CFStringGetTypeID()) {
+                label = (CFStringRef)stored;
+            }
+        }
         CFMutableDictionaryRef entry =
-            new_entry(account, data, synchronizable, system);
+            new_entry(account, data, synchronizable, system, label);
         if (entry != NULL) {
             CFDictionarySetValue(store, key, entry);
             status = write_store(store) ? errSecSuccess : errSecNotAvailable;
+            if (status == errSecSuccess && entry_out != NULL) {
+                *entry_out = (CFDictionaryRef)CFRetain(entry);
+            }
             CFRelease(entry);
         }
     }
@@ -523,7 +588,8 @@ static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
          * query that excludes the stored record does not get it. */
         if (entry != NULL &&
             query_accepts_synchronizable(
-                query, dictionary_bool(entry, CFSTR("synchronizable")))) {
+                query, dictionary_bool(entry, CFSTR("synchronizable"))) &&
+            query_accepts_label(query, entry)) {
             if (wants_attributes) {
                 produced = result_attributes(entry, wants_data);
             } else if (wants_data) {
@@ -559,6 +625,10 @@ static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
                 if (!query_accepts_synchronizable(
                         query, dictionary_bool((CFDictionaryRef)values[index],
                                                CFSTR("synchronizable")))) {
+                    continue;
+                }
+                /* And the label, which a query can match on too. */
+                if (!query_accepts_label(query, (CFDictionaryRef)values[index])) {
                     continue;
                 }
                 CFDictionaryRef attributes =
@@ -610,16 +680,33 @@ static OSStatus l8_SecItemAdd(CFDictionaryRef attributes, CFTypeRef *result)
         return SecItemAdd(attributes, result);
     }
 
+    /* The caller asked for a particular shape of result, so it gets that
+     * shape rather than the password as data. A caller that asked for the
+     * attributes cannot use a CFData. */
+    bool wants_data = dictionary_bool(attributes, kSecReturnData);
+    bool wants_attributes = dictionary_bool(attributes, kSecReturnAttributes);
+    CFDictionaryRef entry = NULL;
     gInsideHook = true;
     OSStatus status = store_credential(attributes, (CFDataRef)data,
-                                        dictionary_bool(attributes,
-                                                       kSecAttrSynchronizable));
+                                       dictionary_bool(attributes,
+                                                      kSecAttrSynchronizable),
+                                       &entry);
     gInsideHook = false;
     if (status != errSecSuccess) {
+        if (entry != NULL) {
+            CFRelease(entry);
+        }
         return status;
     }
     if (result != NULL) {
-        *result = CFRetain(data);
+        if (wants_attributes) {
+            *result = result_attributes(entry, wants_data);
+        } else if (wants_data) {
+            *result = CFRetain(data);
+        }
+    }
+    if (entry != NULL) {
+        CFRelease(entry);
     }
     return errSecSuccess;
 }
@@ -691,7 +778,8 @@ static OSStatus l8_SecItemUpdate(CFDictionaryRef query,
     }
 
     gInsideHook = true;
-    OSStatus status = store_credential(query, (CFDataRef)data, synchronizable);
+    OSStatus status =
+        store_credential(query, (CFDataRef)data, synchronizable, NULL);
     gInsideHook = false;
     return status;
 }
@@ -718,7 +806,8 @@ static OSStatus l8_SecItemDelete(CFDictionaryRef query)
             /* A delete that excludes the stored record does not match it. */
             if (entry != NULL &&
                 query_accepts_synchronizable(
-                    query, dictionary_bool(entry, CFSTR("synchronizable")))) {
+                    query, dictionary_bool(entry, CFSTR("synchronizable"))) &&
+                query_accepts_label(query, entry)) {
                 CFDictionaryRemoveValue(store, key);
                 removed = true;
                 written = write_store(store);
@@ -755,6 +844,10 @@ static OSStatus l8_SecItemDelete(CFDictionaryRef query)
                         if (!query_accepts_synchronizable(
                                 query, dictionary_bool((CFDictionaryRef)value,
                                                        CFSTR("synchronizable")))) {
+                            continue;
+                        }
+                        /* And so is the label. */
+                        if (!query_accepts_label(query, (CFDictionaryRef)value)) {
                             continue;
                         }
                         CFArrayAppendValue(doomed, keys[index]);
