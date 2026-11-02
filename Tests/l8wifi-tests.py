@@ -27,6 +27,7 @@ SRC = ROOT / "device/wififix"
 
 HARNESS = r"""
 #include <Security/Security.h>
+#include <dlfcn.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -120,6 +121,50 @@ static CFDictionaryRef add_with(const char *acct, const char *password) {
                               &kCFTypeDictionaryValueCallBacks);
 }
 
+/* The known-networks sweep: every AirPort record at once, with no account. */
+static CFDictionaryRef enumerate_query(void) {
+    const void *keys[4];
+    const void *values[4];
+    int count = 0;
+    keys[count] = kSecAttrService; values[count] = cfstr("AirPort"); count++;
+    keys[count] = kSecReturnAttributes; values[count] = kCFBooleanTrue; count++;
+    keys[count] = kSecMatchLimit; values[count] = kSecMatchLimitAll; count++;
+    return CFDictionaryCreate(NULL, keys, values, count,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
+/* The same sweep against the system keychain. The constant is private, so it
+ * is resolved the same way the shim resolves it. */
+static CFTypeRef system_keychain_constant(void) {
+    const CFTypeRef *address = (const CFTypeRef *)dlsym(RTLD_DEFAULT, "kSecUseSystemKeychain");
+    return address != NULL ? *address : NULL;
+}
+
+static CFDictionaryRef enumerate_query_system(void) {
+    const void *keys[5];
+    const void *values[5];
+    int count = 0;
+    keys[count] = kSecAttrService; values[count] = cfstr("AirPort"); count++;
+    keys[count] = kSecReturnAttributes; values[count] = kCFBooleanTrue; count++;
+    keys[count] = kSecMatchLimit; values[count] = kSecMatchLimitAll; count++;
+    keys[count] = system_keychain_constant(); values[count] = kCFBooleanTrue; count++;
+    return CFDictionaryCreate(NULL, keys, values, count,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
+/* An add that names the system keychain. */
+static CFDictionaryRef add_with_system(const char *acct, const char *password) {
+    CFDataRef data = CFDataCreate(NULL, (const UInt8 *)password, (CFIndex)strlen(password));
+    const void *keys[4] = {kSecValueData, kSecAttrAccount, kSecAttrService,
+                           system_keychain_constant()};
+    const void *values[4] = {data, cfstr(acct), cfstr("AirPort"), kCFBooleanTrue};
+    return CFDictionaryCreate(NULL, keys, values, 4,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
 int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "check";
     CFTypeRef result = NULL;
@@ -203,6 +248,53 @@ int main(int argc, char **argv) {
         status = l8_SecItemCopyMatching(unknown, &result);
         if (status == errSecSuccess) {
             fail("an unknown AirPort account must not resolve to a credential");
+        }
+
+        /* A record in the system keychain is a different record from the same
+         * account in the user keychain. */
+        CFDictionaryRef system_add = add_with_system("acct", "systempassword");
+        result = NULL;
+        status = l8_SecItemAdd(system_add, &result);
+        if (status != errSecSuccess) {
+            fail("adding a system-keychain AirPort credential must succeed");
+        }
+
+        /* The user-keychain enumeration must not return the system-keychain
+         * record. */
+        result = NULL;
+        status = l8_SecItemCopyMatching(enumerate_query(), &result);
+        if (status == errSecSuccess && result != NULL &&
+            CFGetTypeID(result) == CFArrayGetTypeID()) {
+            if (CFArrayGetCount((CFArrayRef)result) != 1) {
+                fail("a user-keychain enumeration must not return system records");
+            }
+        }
+
+        /* The system-keychain enumeration must return it. */
+        result = NULL;
+        status = l8_SecItemCopyMatching(enumerate_query_system(), &result);
+        if (status != errSecSuccess || result == NULL ||
+            CFGetTypeID(result) != CFArrayGetTypeID() ||
+            CFArrayGetCount((CFArrayRef)result) != 1) {
+            fail("a system-keychain enumeration must return the system record");
+        }
+
+        /* An enumeration must answer with the records of the keychain that was
+         * asked for and no others. wifid asks for every AirPort record at once
+         * when it lists known networks, and a record's system-keychain
+         * selection is part of its identity, so the two must not be mixed. */
+        CFDictionaryRef enumerate = enumerate_query();
+        result = NULL;
+        status = l8_SecItemCopyMatching(enumerate, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("an AirPort enumeration must be answered from the shim's store");
+        } else if (CFGetTypeID(result) != CFArrayGetTypeID()) {
+            fail("an AirPort enumeration must answer with an array of records");
+        } else {
+            CFIndex count = CFArrayGetCount((CFArrayRef)result);
+            if (count != 1) {
+                fail("an AirPort enumeration must return only the records of that keychain");
+            }
         }
 
         /* The stored credential belongs to the AirPort service and to the

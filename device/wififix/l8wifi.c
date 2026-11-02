@@ -456,8 +456,11 @@ static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
                 if (CFGetTypeID(values[index]) != CFDictionaryGetTypeID()) {
                     continue;
                 }
-                if (system && !dictionary_bool((CFDictionaryRef)values[index],
-                                              CFSTR("system"))) {
+                /* The system-keychain selection is part of a record's
+                 * identity, so an enumeration answers with the records of the
+                 * keychain that was asked for and no others. */
+                if (dictionary_bool((CFDictionaryRef)values[index],
+                                    CFSTR("system")) != system) {
                     continue;
                 }
                 CFDictionaryRef attributes =
