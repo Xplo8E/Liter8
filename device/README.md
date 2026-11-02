@@ -40,6 +40,23 @@ Commands have deliberately narrow device states:
   application registration, restarts SpringBoard and verifies `com.jbboot`.
   It refuses registration when container applications already exist.
 
+Provisioning also installs the os_log reader as `/var/root/oslog`. A normally
+booted device has no `/usr/bin/log`, so this is the only way to read what a
+booted Liter8 device is logging:
+
+```sh
+liter8/tools/logdev --info --debug
+liter8/tools/logdev -p wifid
+```
+
+It goes in root's home on the Data volume because that is the only writable
+location once the device has booted; the System volume is sealed read-only.
+The binary is the pinned `payloads/oslog` resource and carries Apple's private
+logging entitlements, which `logd` checks before it opens a stream, so it is
+compared byte for byte after the transfer. Its provenance, its iOS 27 message
+layout fix and the reason it must not be re-signed with `codesign` are
+documented in `payloads/README.md`.
+
 Add `--check` to inspect the corresponding state without installing files.
 Device scripts retain `.orig` or `.prev` copies when replacing boot-critical
 content. They still require operator-controlled device state and are never run

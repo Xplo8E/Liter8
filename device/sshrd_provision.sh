@@ -26,7 +26,7 @@ cd "$BASE"
 # it is resolved once here rather than spelled out at each call site.
 TOOLS="$BASE/../tools"
 
-STEPS="mounts ticket setup userland pairing wifi cellular screentime injection tweaks cache jbtools sileo resolv apps verify"
+STEPS="mounts ticket setup userland pairing wifi cellular screentime injection tweaks cache jbtools logging sileo resolv apps verify"
 
 usage() {
     echo "steps: $STEPS"
@@ -42,6 +42,7 @@ usage() {
     echo "  tweaks   install the tweak loader and the TweakInject payloads"
     echo "  cache    deploy the launchd service cache (dropbear + jbboot + DDI watcher + watchdogd mitigation)"
     echo "  jbtools  install boot helpers and the iOS 27 uicache"
+    echo "  logging  install the os_log reader so the device's log can be read"
     echo "  sileo      install Sileo (from payload/, built by fetch_payloads.sh)"
     # TrollStore is not installed here. It goes on after first boot from a deb,
     # so it can be updated without another DFU trip. See COMMANDS.md.
@@ -503,6 +504,39 @@ mv -f '$W_MARKER.new' '$W_MARKER'
 echo DONE_OK
 " "could not enable the AirPort credential shim marker"
     ok "wifid AirPort credential fallback enabled by scoped marker"
+}
+
+# The os_log reader. It goes on the Data volume, in root's home directory,
+# because that is the only writable location on a normally booted device: the
+# System volume is sealed read-only once the device has booted, and /var/root
+# is where the host-side log reader looks for it. The binary carries Apple's
+# private logging entitlements, and logd checks the caller's entitlements
+# before it will open a stream, so the copy has to arrive byte for byte.
+deploy_oslog() {
+    O_LOCAL=oslog
+    O_DEVICE=/mnt2/root/oslog
+    O_STAGED=$O_DEVICE.liter8-new
+    O_READBACK=payload/.work/oslog.readback
+    mkdir -p payload/.work
+
+    [ -f "$O_LOCAL" ] || die "missing $O_LOCAL; it is a Liter8 resource beside the scripts"
+    O_WANT=$(shasum -a 256 "$O_LOCAL" | awk '{print $1}')
+    put "$O_LOCAL" "$O_STAGED"
+    must_dev "
+chmod 0755 '$O_STAGED'
+mv -f '$O_STAGED' '$O_DEVICE'
+echo DONE_OK
+" "could not activate oslog"
+    sh_dev "/bin/cat '$O_DEVICE'" > "$O_READBACK" \
+        || die "could not read back oslog"
+    O_GOT=$(shasum -a 256 "$O_READBACK" | awk '{print $1}')
+    [ "$O_GOT" = "$O_WANT" ] || die "oslog readback hash mismatch"
+    # The signature is written by ldid, whose CodeDirectory does not carry the
+    # ad-hoc flag that the host codesign insists on. The entitlement blob is
+    # what logd reads, so that is what has to survive the transfer.
+    "$LDID" -e "$O_READBACK" 2>/dev/null | grep -q com.apple.private.logging.stream \
+        || die "oslog readback lost its logging entitlements"
+    ok "oslog ($O_WANT)"
 }
 
 enable_pairing_fallback() {
@@ -1334,6 +1368,12 @@ mv -f /mnt2/jb/usr/bin/ddiwatch.usbl8r-new /mnt2/jb/usr/bin/ddiwatch
     ok "uicache (iOS 27 containerized registration)"
 fi
 
+# ----------------------------------------------------------------- logging
+if wants logging && [ "$CHECK_ONLY" = 0 ]; then
+    say "os_log reader on the Data volume"
+    deploy_oslog
+fi
+
 # ----------------------------------------------------------------- bundles
 # Sileo comes from payload/, built by fetch_payloads.sh from the upstream
 # release. It used to be scraped off the device (installed via dpkg, then pulled
@@ -1779,6 +1819,27 @@ note "pairing fallback marker" "$(required_marker /mnt2/root/Library/Lockdown/.l
 note "RemoteXPC fallback marker" "$(required_marker /mnt1/usr/lib/.liter8-remotepairing-fallback)"
 note "AirPort credential marker" "$(required_marker /mnt1/usr/lib/.liter8-wifi-credentials)"
 note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_pairing_key.der ] && echo generated || echo pending' | tr -d '\r')"
+
+# The os_log reader. Its state is the file's own hash, because the binary is
+# a fixed resource: the same bytes, or the tool is not the one that was
+# validated. A missing file is reported, not failed, because the reader is a
+# convenience and nothing else on the device depends on it.
+if [ -f oslog ]; then
+    oslog_want=$(shasum -a 256 oslog | awk '{print $1}')
+    sh_dev '/bin/cat /mnt2/root/oslog' \
+        > payload/.work/verify.oslog 2>/dev/null || true
+    if [ -s payload/.work/verify.oslog ] && \
+       [ "$(shasum -a 256 payload/.work/verify.oslog | awk '{print $1}')" = "$oslog_want" ]; then
+        oslog_state=OK
+    elif [ -s payload/.work/verify.oslog ]; then
+        oslog_state=MISMATCH
+    else
+        oslog_state=MISSING
+    fi
+else
+    oslog_state=MISSING
+fi
+note "oslog reader" "$oslog_state"
 
 sh_dev '/bin/cat /mnt2/db/com.apple.xpc.launchd/disabled.plist' \
     > payload/.work/verify.disabled.plist 2>/dev/null || true

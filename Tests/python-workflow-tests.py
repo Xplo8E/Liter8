@@ -43,6 +43,7 @@ from device_boot import (  # noqa: E402
 )
 from device_provision import (  # noqa: E402
     BOOTSTRAP_SHA256,
+    OSLOG_SHA256,
     SSHRD_PAYLOAD_SHA256,
     prepared_rootfs,
     prepare_runtime,
@@ -1271,6 +1272,73 @@ class ContextTests(unittest.TestCase):
             {"ticket", "setup", "userland", "pairing", "wifi"},
             default_step_set(provisioner, r'^STEPS="([^"]*)"'),
         )
+
+    def test_oslog_reader_is_pinned_installed_and_verified(self):
+        """The log reader is a fixed resource and reaches the device intact."""
+        payload = SCRIPTS.parent / "payloads/oslog"
+        provisioner = (DEVICE / "sshrd_provision.sh").read_text()
+        logdev = (SCRIPTS.parent / "tools/logdev").read_text()
+
+        # The binary is a pinned resource, not something a build produces.
+        self.assertTrue(payload.is_file())
+        self.assertEqual(sha256_file(payload), OSLOG_SHA256)
+        self.assertTrue(os.access(payload, os.X_OK))
+
+        # It reaches the device as a symlink into the immutable resources, so
+        # the mutable work directory can never supply a different binary.
+        context = Context(
+            profile_id="iphone12,1-n104ap-24A5390f",
+            work=self.work,
+            source=self.source,
+            cfw=self.work / "CFW",
+            components={},
+            liter8=self.liter8,
+            resources=SCRIPTS.parent,
+        )
+        runtime = prepare_runtime(context)
+        staged = runtime / "oslog"
+        self.assertTrue(staged.is_symlink())
+        self.assertEqual(staged.resolve(), payload.resolve())
+        self.assertEqual(sha256_file(staged), OSLOG_SHA256)
+
+        # A resource whose bytes are not the pinned ones must fail closed,
+        # rather than installing a reader that was never validated.
+        with tempfile.TemporaryDirectory(prefix="liter8-oslog-") as directory:
+            resources = Path(directory)
+            (resources / "device").mkdir()
+            (resources / "device/bootstrap_1900.tar.zst").write_bytes(b"")
+            (resources / "tools").mkdir()
+            (resources / "payloads").mkdir()
+            (resources / "payloads/ssh.tar.gz").symlink_to(
+                SCRIPTS.parent / "payloads/ssh.tar.gz"
+            )
+            (resources / "payloads/oslog").write_bytes(b"not the reader")
+            broken = Context(
+                profile_id="iphone12,1-n104ap-24A5390f",
+                work=self.work,
+                source=self.source,
+                cfw=self.work / "CFW",
+                components={},
+                liter8=self.liter8,
+                resources=resources,
+            )
+            with self.assertRaises(WorkflowError):
+                prepare_runtime(broken)
+
+        # The device copy lands in root's home on the Data volume, which is
+        # the only writable place on a booted device, and it is compared byte
+        # for byte after the transfer.
+        self.assertIn("/mnt2/root/oslog", provisioner)
+        self.assertIn("oslog readback hash mismatch", provisioner)
+        self.assertIn("com.apple.private.logging.stream", provisioner)
+        self.assertIn('note "oslog reader"', provisioner)
+        self.assertLessEqual(
+            {"logging"},
+            default_step_set(provisioner, r'^STEPS="([^"]*)"'),
+        )
+
+        # The host helper reads the device's log through the same path.
+        self.assertIn("/var/root/oslog", logdev)
 
     def test_userland_builder_preserves_identity_and_entitlements(self):
         liter8 = SCRIPTS.parent / ".build/debug/liter8"
