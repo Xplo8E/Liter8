@@ -492,18 +492,18 @@ static CFStringRef query_label(CFDictionaryRef attributes)
                : NULL;
 }
 
-/* Whether the query's label selects this record. A query without a label
- * matches every record; a query with one matches only the record that
- * carries it. */
-static bool query_accepts_label(CFDictionaryRef query, CFDictionaryRef entry)
+/* Whether the query's label selects the record with this label. A query
+ * without a label matches every record; a query with one matches only the
+ * record that carries it. */
+static bool query_accepts_label(CFDictionaryRef query, CFTypeRef stored_label)
 {
     CFStringRef wanted = query_label(query);
     if (wanted == NULL) {
         return true;
     }
-    CFTypeRef stored =
-        entry == NULL ? NULL : CFDictionaryGetValue(entry, CFSTR("label"));
-    return stored != NULL && CFEqual(stored, wanted);
+    return stored_label != NULL &&
+           CFGetTypeID(stored_label) == CFStringGetTypeID() &&
+           CFEqual(stored_label, wanted);
 }
 
 /* Store one AirPort credential. The account and the password are both
@@ -581,29 +581,11 @@ static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
     pthread_mutex_lock(&gStoreLock);
     CFMutableDictionaryRef store = load_store();
     CFTypeRef produced = NULL;
-    if (store != NULL && account != NULL) {
-        CFStringRef key = store_key(account, system);
-        CFDictionaryRef entry = find_entry(store, key);
-        /* The synchronizable attribute is part of how a record matches, so a
-         * query that excludes the stored record does not get it. */
-        if (entry != NULL &&
-            query_accepts_synchronizable(
-                query, dictionary_bool(entry, CFSTR("synchronizable"))) &&
-            query_accepts_label(query, entry)) {
-            if (wants_attributes) {
-                produced = result_attributes(entry, wants_data);
-            } else if (wants_data) {
-                CFTypeRef data = CFDictionaryGetValue(entry, CFSTR("data"));
-                if (data != NULL && CFGetTypeID(data) == CFDataGetTypeID()) {
-                    produced = CFRetain(data);
-                }
-            }
-        }
-        if (key != NULL) {
-            CFRelease(key);
-        }
-    } else if (store != NULL && account == NULL && wants_attributes && enumerates) {
-        /* The known-networks sweep asks for every AirPort record at once. */
+    if (store != NULL && enumerates && wants_attributes) {
+        /* A query that asks for every match is answered with an array, even
+         * when the selectors leave one record standing: the keychain returns
+         * an array for kSecMatchLimitAll, and a caller that consumes the
+         * result as an array cannot use a bare dictionary. */
         CFIndex count = CFDictionaryGetCount(store);
         const void **values = count ? calloc((size_t)count, sizeof(*values)) : NULL;
         CFMutableArrayRef array = CFArrayCreateMutable(kCFAllocatorDefault, 0,
@@ -628,8 +610,18 @@ static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
                     continue;
                 }
                 /* And the label, which a query can match on too. */
-                if (!query_accepts_label(query, (CFDictionaryRef)values[index])) {
+                if (!query_accepts_label(
+                        query, CFDictionaryGetValue((CFDictionaryRef)values[index],
+                                                   CFSTR("label")))) {
                     continue;
+                }
+                /* And the account, when the query names one. */
+                if (account != NULL) {
+                    CFTypeRef stored = CFDictionaryGetValue(
+                        (CFDictionaryRef)values[index], CFSTR("account"));
+                    if (stored == NULL || !CFEqual(stored, account)) {
+                        continue;
+                    }
                 }
                 CFDictionaryRef attributes =
                     result_attributes((CFDictionaryRef)values[index], wants_data);
@@ -647,6 +639,27 @@ static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
             CFRelease(array);
         }
         free(values);
+    } else if (store != NULL && account != NULL && !enumerates) {
+        CFStringRef key = store_key(account, system);
+        CFDictionaryRef entry = find_entry(store, key);
+        /* The synchronizable attribute is part of how a record matches, so a
+         * query that excludes the stored record does not get it. */
+        if (entry != NULL &&
+            query_accepts_synchronizable(
+                query, dictionary_bool(entry, CFSTR("synchronizable"))) &&
+            query_accepts_label(query, CFDictionaryGetValue(entry, CFSTR("label")))) {
+            if (wants_attributes) {
+                produced = result_attributes(entry, wants_data);
+            } else if (wants_data) {
+                CFTypeRef data = CFDictionaryGetValue(entry, CFSTR("data"));
+                if (data != NULL && CFGetTypeID(data) == CFDataGetTypeID()) {
+                    produced = CFRetain(data);
+                }
+            }
+        }
+        if (key != NULL) {
+            CFRelease(key);
+        }
     }
     if (store != NULL) {
         CFRelease(store);
@@ -712,9 +725,11 @@ static OSStatus l8_SecItemAdd(CFDictionaryRef attributes, CFTypeRef *result)
 }
 
 /* The stored record for this query's account and keychain, and whether there
- * is one. The synchronizable attribute is part of how the keychain matches a
- * record, so a caller needs it before deciding whether a request matches. */
-static bool stored_synchronizable(CFDictionaryRef query, bool *synchronizable)
+ * is one. The synchronizable attribute and the label are both part of how
+ * the keychain matches a record, so the match is decided here, while the
+ * store is still alive. */
+static bool stored_record(CFDictionaryRef query, bool *synchronizable,
+                           bool *matches)
 {
     CFStringRef account = query_account(query);
     if (account == NULL) {
@@ -723,12 +738,16 @@ static bool stored_synchronizable(CFDictionaryRef query, bool *synchronizable)
     pthread_mutex_lock(&gStoreLock);
     CFMutableDictionaryRef store = load_store();
     bool found = false;
+    bool accepted = false;
     if (store != NULL) {
         CFStringRef key = store_key(account, query_system_keychain(query));
         if (key != NULL) {
             CFDictionaryRef entry = find_entry(store, key);
             if (entry != NULL) {
                 *synchronizable = dictionary_bool(entry, CFSTR("synchronizable"));
+                accepted = query_accepts_synchronizable(query, *synchronizable) &&
+                           query_accepts_label(
+                               query, CFDictionaryGetValue(entry, CFSTR("label")));
                 found = true;
             }
             CFRelease(key);
@@ -736,6 +755,9 @@ static bool stored_synchronizable(CFDictionaryRef query, bool *synchronizable)
         CFRelease(store);
     }
     pthread_mutex_unlock(&gStoreLock);
+    if (matches != NULL) {
+        *matches = accepted;
+    }
     return found;
 }
 
@@ -754,15 +776,17 @@ static OSStatus l8_SecItemUpdate(CFDictionaryRef query,
         return SecItemUpdate(query, attributes_to_update);
     }
 
-    /* The synchronizable attribute is part of a record's identity, and the
-     * keychain does not let it be updated. An update that does not name one
-     * keeps the stored value, and an update whose query excludes the stored
-     * record is not a match at all, so the real keychain owns it. */
+    /* The synchronizable attribute and the label are part of how a record
+     * matches, and the keychain does not let either be updated. An update
+     * that does not name one keeps the stored value, and an update whose
+     * query excludes the stored record is not a match at all, so the real
+     * keychain owns it. */
     bool stored = false;
     bool synchronizable = false;
-    if (stored_synchronizable(query, &synchronizable)) {
+    bool matches = false;
+    if (stored_record(query, &synchronizable, &matches)) {
         stored = true;
-        if (!query_accepts_synchronizable(query, synchronizable)) {
+        if (!matches) {
             return SecItemUpdate(query, attributes_to_update);
         }
     }
@@ -807,7 +831,7 @@ static OSStatus l8_SecItemDelete(CFDictionaryRef query)
             if (entry != NULL &&
                 query_accepts_synchronizable(
                     query, dictionary_bool(entry, CFSTR("synchronizable"))) &&
-                query_accepts_label(query, entry)) {
+                query_accepts_label(query, CFDictionaryGetValue(entry, CFSTR("label")))) {
                 CFDictionaryRemoveValue(store, key);
                 removed = true;
                 written = write_store(store);
@@ -847,7 +871,9 @@ static OSStatus l8_SecItemDelete(CFDictionaryRef query)
                             continue;
                         }
                         /* And so is the label. */
-                        if (!query_accepts_label(query, (CFDictionaryRef)value)) {
+                        if (!query_accepts_label(
+                                query, CFDictionaryGetValue((CFDictionaryRef)value,
+                                                           CFSTR("label")))) {
                             continue;
                         }
                         CFArrayAppendValue(doomed, keys[index]);

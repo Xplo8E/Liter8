@@ -223,6 +223,35 @@ static CFDictionaryRef query_with_label(const char *svc, const char *acct,
                               &kCFTypeDictionaryValueCallBacks);
 }
 
+/* An update whose query names a label. */
+static CFDictionaryRef update_query_with_label(const char *acct, const char *label) {
+    const void *keys[4];
+    const void *values[4];
+    int count = 0;
+    keys[count] = kSecAttrService; values[count] = cfstr("AirPort"); count++;
+    keys[count] = kSecAttrAccount; values[count] = cfstr(acct); count++;
+    keys[count] = kSecClass; values[count] = cfstr("genp"); count++;
+    keys[count] = kSecAttrLabel; values[count] = cfstr(label); count++;
+    return CFDictionaryCreate(NULL, keys, values, count,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
+/* An account-filtered enumeration. The keychain answers a search for every
+ * match with an array, even when the selectors leave one record standing. */
+static CFDictionaryRef enumerate_account_query(const char *acct) {
+    const void *keys[4];
+    const void *values[4];
+    int count = 0;
+    keys[count] = kSecAttrService; values[count] = cfstr("AirPort"); count++;
+    keys[count] = kSecAttrAccount; values[count] = cfstr(acct); count++;
+    keys[count] = kSecReturnAttributes; values[count] = kCFBooleanTrue; count++;
+    keys[count] = kSecMatchLimit; values[count] = kSecMatchLimitAll; count++;
+    return CFDictionaryCreate(NULL, keys, values, count,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
 /* The store file as it is on disk, for checking that a refused write left
  * it alone. */
 static uint8_t *read_file(const char *path, size_t *length) {
@@ -617,6 +646,63 @@ int main(int argc, char **argv) {
         status = l8_SecItemCopyMatching(wrong_label, &result);
         if (status == errSecSuccess) {
             fail("a copy naming a label must not answer with another label's record");
+        }
+
+        /* A search for every match is answered with an array, even when the
+         * account leaves one record standing. */
+        CFDictionaryRef enumeration = enumerate_account_query("plain");
+        result = NULL;
+        status = l8_SecItemCopyMatching(enumeration, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("an account-filtered enumeration must be answered");
+        } else if (CFGetTypeID(result) != CFArrayGetTypeID()) {
+            fail("an account-filtered enumeration must answer with an array");
+        } else if (CFArrayGetCount((CFArrayRef)result) != 1) {
+            fail("an account-filtered enumeration must hold the one record");
+        }
+    } else if (strcmp(mode, "updatelabel") == 0) {
+        /* An update whose query names a label that does not match the record
+         * is not a match: it must not rewrite the password and it must not
+         * relabel the record. */
+        CFDictionaryRef labelled = add_with_label("updatelabel", "originalpassword", "Home");
+        CFTypeRef added = NULL;
+        status = l8_SecItemAdd(labelled, &added);
+        if (added) { CFRelease(added); }
+
+        const char *replacement = "replacementpassword";
+        CFDataRef new_password = CFDataCreate(NULL, (const UInt8 *)replacement,
+                                              (CFIndex)strlen(replacement));
+        const void *update_keys[1] = {kSecValueData};
+        const void *update_values[1] = {new_password};
+        CFDictionaryRef update = CFDictionaryCreate(NULL, update_keys, update_values, 1,
+                                                   &kCFTypeDictionaryKeyCallBacks,
+                                                   &kCFTypeDictionaryValueCallBacks);
+        CFDictionaryRef update_query = update_query_with_label("updatelabel", "Work");
+        probe_called_count = 0;
+        status = l8_SecItemUpdate(update_query, update);
+        if (probe_called_count != 1) {
+            fail("an update naming a label that does not match must go to the real keychain");
+        }
+
+        /* The password and the label are both unchanged. */
+        CFDictionaryRef read = query_with_label("AirPort", "updatelabel", 1, NULL);
+        CFTypeRef result = NULL;
+        status = l8_SecItemCopyMatching(read, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("the record must still be readable");
+        } else {
+            if (CFGetTypeID(result) == CFDataGetTypeID() &&
+                CFDataGetLength((CFDataRef)result) !=
+                    (CFIndex)strlen("originalpassword")) {
+                fail("a nonmatching update must not rewrite the password");
+            }
+            CFRelease(result);
+        }
+        CFDictionaryRef by_label = query_with_label("AirPort", "updatelabel", 1, "Home");
+        result = NULL;
+        status = l8_SecItemCopyMatching(by_label, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("a nonmatching update must not relabel the record");
         }
     } else if (strcmp(mode, "addresult") == 0) {
         /* The caller asks for a shape of result, so it gets that shape. A
@@ -1033,6 +1119,9 @@ with tempfile.TemporaryDirectory(prefix="l8-wifi-") as work:
     result = subprocess.run([str(binary), "addresult"], capture_output=True, text=True)
     if result.returncode != 0:
         raise SystemExit(f"FAIL: add result shape\n{result.stdout}{result.stderr}")
+    result = subprocess.run([str(binary), "updatelabel"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: update label\n{result.stdout}{result.stderr}")
 
     # The store limit is read from the same constant the write path uses, so
     # a second build with a small limit reaches it without writing a
