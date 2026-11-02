@@ -11,7 +11,7 @@ set -eu
 BASE="$(cd "$(dirname "$0")" && pwd)"
 TOOLS="$BASE/../../tools"
 LDID="$TOOLS/ldid_macosx_arm64"
-"$LDID" -v 2>&1 | grep -q "Link Identity Editor" || LDID=$(command -n ldid || true)
+"$LDID" -v 2>&1 | grep -q "Link Identity Editor" || LDID=$(command -v ldid || true)
 
 # Command Line Tools have no iPhoneOS SDK. Point LITER8_IOS_SDK at an
 # unpacked one (for example Theos's) to build without Xcode.

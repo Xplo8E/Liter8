@@ -166,6 +166,30 @@ static CFDictionaryRef add_with_system(const char *acct, const char *password) {
                               &kCFTypeDictionaryValueCallBacks);
 }
 
+/* A delete with no account: every AirPort record of one keychain. */
+static CFDictionaryRef delete_all_query(void) {
+    const void *keys[2];
+    const void *values[2];
+    int count = 0;
+    keys[count] = kSecAttrService; values[count] = cfstr("AirPort"); count++;
+    keys[count] = kSecClass; values[count] = cfstr("genp"); count++;
+    return CFDictionaryCreate(NULL, keys, values, count,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
+static CFDictionaryRef delete_all_system_query(void) {
+    const void *keys[3];
+    const void *values[3];
+    int count = 0;
+    keys[count] = kSecAttrService; values[count] = cfstr("AirPort"); count++;
+    keys[count] = kSecClass; values[count] = cfstr("genp"); count++;
+    keys[count] = system_keychain_constant(); values[count] = kCFBooleanTrue; count++;
+    return CFDictionaryCreate(NULL, keys, values, count,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
 /* The store is read into a buffer whose size the shim chooses. If that
  * buffer lives on the stack, the shim only survives on a host thread with a
  * multi-megabyte stack. wifid reaches the keychain from a GCD worker queue
@@ -225,6 +249,60 @@ int main(int argc, char **argv) {
 
     if (strcmp(mode, "smallstack") == 0) {
         check_small_stack();
+    } else if (strcmp(mode, "bulkdelete") == 0) {
+        /* One credential in each namespace, then a bulk delete of the
+         * system-keychain one. The user-keychain credential must survive:
+         * a record's system-keychain selection is part of its identity, so
+         * clearing one keychain must not clear the other. */
+        CFDictionaryRef user_add = add_with("bulkuser", "userpassword");
+        CFTypeRef added = NULL;
+        l8_SecItemAdd(user_add, &added);
+        if (added) { CFRelease(added); }
+        CFDictionaryRef system_add = add_with_system("bulksys", "systempassword");
+        added = NULL;
+        l8_SecItemAdd(system_add, &added);
+        if (added) { CFRelease(added); }
+
+        probe_called_count = 0;
+        status = l8_SecItemDelete(delete_all_system_query());
+        if (status != errSecSuccess || probe_called_count != 0) {
+            fail("a bulk delete must succeed without reaching the real keychain");
+        }
+
+        /* The system-keychain credential is gone. */
+        CFDictionaryRef gone = query_with("AirPort", "bulksys", "genp", 1);
+        CFTypeRef result = NULL;
+        status = l8_SecItemCopyMatching(gone, &result);
+        if (status == errSecSuccess) {
+            fail("a bulk delete must remove the system-keychain credential");
+        }
+
+        /* The user-keychain credential is untouched. */
+        CFDictionaryRef kept = query_with("AirPort", "bulkuser", "genp", 1);
+        result = NULL;
+        status = l8_SecItemCopyMatching(kept, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("a bulk delete must leave the user-keychain credential alone");
+        } else {
+            if (CFGetTypeID(result) == CFDataGetTypeID() &&
+                CFDataGetLength((CFDataRef)result) != (CFIndex)strlen("userpassword")) {
+                fail("the user-keychain credential must keep its password");
+            }
+            CFRelease(result);
+        }
+
+        /* And the other direction: a user-keychain bulk delete clears the
+         * user-keychain records. */
+        probe_called_count = 0;
+        status = l8_SecItemDelete(delete_all_query());
+        if (status != errSecSuccess || probe_called_count != 0) {
+            fail("a user-keychain bulk delete must succeed without the real keychain");
+        }
+        result = NULL;
+        status = l8_SecItemCopyMatching(kept, &result);
+        if (status == errSecSuccess) {
+            fail("a user-keychain bulk delete must remove the user-keychain credential");
+        }
     } else if (strcmp(mode, "check") == 0) {
         /* A different service must pass through to the real keychain. */
         probe_called_count = 0;
@@ -550,6 +628,13 @@ with tempfile.TemporaryDirectory(prefix="l8-wifi-") as work:
     if not any(bytes(value) == b"correcthorse" for value in stored):
         raise SystemExit("FAIL: the credential store does not hold the password")
 
+    # A bulk delete must clear one keychain and not the other. Run last, so
+    # it cannot disturb the store the checks above read.
+    result = subprocess.run([str(binary), "bulkdelete"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: bulk delete\n{result.stdout}{result.stderr}")
+
     print("PASS: AirPort-only interception, foreign service and class pass through, "
           "add/copy/update/delete round-trip, marker-gated inertness, 0600 store, "
-          "store path fits a device-sized thread stack")
+          "store path fits a device-sized thread stack, a bulk delete clears one "
+          "keychain only")

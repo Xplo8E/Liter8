@@ -590,8 +590,40 @@ static OSStatus l8_SecItemDelete(CFDictionaryRef query)
                 CFRelease(key);
             }
         } else {
-            removed = CFDictionaryGetCount(store) != 0;
-            CFDictionaryRemoveAllValues(store);
+            /* A delete without an account removes every AirPort record of the
+             * keychain that was asked for, and no others. The system-keychain
+             * selection is part of a record's identity, so a bulk delete that
+             * ignored it would take the other keychain's records with it. */
+            CFMutableArrayRef doomed = CFArrayCreateMutable(
+                kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
+            if (doomed != NULL) {
+                CFIndex count = CFDictionaryGetCount(store);
+                const void **keys = count ? calloc((size_t)count, sizeof(*keys)) : NULL;
+                if (keys != NULL) {
+                    CFDictionaryGetKeysAndValues(store, keys, NULL);
+                    for (CFIndex index = 0; index < count; index++) {
+                        CFTypeRef value =
+                            CFDictionaryGetValue(store, (CFStringRef)keys[index]);
+                        if (value == NULL ||
+                            CFGetTypeID(value) != CFDictionaryGetTypeID()) {
+                            continue;
+                        }
+                        if (dictionary_bool((CFDictionaryRef)value, CFSTR("system")) !=
+                            system) {
+                            continue;
+                        }
+                        CFArrayAppendValue(doomed, keys[index]);
+                    }
+                    free(keys);
+                }
+                CFIndex doomed_count = CFArrayGetCount(doomed);
+                for (CFIndex index = 0; index < doomed_count; index++) {
+                    CFDictionaryRemoveValue(
+                        store, (CFStringRef)CFArrayGetValueAtIndex(doomed, index));
+                }
+                removed = doomed_count != 0;
+                CFRelease(doomed);
+            }
             written = !removed || write_store(store);
         }
     }
