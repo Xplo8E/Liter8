@@ -195,6 +195,27 @@ static CFDictionaryRef add_with_sync(const char *acct, const char *password,
                               &kCFTypeDictionaryValueCallBacks);
 }
 
+/* The store file as it is on disk, for checking that a refused write left
+ * it alone. */
+static uint8_t *read_file(const char *path, size_t *length) {
+    FILE *stream = fopen(path, "rb");
+    if (stream == NULL) { return NULL; }
+    fseek(stream, 0, SEEK_END);
+    long size = ftell(stream);
+    fseek(stream, 0, SEEK_SET);
+    if (size <= 0) { fclose(stream); return NULL; }
+    uint8_t *bytes = malloc((size_t)size);
+    if (bytes == NULL) { fclose(stream); return NULL; }
+    if (fread(bytes, 1, (size_t)size, stream) != (size_t)size) {
+        free(bytes);
+        fclose(stream);
+        return NULL;
+    }
+    fclose(stream);
+    *length = (size_t)size;
+    return bytes;
+}
+
 /* A query that names the synchronizable attribute. */
 static CFDictionaryRef query_with_sync(const char *svc, const char *acct,
                                        const char *cls, int want_data,
@@ -470,6 +491,61 @@ int main(int argc, char **argv) {
         status = l8_SecItemCopyMatching(would_be_sync, &result);
         if (status == errSecSuccess) {
             fail("the record must not answer a query naming the other value");
+        }
+    } else if (strcmp(mode, "unreadable") == 0) {
+        /* A store that exists but cannot be read must not be replaced by the
+         * next write, or every saved password goes with it. Making it
+         * group and other readable is enough: the shim refuses to read a
+         * store that is not private. */
+        CFDictionaryRef first = add_with("unreadone", "firstpassword");
+        CFTypeRef added = NULL;
+        status = l8_SecItemAdd(first, &added);
+        if (added) { CFRelease(added); }
+        if (status != errSecSuccess) {
+            fail("the first credential must be stored");
+        }
+
+        size_t before_length = 0;
+        uint8_t *before = read_file(kStorePath, &before_length);
+        if (before == NULL) {
+            fail("could not read the store before the failed write");
+        }
+
+        if (chmod(kStorePath, 0644) != 0) {
+            fail("could not change the store mode");
+        }
+
+        CFDictionaryRef second = add_with("unreadtwo", "secondpassword");
+        added = NULL;
+        status = l8_SecItemAdd(second, &added);
+        if (added) { CFRelease(added); }
+        if (status == errSecSuccess) {
+            fail("an unreadable store must not be overwritten");
+        }
+
+        size_t after_length = 0;
+        uint8_t *after = read_file(kStorePath, &after_length);
+        if (after == NULL) {
+            fail("the store disappeared during the refused write");
+        } else {
+            if (after_length != before_length ||
+                memcmp(after, before, before_length) != 0) {
+                fail("a refused write must leave the store exactly as it was");
+            }
+            free(after);
+        }
+        free(before);
+
+        /* Restoring the mode makes the store usable again. */
+        if (chmod(kStorePath, 0600) != 0) {
+            fail("could not restore the store mode");
+        }
+        CFDictionaryRef third = add_with("unreadthree", "thirdpassword");
+        added = NULL;
+        status = l8_SecItemAdd(third, &added);
+        if (added) { CFRelease(added); }
+        if (status != errSecSuccess) {
+            fail("a readable store must accept a credential again");
         }
     } else if (strcmp(mode, "check") == 0) {
         /* A different service must pass through to the real keychain. */
@@ -814,8 +890,14 @@ with tempfile.TemporaryDirectory(prefix="l8-wifi-") as work:
     if result.returncode != 0:
         raise SystemExit(f"FAIL: synchronizable selection\n{result.stdout}{result.stderr}")
 
+    # An unreadable store must not be replaced by the next write.
+    result = subprocess.run([str(binary), "unreadable"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: unreadable store\n{result.stdout}{result.stderr}")
+
     print("PASS: AirPort-only interception, foreign service and class pass through, "
           "add/copy/update/delete round-trip, marker-gated inertness, 0600 store, "
           "store path fits a device-sized thread stack, a bulk delete clears one "
           "keychain only, a malformed account selector is rejected, the "
-          "synchronizable attribute is part of the selection")
+          "synchronizable attribute is part of the selection, an unreadable store "
+          "is not overwritten")

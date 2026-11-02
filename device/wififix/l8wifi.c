@@ -40,6 +40,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
 #include <dlfcn.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <pthread.h>
@@ -210,18 +211,44 @@ static bool query_system_keychain(CFDictionaryRef query)
 }
 
 /* The separator keeps an account and a system flag from colliding in one
- * flat key space. */
+ * flat key space.
+ *
+ * The key is the record's identity, and it matches the keychain's own. For
+ * a generic password the primary key is the account and the service, so one
+ * keychain holds one record for an account, and the synchronizable
+ * attribute is a property of that record rather than part of its identity.
+ * The system-keychain selection is the other half, because the system
+ * keychain and a per-user one are different keychains with their own
+ * records.
+ *
+ * A second add for an account therefore replaces the record, where the
+ * keychain would answer errSecDuplicateItem. That divergence is deliberate:
+ * this store lives on the Data volume and survives a reboot, while the
+ * keychain it stands in for does not, so refusing the add would make
+ * wifid's re-add after a reboot fail in a way it never sees against the
+ * real keychain. Replacing the record keeps the newest password, which is
+ * what the caller asked for. */
 static CFStringRef store_key(CFStringRef account, bool system)
 {
     return CFStringCreateWithFormat(kCFAllocatorDefault, NULL, CFSTR("%@\x1f%d"),
                                     account, system ? 1 : 0);
 }
 
-static CFDataRef read_store_bytes(void)
+/* Why the store could not be read. The difference is the whole point: an
+ * absent store is an empty store, but an unreadable one is a store that
+ * exists and holds every saved password. Reading it as empty would let the
+ * next write replace it and lose all of them. */
+enum {
+    kStoreReadable = 0,
+    kStoreAbsent,
+    kStoreUnreadable,
+};
+
+static int read_store_bytes(CFDataRef *bytes_out)
 {
     int descriptor = open(kStorePath, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (descriptor < 0) {
-        return NULL;
+        return errno == ENOENT ? kStoreAbsent : kStoreUnreadable;
     }
 
     struct stat status;
@@ -233,7 +260,7 @@ static CFDataRef read_store_bytes(void)
         (status.st_mode & (S_IRWXG | S_IRWXO)) != 0 ||
         status.st_size <= 0 || status.st_size > kMaximumStoreBytes) {
         close(descriptor);
-        return NULL;
+        return kStoreUnreadable;
     }
 
     /* The buffer is heap, not stack. wifid reaches the keychain from a GCD
@@ -245,7 +272,7 @@ static CFDataRef read_store_bytes(void)
     uint8_t *bytes = malloc((size_t)status.st_size);
     if (bytes == NULL) {
         close(descriptor);
-        return NULL;
+        return kStoreUnreadable;
     }
     size_t total = 0;
     while (total < (size_t)status.st_size) {
@@ -254,23 +281,36 @@ static CFDataRef read_store_bytes(void)
         if (amount <= 0) {
             free(bytes);
             close(descriptor);
-            return NULL;
+            return kStoreUnreadable;
         }
         total += (size_t)amount;
     }
     close(descriptor);
     CFDataRef data = CFDataCreate(kCFAllocatorDefault, bytes, (CFIndex)total);
     free(bytes);
-    return data;
+    if (data == NULL) {
+        return kStoreUnreadable;
+    }
+    *bytes_out = data;
+    return kStoreReadable;
 }
 
 static CFMutableDictionaryRef load_store(void)
 {
-    CFDataRef bytes = read_store_bytes();
-    if (bytes == NULL) {
+    CFDataRef bytes = NULL;
+    int state = read_store_bytes(&bytes);
+    if (state == kStoreAbsent) {
+        /* There is no store yet, so an empty one is the right answer. */
         return CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
                                          &kCFTypeDictionaryKeyCallBacks,
                                          &kCFTypeDictionaryValueCallBacks);
+    }
+    if (state != kStoreReadable) {
+        /* The store exists and cannot be read. Treating it as empty would
+         * let the next write replace it and lose every saved password, so
+         * the failure is propagated and nothing is written. */
+        syslog(LOG_ERR, "l8wifi: the credential store could not be read");
+        return NULL;
     }
 
     CFErrorRef error = NULL;
