@@ -46,6 +46,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <syslog.h>
@@ -201,19 +202,32 @@ static CFDataRef read_store_bytes(void)
         return NULL;
     }
 
-    uint8_t bytes[kMaximumStoreBytes];
+    /* The buffer is heap, not stack. wifid reaches the keychain from a GCD
+     * worker queue whose stack is a fraction of kMaximumStoreBytes, and a
+     * 1 MiB automatic array overflowed it: the first AirPort query trapped
+     * in __chkstk_darwin and killed wifid, which launchd then restarted into
+     * the same trap. A stack limit that only the host's 8 MiB main thread
+     * could absorb is a limit the device never has. */
+    uint8_t *bytes = malloc((size_t)status.st_size);
+    if (bytes == NULL) {
+        close(descriptor);
+        return NULL;
+    }
     size_t total = 0;
     while (total < (size_t)status.st_size) {
         ssize_t amount = read(descriptor, bytes + total,
                               (size_t)status.st_size - total);
         if (amount <= 0) {
+            free(bytes);
             close(descriptor);
             return NULL;
         }
         total += (size_t)amount;
     }
     close(descriptor);
-    return CFDataCreate(kCFAllocatorDefault, bytes, (CFIndex)total);
+    CFDataRef data = CFDataCreate(kCFAllocatorDefault, bytes, (CFIndex)total);
+    free(bytes);
+    return data;
 }
 
 static CFMutableDictionaryRef load_store(void)

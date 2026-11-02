@@ -28,6 +28,7 @@ SRC = ROOT / "device/wififix"
 HARNESS = r"""
 #include <Security/Security.h>
 #include <dlfcn.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -165,12 +166,66 @@ static CFDictionaryRef add_with_system(const char *acct, const char *password) {
                               &kCFTypeDictionaryValueCallBacks);
 }
 
+/* The store is read into a buffer whose size the shim chooses. If that
+ * buffer lives on the stack, the shim only survives on a host thread with a
+ * multi-megabyte stack. wifid reaches the keychain from a GCD worker queue
+ * whose stack is 512 KiB, and a 1 MiB automatic array trapped in
+ * __chkstk_darwin and killed wifid on every AirPort query, which launchd then
+ * restarted into the same trap. The test runs the store path on a thread with
+ * the device's stack size so that shape is caught here rather than on the
+ * phone. */
+#define SMALL_STACK_BYTES (512 * 1024)
+
+static int small_stack_finished = 0;
+
+static void *small_stack_body(void *argument) {
+    (void)argument;
+    /* A separate account, so this mode does not disturb the store the other
+     * modes assert on. */
+    CFDictionaryRef add = add_with("smallstack", "hunter2");
+    CFTypeRef added = NULL;
+    l8_SecItemAdd(add, &added);
+    if (added) { CFRelease(added); }
+    CFDictionaryRef query = query_with("AirPort", "smallstack", "genp", 1);
+    CFTypeRef result = NULL;
+    l8_SecItemCopyMatching(query, &result);
+    if (result) { CFRelease(result); }
+    small_stack_finished = 1;
+    return NULL;
+}
+
+static void check_small_stack(void) {
+    pthread_attr_t attributes;
+    pthread_t thread;
+    if (pthread_attr_init(&attributes) != 0) {
+        fail("could not initialise the thread attributes");
+        return;
+    }
+    if (pthread_attr_setstacksize(&attributes, SMALL_STACK_BYTES) != 0) {
+        fail("could not set the thread stack size");
+        pthread_attr_destroy(&attributes);
+        return;
+    }
+    if (pthread_create(&thread, &attributes, small_stack_body, NULL) != 0) {
+        fail("could not start the small-stack thread");
+        pthread_attr_destroy(&attributes);
+        return;
+    }
+    pthread_join(thread, NULL);
+    pthread_attr_destroy(&attributes);
+    if (!small_stack_finished) {
+        fail("the small-stack thread did not finish the store path");
+    }
+}
+
 int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "check";
     CFTypeRef result = NULL;
     OSStatus status;
 
-    if (strcmp(mode, "check") == 0) {
+    if (strcmp(mode, "smallstack") == 0) {
+        check_small_stack();
+    } else if (strcmp(mode, "check") == 0) {
         /* A different service must pass through to the real keychain. */
         probe_called_count = 0;
         CFDictionaryRef foreign = query_with("SomeOtherService", "acct", "genp", 1);
@@ -456,6 +511,18 @@ with tempfile.TemporaryDirectory(prefix="l8-wifi-") as work:
     if result.returncode != 0:
         raise SystemExit(f"FAIL: enabled shim\n{result.stdout}{result.stderr}")
 
+    # The store path must not need more stack than a device worker thread
+    # has. A shim that keeps the store buffer on the stack dies here by
+    # signal rather than by a failed check, so the signal is read separately.
+    result = subprocess.run([str(binary), "smallstack"], capture_output=True, text=True)
+    if result.returncode < 0:
+        raise SystemExit(
+            "FAIL: the shim overflowed a device-sized thread stack "
+            f"(killed by signal {-result.returncode})"
+        )
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: small-stack shim\n{result.stdout}{result.stderr}")
+
     # The same binary under another name is not wifid, so the shim must stay
     # inert there even with the marker present. The dylib is weak-loaded into
     # wifid alone, but the check is repeated inside the shim so a copy that
@@ -484,4 +551,5 @@ with tempfile.TemporaryDirectory(prefix="l8-wifi-") as work:
         raise SystemExit("FAIL: the credential store does not hold the password")
 
     print("PASS: AirPort-only interception, foreign service and class pass through, "
-          "add/copy/update/delete round-trip, marker-gated inertness, 0600 store")
+          "add/copy/update/delete round-trip, marker-gated inertness, 0600 store, "
+          "store path fits a device-sized thread stack")
