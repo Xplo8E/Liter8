@@ -182,6 +182,53 @@ static CFDictionaryRef query_with_data_account(const char *svc) {
                               &kCFTypeDictionaryValueCallBacks);
 }
 
+/* An add that names the synchronizable attribute. */
+static CFDictionaryRef add_with_sync(const char *acct, const char *password,
+                                     int synchronizable) {
+    CFDataRef data = CFDataCreate(NULL, (const UInt8 *)password, (CFIndex)strlen(password));
+    const void *keys[4] = {kSecValueData, kSecAttrAccount, kSecAttrService,
+                           kSecAttrSynchronizable};
+    const void *values[4] = {data, cfstr(acct), cfstr("AirPort"),
+                             synchronizable ? kCFBooleanTrue : kCFBooleanFalse};
+    return CFDictionaryCreate(NULL, keys, values, 4,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
+/* A query that names the synchronizable attribute. */
+static CFDictionaryRef query_with_sync(const char *svc, const char *acct,
+                                       const char *cls, int want_data,
+                                       int synchronizable) {
+    const void *keys[5];
+    const void *values[5];
+    int count = 0;
+    keys[count] = kSecAttrService; values[count] = cfstr(svc); count++;
+    keys[count] = kSecAttrAccount; values[count] = cfstr(acct); count++;
+    if (cls) { keys[count] = kSecClass; values[count] = cfstr(cls); count++; }
+    if (want_data) { keys[count] = kSecReturnData; values[count] = kCFBooleanTrue; count++; }
+    keys[count] = kSecAttrSynchronizable;
+    values[count] = synchronizable ? kCFBooleanTrue : kCFBooleanFalse;
+    count++;
+    return CFDictionaryCreate(NULL, keys, values, count,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
+/* A delete that names the synchronizable attribute. */
+static CFDictionaryRef delete_all_sync_query(int synchronizable) {
+    const void *keys[3];
+    const void *values[3];
+    int count = 0;
+    keys[count] = kSecAttrService; values[count] = cfstr("AirPort"); count++;
+    keys[count] = kSecClass; values[count] = cfstr("genp"); count++;
+    keys[count] = kSecAttrSynchronizable;
+    values[count] = synchronizable ? kCFBooleanTrue : kCFBooleanFalse;
+    count++;
+    return CFDictionaryCreate(NULL, keys, values, count,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
 /* A delete with no account: every AirPort record of one keychain. */
 static CFDictionaryRef delete_all_query(void) {
     const void *keys[2];
@@ -352,6 +399,77 @@ int main(int argc, char **argv) {
         status = l8_SecItemCopyMatching(two, &result);
         if (status != errSecSuccess || result == NULL) {
             fail("a malformed account selector must not delete a stored credential");
+        }
+    } else if (strcmp(mode, "syncselect") == 0) {
+        /* One synchronizable and one nonsynchronizable record in the same
+         * keychain. A delete that names the synchronizable attribute must
+         * remove only the record it selects, and an update that does not name
+         * it must keep the stored value, because the keychain does not let
+         * that attribute be updated. */
+        CFDictionaryRef sync_add = add_with_sync("syncone", "syncpassword", 1);
+        CFTypeRef added = NULL;
+        l8_SecItemAdd(sync_add, &added);
+        if (added) { CFRelease(added); }
+        CFDictionaryRef plain_add = add_with_sync("synctwo", "plainpassword", 0);
+        added = NULL;
+        l8_SecItemAdd(plain_add, &added);
+        if (added) { CFRelease(added); }
+
+        probe_called_count = 0;
+        status = l8_SecItemDelete(delete_all_sync_query(1));
+        if (status != errSecSuccess || probe_called_count != 0) {
+            fail("a synchronizable bulk delete must succeed without the real keychain");
+        }
+
+        /* The synchronizable record is gone, the other one is not. */
+        CFDictionaryRef gone = query_with("AirPort", "syncone", "genp", 1);
+        CFTypeRef result = NULL;
+        status = l8_SecItemCopyMatching(gone, &result);
+        if (status == errSecSuccess) {
+            fail("a synchronizable bulk delete must remove the synchronizable record");
+        }
+        CFDictionaryRef kept = query_with("AirPort", "synctwo", "genp", 1);
+        result = NULL;
+        status = l8_SecItemCopyMatching(kept, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("a synchronizable bulk delete must leave the other record alone");
+        }
+
+        /* An update that does not name the synchronizable attribute must not
+         * change it, so the record stays reachable through a query that names
+         * it, and stays unreachable through one that names the other value. */
+        const char *replacement = "changedpassword";
+        CFDataRef new_password = CFDataCreate(NULL, (const UInt8 *)replacement,
+                                              (CFIndex)strlen(replacement));
+        const void *update_keys[1] = {kSecValueData};
+        const void *update_values[1] = {new_password};
+        CFDictionaryRef update = CFDictionaryCreate(NULL, update_keys, update_values, 1,
+                                                   &kCFTypeDictionaryKeyCallBacks,
+                                                   &kCFTypeDictionaryValueCallBacks);
+        CFDictionaryRef update_query = query_with("AirPort", "synctwo", "genp", 0);
+        status = l8_SecItemUpdate(update_query, update);
+        if (status != errSecSuccess) {
+            fail("updating a record must succeed");
+        }
+        CFDictionaryRef still_plain =
+            query_with_sync("AirPort", "synctwo", "genp", 1, 0);
+        result = NULL;
+        status = l8_SecItemCopyMatching(still_plain, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("an update must not clear the stored synchronizable attribute");
+        } else {
+            if (CFGetTypeID(result) == CFDataGetTypeID() &&
+                CFDataGetLength((CFDataRef)result) != (CFIndex)strlen(replacement)) {
+                fail("the update must replace the stored password");
+            }
+            CFRelease(result);
+        }
+        CFDictionaryRef would_be_sync =
+            query_with_sync("AirPort", "synctwo", "genp", 1, 1);
+        result = NULL;
+        status = l8_SecItemCopyMatching(would_be_sync, &result);
+        if (status == errSecSuccess) {
+            fail("the record must not answer a query naming the other value");
         }
     } else if (strcmp(mode, "check") == 0) {
         /* A different service must pass through to the real keychain. */
@@ -690,7 +808,14 @@ with tempfile.TemporaryDirectory(prefix="l8-wifi-") as work:
     if result.returncode != 0:
         raise SystemExit(f"FAIL: malformed selector\n{result.stdout}{result.stderr}")
 
+    # The synchronizable attribute is part of the selection, so a delete that
+    # names it must not take the records it excludes.
+    result = subprocess.run([str(binary), "syncselect"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: synchronizable selection\n{result.stdout}{result.stderr}")
+
     print("PASS: AirPort-only interception, foreign service and class pass through, "
           "add/copy/update/delete round-trip, marker-gated inertness, 0600 store, "
           "store path fits a device-sized thread stack, a bulk delete clears one "
-          "keychain only, a malformed account selector is rejected")
+          "keychain only, a malformed account selector is rejected, the "
+          "synchronizable attribute is part of the selection")

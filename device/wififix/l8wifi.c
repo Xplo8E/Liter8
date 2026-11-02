@@ -163,20 +163,38 @@ static CFStringRef query_account(CFDictionaryRef query)
                : NULL;
 }
 
-/* The account selector has three states: absent, a string, or present but
- * not a string. An absent selector means the caller wants every matching
- * record, which is a bulk request. A malformed one means the caller got the
- * request wrong, and it must not be turned into a bulk request, because that
- * would turn a single wrong call into the loss of every saved password in
- * that keychain. A malformed request goes to the real implementation, which
- * rejects it. */
-static bool account_selector_malformed(CFDictionaryRef query)
+/* A selector the shim cannot act on faithfully is a request the caller got
+ * wrong. The real keychain rejects it, and so does the shim: passing it
+ * through keeps the stock behaviour and stops a malformed selector from
+ * being read as an absent one, which would turn a single wrong call into a
+ * bulk one. */
+static bool selector_malformed(CFDictionaryRef query)
 {
     if (query == NULL) {
         return false;
     }
-    CFTypeRef value = CFDictionaryGetValue(query, kSecAttrAccount);
-    return value != NULL && CFGetTypeID(value) != CFStringGetTypeID();
+    CFTypeRef account = CFDictionaryGetValue(query, kSecAttrAccount);
+    if (account != NULL && CFGetTypeID(account) != CFStringGetTypeID()) {
+        return true;
+    }
+    CFTypeRef synchronizable =
+        CFDictionaryGetValue(query, kSecAttrSynchronizable);
+    return synchronizable != NULL &&
+           CFGetTypeID(synchronizable) != CFBooleanGetTypeID();
+}
+
+/* The synchronizable attribute is part of how the keychain matches a record.
+ * A query without the attribute matches every record; a query that carries
+ * it matches only the records with that value. */
+static bool query_accepts_synchronizable(CFDictionaryRef query,
+                                          bool synchronizable)
+{
+    CFTypeRef value =
+        query == NULL ? NULL : CFDictionaryGetValue(query, kSecAttrSynchronizable);
+    if (value == NULL) {
+        return true;
+    }
+    return CFEqual(value, synchronizable ? kCFBooleanTrue : kCFBooleanFalse);
 }
 
 /* Whether the caller asked for the system keychain rather than a per-user
@@ -440,7 +458,7 @@ static OSStatus store_credential(CFDictionaryRef query, CFDataRef data,
 static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
 {
     if (gInsideHook || !fallback_enabled() || !is_wifid() ||
-        !is_airport_password_query(query) || account_selector_malformed(query)) {
+        !is_airport_password_query(query) || selector_malformed(query)) {
         return SecItemCopyMatching(query, result);
     }
     if (result != NULL) {
@@ -461,7 +479,11 @@ static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
     if (store != NULL && account != NULL) {
         CFStringRef key = store_key(account, system);
         CFDictionaryRef entry = find_entry(store, key);
-        if (entry != NULL) {
+        /* The synchronizable attribute is part of how a record matches, so a
+         * query that excludes the stored record does not get it. */
+        if (entry != NULL &&
+            query_accepts_synchronizable(
+                query, dictionary_bool(entry, CFSTR("synchronizable")))) {
             if (wants_attributes) {
                 produced = result_attributes(entry, wants_data);
             } else if (wants_data) {
@@ -491,6 +513,12 @@ static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
                  * keychain that was asked for and no others. */
                 if (dictionary_bool((CFDictionaryRef)values[index],
                                     CFSTR("system")) != system) {
+                    continue;
+                }
+                /* And so is the synchronizable attribute. */
+                if (!query_accepts_synchronizable(
+                        query, dictionary_bool((CFDictionaryRef)values[index],
+                                               CFSTR("synchronizable")))) {
                     continue;
                 }
                 CFDictionaryRef attributes =
@@ -530,7 +558,7 @@ static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
 static OSStatus l8_SecItemAdd(CFDictionaryRef attributes, CFTypeRef *result)
 {
     if (gInsideHook || !fallback_enabled() || !is_wifid() ||
-        !is_airport_password_query(attributes) || account_selector_malformed(attributes)) {
+        !is_airport_password_query(attributes) || selector_malformed(attributes)) {
         return SecItemAdd(attributes, result);
     }
     if (result != NULL) {
@@ -556,11 +584,39 @@ static OSStatus l8_SecItemAdd(CFDictionaryRef attributes, CFTypeRef *result)
     return errSecSuccess;
 }
 
+/* The stored record for this query's account and keychain, and whether there
+ * is one. The synchronizable attribute is part of how the keychain matches a
+ * record, so a caller needs it before deciding whether a request matches. */
+static bool stored_synchronizable(CFDictionaryRef query, bool *synchronizable)
+{
+    CFStringRef account = query_account(query);
+    if (account == NULL) {
+        return false;
+    }
+    pthread_mutex_lock(&gStoreLock);
+    CFMutableDictionaryRef store = load_store();
+    bool found = false;
+    if (store != NULL) {
+        CFStringRef key = store_key(account, query_system_keychain(query));
+        if (key != NULL) {
+            CFDictionaryRef entry = find_entry(store, key);
+            if (entry != NULL) {
+                *synchronizable = dictionary_bool(entry, CFSTR("synchronizable"));
+                found = true;
+            }
+            CFRelease(key);
+        }
+        CFRelease(store);
+    }
+    pthread_mutex_unlock(&gStoreLock);
+    return found;
+}
+
 static OSStatus l8_SecItemUpdate(CFDictionaryRef query,
                                  CFDictionaryRef attributes_to_update)
 {
     if (gInsideHook || !fallback_enabled() || !is_wifid() ||
-        !is_airport_password_query(query) || account_selector_malformed(query)) {
+        !is_airport_password_query(query) || selector_malformed(query)) {
         return SecItemUpdate(query, attributes_to_update);
     }
 
@@ -571,10 +627,31 @@ static OSStatus l8_SecItemUpdate(CFDictionaryRef query,
         return SecItemUpdate(query, attributes_to_update);
     }
 
+    /* The synchronizable attribute is part of a record's identity, and the
+     * keychain does not let it be updated. An update that does not name one
+     * keeps the stored value, and an update whose query excludes the stored
+     * record is not a match at all, so the real keychain owns it. */
+    bool stored = false;
+    bool synchronizable = false;
+    if (stored_synchronizable(query, &synchronizable)) {
+        stored = true;
+        if (!query_accepts_synchronizable(query, synchronizable)) {
+            return SecItemUpdate(query, attributes_to_update);
+        }
+    }
+    CFTypeRef requested = attributes_to_update == NULL
+                              ? NULL
+                              : CFDictionaryGetValue(attributes_to_update,
+                                                     kSecAttrSynchronizable);
+    if (requested != NULL) {
+        synchronizable = dictionary_bool(attributes_to_update,
+                                         kSecAttrSynchronizable);
+    } else if (!stored) {
+        synchronizable = false;
+    }
+
     gInsideHook = true;
-    OSStatus status = store_credential(query, (CFDataRef)data,
-                                        dictionary_bool(query,
-                                                       kSecAttrSynchronizable));
+    OSStatus status = store_credential(query, (CFDataRef)data, synchronizable);
     gInsideHook = false;
     return status;
 }
@@ -582,7 +659,7 @@ static OSStatus l8_SecItemUpdate(CFDictionaryRef query,
 static OSStatus l8_SecItemDelete(CFDictionaryRef query)
 {
     if (gInsideHook || !fallback_enabled() || !is_wifid() ||
-        !is_airport_password_query(query) || account_selector_malformed(query)) {
+        !is_airport_password_query(query) || selector_malformed(query)) {
         return SecItemDelete(query);
     }
 
@@ -597,7 +674,11 @@ static OSStatus l8_SecItemDelete(CFDictionaryRef query)
     if (store != NULL) {
         if (account != NULL) {
             CFStringRef key = store_key(account, system);
-            if (key != NULL && CFDictionaryContainsKey(store, key)) {
+            CFDictionaryRef entry = key != NULL ? find_entry(store, key) : NULL;
+            /* A delete that excludes the stored record does not match it. */
+            if (entry != NULL &&
+                query_accepts_synchronizable(
+                    query, dictionary_bool(entry, CFSTR("synchronizable")))) {
                 CFDictionaryRemoveValue(store, key);
                 removed = true;
                 written = write_store(store);
@@ -626,6 +707,14 @@ static OSStatus l8_SecItemDelete(CFDictionaryRef query)
                         }
                         if (dictionary_bool((CFDictionaryRef)value, CFSTR("system")) !=
                             system) {
+                            continue;
+                        }
+                        /* The synchronizable attribute is part of the
+                         * selection too, so a delete that names it must not
+                         * take the records it excludes. */
+                        if (!query_accepts_synchronizable(
+                                query, dictionary_bool((CFDictionaryRef)value,
+                                                       CFSTR("synchronizable")))) {
                             continue;
                         }
                         CFArrayAppendValue(doomed, keys[index]);
