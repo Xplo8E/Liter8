@@ -163,6 +163,22 @@ static CFStringRef query_account(CFDictionaryRef query)
                : NULL;
 }
 
+/* The account selector has three states: absent, a string, or present but
+ * not a string. An absent selector means the caller wants every matching
+ * record, which is a bulk request. A malformed one means the caller got the
+ * request wrong, and it must not be turned into a bulk request, because that
+ * would turn a single wrong call into the loss of every saved password in
+ * that keychain. A malformed request goes to the real implementation, which
+ * rejects it. */
+static bool account_selector_malformed(CFDictionaryRef query)
+{
+    if (query == NULL) {
+        return false;
+    }
+    CFTypeRef value = CFDictionaryGetValue(query, kSecAttrAccount);
+    return value != NULL && CFGetTypeID(value) != CFStringGetTypeID();
+}
+
 /* Whether the caller asked for the system keychain rather than a per-user
  * one. wifid imports kSecUseSystemKeychain on every known build, and the
  * two are different records, so the answer is part of the store key. */
@@ -424,7 +440,7 @@ static OSStatus store_credential(CFDictionaryRef query, CFDataRef data,
 static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
 {
     if (gInsideHook || !fallback_enabled() || !is_wifid() ||
-        !is_airport_password_query(query)) {
+        !is_airport_password_query(query) || account_selector_malformed(query)) {
         return SecItemCopyMatching(query, result);
     }
     if (result != NULL) {
@@ -514,7 +530,7 @@ static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
 static OSStatus l8_SecItemAdd(CFDictionaryRef attributes, CFTypeRef *result)
 {
     if (gInsideHook || !fallback_enabled() || !is_wifid() ||
-        !is_airport_password_query(attributes)) {
+        !is_airport_password_query(attributes) || account_selector_malformed(attributes)) {
         return SecItemAdd(attributes, result);
     }
     if (result != NULL) {
@@ -544,7 +560,7 @@ static OSStatus l8_SecItemUpdate(CFDictionaryRef query,
                                  CFDictionaryRef attributes_to_update)
 {
     if (gInsideHook || !fallback_enabled() || !is_wifid() ||
-        !is_airport_password_query(query)) {
+        !is_airport_password_query(query) || account_selector_malformed(query)) {
         return SecItemUpdate(query, attributes_to_update);
     }
 
@@ -566,7 +582,7 @@ static OSStatus l8_SecItemUpdate(CFDictionaryRef query,
 static OSStatus l8_SecItemDelete(CFDictionaryRef query)
 {
     if (gInsideHook || !fallback_enabled() || !is_wifid() ||
-        !is_airport_password_query(query)) {
+        !is_airport_password_query(query) || account_selector_malformed(query)) {
         return SecItemDelete(query);
     }
 

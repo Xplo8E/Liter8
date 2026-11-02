@@ -1331,11 +1331,19 @@ class ContextTests(unittest.TestCase):
         self.assertIn("/mnt2/root/oslog", provisioner)
         self.assertIn("oslog readback hash mismatch", provisioner)
         self.assertIn("com.apple.private.logging.stream", provisioner)
-        self.assertIn('note "oslog reader"', provisioner)
         self.assertLessEqual(
             {"logging"},
             default_step_set(provisioner, r'^STEPS="([^"]*)"'),
         )
+
+        # The reader is a convenience and nothing else on the device depends
+        # on it, so its absence must not make the verification say "do not
+        # boot". It is reported, and the reporting helper cannot fail.
+        self.assertIn('report "oslog reader"', provisioner)
+        self.assertNotIn('note "oslog reader"', provisioner)
+        report = re.search(r"^report\(\) \{\n(.*?)^\}", provisioner, re.M | re.S)
+        self.assertIsNotNone(report, "the report helper is missing")
+        self.assertNotIn("FAIL=1", report.group(1))
 
         # The host helper reads the device's log through the same path.
         self.assertIn("/var/root/oslog", logdev)

@@ -1512,6 +1512,13 @@ note() {
     esac
 }
 
+# Reports a state without making it a boot-readiness failure. Used for the
+# helpers nothing else on the device depends on: their absence is worth
+# saying out loud, but it must not tell the operator not to boot.
+report() {
+    printf '    %-24s %s\n' "$1" "${2:-NO RESULT}"
+}
+
 # Decide a presence marker exactly as the code that reads it decides: a regular
 # file, root owned, and not group or other writable. l8fdr.c:bypass_enabled(),
 # l8localauth.m:marker_enabled() and l8persona.m:marker_enabled() all test that,
@@ -1822,8 +1829,9 @@ note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_p
 
 # The os_log reader. Its state is the file's own hash, because the binary is
 # a fixed resource: the same bytes, or the tool is not the one that was
-# validated. A missing file is reported, not failed, because the reader is a
-# convenience and nothing else on the device depends on it.
+# validated. Reported and never fatal, because the reader is a convenience
+# and nothing else on the device depends on it. Failing here would make a
+# device provisioned without the logging step report "do not boot".
 if [ -f oslog ]; then
     oslog_want=$(shasum -a 256 oslog | awk '{print $1}')
     sh_dev '/bin/cat /mnt2/root/oslog' \
@@ -1834,12 +1842,12 @@ if [ -f oslog ]; then
     elif [ -s payload/.work/verify.oslog ]; then
         oslog_state=MISMATCH
     else
-        oslog_state=MISSING
+        oslog_state="not installed"
     fi
 else
-    oslog_state=MISSING
+    oslog_state="not installed"
 fi
-note "oslog reader" "$oslog_state"
+report "oslog reader" "$oslog_state"
 
 sh_dev '/bin/cat /mnt2/db/com.apple.xpc.launchd/disabled.plist' \
     > payload/.work/verify.disabled.plist 2>/dev/null || true

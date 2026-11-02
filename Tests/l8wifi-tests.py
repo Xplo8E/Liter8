@@ -166,6 +166,22 @@ static CFDictionaryRef add_with_system(const char *acct, const char *password) {
                               &kCFTypeDictionaryValueCallBacks);
 }
 
+/* A query whose account selector is present but is not a string. The real
+ * keychain rejects it, and the shim must not treat it as an absent selector,
+ * which would make a malformed single-record request into a bulk one. */
+static CFDictionaryRef query_with_data_account(const char *svc) {
+    CFDataRef account = CFDataCreate(NULL, (const UInt8 *)"not-an-account", 13);
+    const void *keys[3];
+    const void *values[3];
+    int count = 0;
+    keys[count] = kSecAttrService; values[count] = cfstr(svc); count++;
+    keys[count] = kSecClass; values[count] = cfstr("genp"); count++;
+    keys[count] = kSecAttrAccount; values[count] = account; count++;
+    return CFDictionaryCreate(NULL, keys, values, count,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
 /* A delete with no account: every AirPort record of one keychain. */
 static CFDictionaryRef delete_all_query(void) {
     const void *keys[2];
@@ -302,6 +318,40 @@ int main(int argc, char **argv) {
         status = l8_SecItemCopyMatching(kept, &result);
         if (status == errSecSuccess) {
             fail("a user-keychain bulk delete must remove the user-keychain credential");
+        }
+    } else if (strcmp(mode, "malformed") == 0) {
+        /* Two accounts, then a request whose account selector is present but
+         * is not a string. The real keychain rejects that request, and the
+         * shim must reject it too rather than read it as an absent selector,
+         * which would delete every credential in the keychain. */
+        CFDictionaryRef first = add_with("malformedone", "firstpassword");
+        CFTypeRef added = NULL;
+        l8_SecItemAdd(first, &added);
+        if (added) { CFRelease(added); }
+        CFDictionaryRef second = add_with("malformedtwo", "secondpassword");
+        added = NULL;
+        l8_SecItemAdd(second, &added);
+        if (added) { CFRelease(added); }
+
+        CFDictionaryRef broken = query_with_data_account("AirPort");
+        probe_called_count = 0;
+        status = l8_SecItemDelete(broken);
+        if (probe_called_count != 1) {
+            fail("a malformed account selector must reach the real keychain");
+        }
+
+        /* Neither stored credential may have changed. */
+        CFDictionaryRef one = query_with("AirPort", "malformedone", "genp", 1);
+        result = NULL;
+        status = l8_SecItemCopyMatching(one, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("a malformed account selector must not delete a stored credential");
+        }
+        CFDictionaryRef two = query_with("AirPort", "malformedtwo", "genp", 1);
+        result = NULL;
+        status = l8_SecItemCopyMatching(two, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("a malformed account selector must not delete a stored credential");
         }
     } else if (strcmp(mode, "check") == 0) {
         /* A different service must pass through to the real keychain. */
@@ -634,7 +684,13 @@ with tempfile.TemporaryDirectory(prefix="l8-wifi-") as work:
     if result.returncode != 0:
         raise SystemExit(f"FAIL: bulk delete\n{result.stdout}{result.stderr}")
 
+    # A malformed account selector must be rejected, not turned into a bulk
+    # request. Run after the bulk delete, which empties the store.
+    result = subprocess.run([str(binary), "malformed"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: malformed selector\n{result.stdout}{result.stderr}")
+
     print("PASS: AirPort-only interception, foreign service and class pass through, "
           "add/copy/update/delete round-trip, marker-gated inertness, 0600 store, "
           "store path fits a device-sized thread stack, a bulk delete clears one "
-          "keychain only")
+          "keychain only, a malformed account selector is rejected")
