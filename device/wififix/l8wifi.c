@@ -602,6 +602,58 @@ static OSStatus store_credential(CFDictionaryRef query, CFDataRef data,
     return status;
 }
 
+/* The stored records a query selects: the ones of the keychain that was
+ * asked for whose synchronizable value, label and account the query
+ * accepts. The read and the delete paths share it so that they cannot
+ * drift apart and start disagreeing about which records a query names. */
+static CFArrayRef matching_entries(CFDictionaryRef store, CFDictionaryRef query,
+                                   bool system, CFStringRef account)
+{
+    CFMutableArrayRef matched = CFArrayCreateMutable(
+        kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
+    if (matched == NULL) {
+        return NULL;
+    }
+    CFIndex count = CFDictionaryGetCount(store);
+    const void **values = count ? calloc((size_t)count, sizeof(*values)) : NULL;
+    if (values == NULL) {
+        CFRelease(matched);
+        return NULL;
+    }
+    CFDictionaryGetKeysAndValues(store, NULL, values);
+    for (CFIndex index = 0; index < count; index++) {
+        if (CFGetTypeID(values[index]) != CFDictionaryGetTypeID()) {
+            continue;
+        }
+        CFDictionaryRef entry = (CFDictionaryRef)values[index];
+        /* The system-keychain selection is part of a record's identity, so a
+         * query answers with the records of the keychain that was asked for
+         * and no others. */
+        if (dictionary_bool(entry, CFSTR("system")) != system) {
+            continue;
+        }
+        /* And so is the synchronizable attribute. */
+        if (!query_accepts_synchronizable(
+                query, dictionary_bool(entry, CFSTR("synchronizable")))) {
+            continue;
+        }
+        /* And the label, which a query can match on too. */
+        if (!query_accepts_label(query, CFDictionaryGetValue(entry, CFSTR("label")))) {
+            continue;
+        }
+        /* And the account, when the query names one. */
+        if (account != NULL) {
+            CFTypeRef stored = CFDictionaryGetValue(entry, CFSTR("account"));
+            if (stored == NULL || !CFEqual(stored, account)) {
+                continue;
+            }
+        }
+        CFArrayAppendValue(matched, entry);
+    }
+    free(values);
+    return matched;
+}
+
 static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
 {
     if (gInsideHook || !fallback_enabled() || !is_wifid() ||
@@ -628,45 +680,15 @@ static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
          * when the selectors leave one record standing: the keychain returns
          * an array for kSecMatchLimitAll, and a caller that consumes the
          * result as an array cannot use a bare dictionary. */
-        CFIndex count = CFDictionaryGetCount(store);
-        const void **values = count ? calloc((size_t)count, sizeof(*values)) : NULL;
+        CFArrayRef matched = matching_entries(store, query, system, account);
         CFMutableArrayRef array = CFArrayCreateMutable(kCFAllocatorDefault, 0,
                                                         &kCFTypeArrayCallBacks);
-        if (values != NULL && array != NULL) {
-            CFDictionaryGetKeysAndValues(store, NULL, values);
+        if (matched != NULL && array != NULL) {
+            CFIndex count = CFArrayGetCount(matched);
             for (CFIndex index = 0; index < count; index++) {
-                if (CFGetTypeID(values[index]) != CFDictionaryGetTypeID()) {
-                    continue;
-                }
-                /* The system-keychain selection is part of a record's
-                 * identity, so an enumeration answers with the records of the
-                 * keychain that was asked for and no others. */
-                if (dictionary_bool((CFDictionaryRef)values[index],
-                                    CFSTR("system")) != system) {
-                    continue;
-                }
-                /* And so is the synchronizable attribute. */
-                if (!query_accepts_synchronizable(
-                        query, dictionary_bool((CFDictionaryRef)values[index],
-                                               CFSTR("synchronizable")))) {
-                    continue;
-                }
-                /* And the label, which a query can match on too. */
-                if (!query_accepts_label(
-                        query, CFDictionaryGetValue((CFDictionaryRef)values[index],
-                                                   CFSTR("label")))) {
-                    continue;
-                }
-                /* And the account, when the query names one. */
-                if (account != NULL) {
-                    CFTypeRef stored = CFDictionaryGetValue(
-                        (CFDictionaryRef)values[index], CFSTR("account"));
-                    if (stored == NULL || !CFEqual(stored, account)) {
-                        continue;
-                    }
-                }
-                CFDictionaryRef attributes =
-                    result_attributes((CFDictionaryRef)values[index], wants_data);
+                CFDictionaryRef attributes = result_attributes(
+                    (CFDictionaryRef)CFArrayGetValueAtIndex(matched, index),
+                    wants_data);
                 if (attributes != NULL) {
                     CFArrayAppendValue(array, attributes);
                     CFRelease(attributes);
@@ -680,7 +702,9 @@ static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
         } else if (array != NULL) {
             CFRelease(array);
         }
-        free(values);
+        if (matched != NULL) {
+            CFRelease(matched);
+        }
     } else if (store != NULL && account != NULL && !enumerates) {
         CFStringRef key = store_key(account, system);
         CFDictionaryRef entry = find_entry(store, key);
@@ -905,49 +929,24 @@ static OSStatus l8_SecItemDelete(CFDictionaryRef query)
              * keychain that was asked for, and no others. The system-keychain
              * selection is part of a record's identity, so a bulk delete that
              * ignored it would take the other keychain's records with it. */
-            CFMutableArrayRef doomed = CFArrayCreateMutable(
-                kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
-            if (doomed != NULL) {
-                CFIndex count = CFDictionaryGetCount(store);
-                const void **keys = count ? calloc((size_t)count, sizeof(*keys)) : NULL;
-                if (keys != NULL) {
-                    CFDictionaryGetKeysAndValues(store, keys, NULL);
-                    for (CFIndex index = 0; index < count; index++) {
-                        CFTypeRef value =
-                            CFDictionaryGetValue(store, (CFStringRef)keys[index]);
-                        if (value == NULL ||
-                            CFGetTypeID(value) != CFDictionaryGetTypeID()) {
-                            continue;
-                        }
-                        if (dictionary_bool((CFDictionaryRef)value, CFSTR("system")) !=
-                            system) {
-                            continue;
-                        }
-                        /* The synchronizable attribute is part of the
-                         * selection too, so a delete that names it must not
-                         * take the records it excludes. */
-                        if (!query_accepts_synchronizable(
-                                query, dictionary_bool((CFDictionaryRef)value,
-                                                       CFSTR("synchronizable")))) {
-                            continue;
-                        }
-                        /* And so is the label. */
-                        if (!query_accepts_label(
-                                query, CFDictionaryGetValue((CFDictionaryRef)value,
-                                                           CFSTR("label")))) {
-                            continue;
-                        }
-                        CFArrayAppendValue(doomed, keys[index]);
+            CFArrayRef matched = matching_entries(store, query, system, NULL);
+            if (matched != NULL) {
+                CFIndex count = CFArrayGetCount(matched);
+                for (CFIndex index = 0; index < count; index++) {
+                    CFDictionaryRef entry =
+                        (CFDictionaryRef)CFArrayGetValueAtIndex(matched, index);
+                    CFTypeRef stored = CFDictionaryGetValue(entry, CFSTR("account"));
+                    if (stored == NULL) {
+                        continue;
                     }
-                    free(keys);
+                    CFStringRef key = store_key((CFStringRef)stored, system);
+                    if (key != NULL) {
+                        CFDictionaryRemoveValue(store, key);
+                        CFRelease(key);
+                        removed = true;
+                    }
                 }
-                CFIndex doomed_count = CFArrayGetCount(doomed);
-                for (CFIndex index = 0; index < doomed_count; index++) {
-                    CFDictionaryRemoveValue(
-                        store, (CFStringRef)CFArrayGetValueAtIndex(doomed, index));
-                }
-                removed = doomed_count != 0;
-                CFRelease(doomed);
+                CFRelease(matched);
             }
             written = !removed || write_store(store);
         }

@@ -1512,6 +1512,28 @@ note() {
     esac
 }
 
+# One dylib on the System volume: the local copy's hash against the copy on
+# the device, and the signature on the readback.
+verify_system_dylib() {
+    V_LABEL=$1
+    V_LOCAL=$2
+    V_DEVICE=$3
+    V_READBACK=payload/.work/verify.$(basename "$V_LOCAL")
+    if [ ! -f "$V_LOCAL" ]; then
+        note "$V_LABEL" "MISSING"
+        return
+    fi
+    V_WANT=$(shasum -a 256 "$V_LOCAL" | awk '{print $1}')
+    sh_dev "/bin/cat '$V_DEVICE'" > "$V_READBACK" 2>/dev/null || true
+    if [ -s "$V_READBACK" ] && \
+       [ "$(shasum -a 256 "$V_READBACK" | awk '{print $1}')" = "$V_WANT" ] && \
+       codesign -v "$V_READBACK" >/dev/null 2>&1; then
+        note "$V_LABEL" "OK"
+    else
+        note "$V_LABEL" "MISMATCH"
+    fi
+}
+
 # Reports a state without making it a boot-readiness failure. Used for the
 # helpers nothing else on the device depends on: their absence is worth
 # saying out loud, but it must not tell the operator not to boot.
@@ -1744,81 +1766,11 @@ verify_userland_patch wifid /mnt1/usr/sbin/wifid
 verify_userland_patch CommCenter \
     /mnt1/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter
 
-if [ -f payload/l8pair.dylib ]; then
-    pairing_want=$(shasum -a 256 payload/l8pair.dylib | awk '{print $1}')
-    sh_dev '/bin/cat /mnt1/usr/lib/l8pair.dylib' \
-        > payload/.work/verify.l8pair 2>/dev/null || true
-    if [ -s payload/.work/verify.l8pair ] && \
-       [ "$(shasum -a 256 payload/.work/verify.l8pair | awk '{print $1}')" = "$pairing_want" ] && \
-       codesign -v payload/.work/verify.l8pair >/dev/null 2>&1; then
-        pairing_library_state=OK
-    else
-        pairing_library_state=MISMATCH
-    fi
-else
-    pairing_library_state=MISSING
-fi
-note "l8pair dylib" "$pairing_library_state"
-if [ -f payload/l8remotepairing.dylib ]; then
-    remotepairing_want=$(shasum -a 256 payload/l8remotepairing.dylib | awk '{print $1}')
-    sh_dev '/bin/cat /mnt1/usr/lib/l8remotepairing.dylib' \
-        > payload/.work/verify.l8remotepairing 2>/dev/null || true
-    if [ -s payload/.work/verify.l8remotepairing ] && \
-       [ "$(shasum -a 256 payload/.work/verify.l8remotepairing | awk '{print $1}')" = "$remotepairing_want" ] && \
-       codesign -v payload/.work/verify.l8remotepairing >/dev/null 2>&1; then
-        remotepairing_library_state=OK
-    else
-        remotepairing_library_state=MISMATCH
-    fi
-else
-    remotepairing_library_state=MISSING
-fi
-note "l8remotepairing dylib" "$remotepairing_library_state"
-if [ -f payload/l8coreauth.dylib ]; then
-    coreauth_want=$(shasum -a 256 payload/l8coreauth.dylib | awk '{print $1}')
-    sh_dev '/bin/cat /mnt1/usr/lib/l8coreauth.dylib' \
-        > payload/.work/verify.l8coreauth 2>/dev/null || true
-    if [ -s payload/.work/verify.l8coreauth ] && \
-       [ "$(shasum -a 256 payload/.work/verify.l8coreauth | awk '{print $1}')" = "$coreauth_want" ] && \
-       codesign -v payload/.work/verify.l8coreauth >/dev/null 2>&1; then
-        coreauth_library_state=OK
-    else
-        coreauth_library_state=MISMATCH
-    fi
-else
-    coreauth_library_state=MISSING
-fi
-note "l8coreauth dylib" "$coreauth_library_state"
-if [ -f payload/l8wifi.dylib ]; then
-    wifi_want=$(shasum -a 256 payload/l8wifi.dylib | awk '{print $1}')
-    sh_dev '/bin/cat /mnt1/usr/lib/l8wifi.dylib' \
-        > payload/.work/verify.l8wifi 2>/dev/null || true
-    if [ -s payload/.work/verify.l8wifi ] && \
-       [ "$(shasum -a 256 payload/.work/verify.l8wifi | awk '{print $1}')" = "$wifi_want" ] && \
-       codesign -v payload/.work/verify.l8wifi >/dev/null 2>&1; then
-        wifi_library_state=OK
-    else
-        wifi_library_state=MISMATCH
-    fi
-else
-    wifi_library_state=MISSING
-fi
-note "l8wifi dylib" "$wifi_library_state"
-if [ -f payload/l8fdr.dylib ]; then
-    fdr_want=$(shasum -a 256 payload/l8fdr.dylib | awk '{print $1}')
-    sh_dev '/bin/cat /mnt1/usr/lib/l8fdr.dylib' \
-        > payload/.work/verify.l8fdr 2>/dev/null || true
-    if [ -s payload/.work/verify.l8fdr ] && \
-       [ "$(shasum -a 256 payload/.work/verify.l8fdr | awk '{print $1}')" = "$fdr_want" ] && \
-       codesign -v payload/.work/verify.l8fdr >/dev/null 2>&1; then
-        fdr_library_state=OK
-    else
-        fdr_library_state=MISMATCH
-    fi
-else
-    fdr_library_state=MISSING
-fi
-note "l8fdr dylib" "$fdr_library_state"
+verify_system_dylib "l8pair dylib" payload/l8pair.dylib /mnt1/usr/lib/l8pair.dylib
+verify_system_dylib "l8remotepairing dylib" payload/l8remotepairing.dylib /mnt1/usr/lib/l8remotepairing.dylib
+verify_system_dylib "l8coreauth dylib" payload/l8coreauth.dylib /mnt1/usr/lib/l8coreauth.dylib
+verify_system_dylib "l8wifi dylib" payload/l8wifi.dylib /mnt1/usr/lib/l8wifi.dylib
+verify_system_dylib "l8fdr dylib" payload/l8fdr.dylib /mnt1/usr/lib/l8fdr.dylib
 # Reported separately from the dylib: with the dylib present and the marker gone the
 # bypass is deliberately inert, which is a recovery state rather than a broken one.
 note "FDR sik bypass marker" "$(required_marker /mnt1/usr/lib/.liter8-fdr-sik-bypass)"
