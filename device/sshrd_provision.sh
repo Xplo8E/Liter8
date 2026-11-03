@@ -26,7 +26,13 @@ cd "$BASE"
 # it is resolved once here rather than spelled out at each call site.
 TOOLS="$BASE/../tools"
 
-STEPS="mounts ticket setup userland pairing cellular screentime injection tweaks cache jbtools sileo resolv apps verify"
+# The unified-log reader. The staged runtime carries it beside the scripts,
+# as a symlink into the immutable resource directory. A run from the checkout
+# finds the committed copy one level up, beside the tools.
+OSLOG="$BASE/oslog"
+[ -f "$OSLOG" ] || OSLOG="$BASE/../payloads/oslog"
+
+STEPS="mounts ticket setup userland pairing wifi cellular screentime injection tweaks cache jbtools logging sileo resolv apps verify"
 
 usage() {
     echo "steps: $STEPS"
@@ -35,12 +41,14 @@ usage() {
     echo "  setup    patch Setup.app to skip unavailable first-run panes"
     echo "  userland patch and re-sign the SEP/activation daemons"
     echo "  pairing  install lockdownd, coreauthd companion guard and RemoteXPC repair"
+    echo "  wifi     keep Wi-Fi network passwords across reboots without SEP"
     echo "  cellular unseal baseband calibration and stop CommCenter refusing a data context"
     echo "  screentime make Setup's unavailable ScreenTime requests fail fast"
     echo "  injection install launchd hook plus icon grant, disabled for first boot"
     echo "  tweaks   install the tweak loader and the TweakInject payloads"
     echo "  cache    deploy the launchd service cache (dropbear + jbboot + DDI watcher + watchdogd mitigation)"
     echo "  jbtools  install boot helpers and the iOS 27 uicache"
+    echo "  logging  install the os_log reader so the device's log can be read"
     echo "  sileo      install Sileo (from payload/, built by fetch_payloads.sh)"
     # TrollStore is not installed here. It goes on after first boot from a deb,
     # so it can be updated without another DFU trip. See COMMANDS.md.
@@ -465,6 +473,78 @@ echo DONE_OK
     ok "l8coreauth.dylib deployed and read back ($C_WANT)"
 }
 
+deploy_wifi_library() {
+    W_LOCAL=payload/l8wifi.dylib
+    # Sealed System volume on purpose: see the comment in userland_fixups.py.
+    W_DEVICE=/mnt1/usr/lib/l8wifi.dylib
+    W_STAGED=$W_DEVICE.liter8-new
+    W_READBACK=payload/.work/userland/l8wifi.readback
+    mkdir -p payload/.work/userland
+
+    [ -f "$W_LOCAL" ] || die "missing $W_LOCAL; run fetch_payloads.sh wifi"
+    codesign -v "$W_LOCAL" || die "l8wifi.dylib has an invalid CodeDirectory"
+    W_WANT=$(shasum -a 256 "$W_LOCAL" | awk '{print $1}')
+    put "$W_LOCAL" "$W_STAGED"
+    must_dev "
+[ -f '$W_DEVICE' ] && [ ! -f '$W_DEVICE.orig' ] && cp '$W_DEVICE' '$W_DEVICE.orig'
+chmod 0755 '$W_STAGED'
+mv -f '$W_STAGED' '$W_DEVICE'
+echo DONE_OK
+" "could not activate l8wifi.dylib"
+    sh_dev "/bin/cat '$W_DEVICE'" > "$W_READBACK" \
+        || die "could not read back l8wifi.dylib"
+    W_GOT=$(shasum -a 256 "$W_READBACK" | awk '{print $1}')
+    [ "$W_GOT" = "$W_WANT" ] || die "l8wifi.dylib readback hash mismatch"
+    ok "l8wifi.dylib deployed and read back ($W_WANT)"
+}
+
+# The shim is inert without this marker, so a device whose Wi-Fi misbehaves is
+# recovered by deleting one file from SSHRD rather than by restoring a
+# re-signed binary. It sits beside the dylib on the System volume.
+enable_wifi_credentials() {
+    W_MARKER=/mnt1/usr/lib/.liter8-wifi-credentials
+    must_dev "
+: > '$W_MARKER.new'
+chmod 0600 '$W_MARKER.new'
+mv -f '$W_MARKER.new' '$W_MARKER'
+echo DONE_OK
+" "could not enable the AirPort credential shim marker"
+    ok "wifid AirPort credential fallback enabled by scoped marker"
+}
+
+# The os_log reader. It goes on the Data volume, in root's home directory,
+# because that is the only writable location on a normally booted device: the
+# System volume is sealed read-only once the device has booted, and /var/root
+# is where the host-side log reader looks for it. The binary carries Apple's
+# private logging entitlements, and logd checks the caller's entitlements
+# before it will open a stream, so the copy has to arrive byte for byte.
+deploy_oslog() {
+    O_LOCAL="$OSLOG"
+    O_DEVICE=/mnt2/root/oslog
+    O_STAGED=$O_DEVICE.liter8-new
+    O_READBACK=payload/.work/oslog.readback
+    mkdir -p payload/.work
+
+    [ -f "$O_LOCAL" ] || die "missing $O_LOCAL; it is a Liter8 resource beside the scripts or in payloads/"
+    O_WANT=$(shasum -a 256 "$O_LOCAL" | awk '{print $1}')
+    put "$O_LOCAL" "$O_STAGED"
+    must_dev "
+chmod 0755 '$O_STAGED'
+mv -f '$O_STAGED' '$O_DEVICE'
+echo DONE_OK
+" "could not activate oslog"
+    sh_dev "/bin/cat '$O_DEVICE'" > "$O_READBACK" \
+        || die "could not read back oslog"
+    O_GOT=$(shasum -a 256 "$O_READBACK" | awk '{print $1}')
+    [ "$O_GOT" = "$O_WANT" ] || die "oslog readback hash mismatch"
+    # The signature is written by ldid, whose CodeDirectory does not carry the
+    # ad-hoc flag that the host codesign insists on. The entitlement blob is
+    # what logd reads, so that is what has to survive the transfer.
+    "$LDID" -e "$O_READBACK" 2>/dev/null | grep -q com.apple.private.logging.stream \
+        || die "oslog readback lost its logging entitlements"
+    ok "oslog ($O_WANT)"
+}
+
 enable_pairing_fallback() {
     P_DIR=/mnt2/root/Library/Lockdown
     P_MARKER=$P_DIR/.liter8-pairing-fallback
@@ -539,6 +619,9 @@ deploy_userland_daemon() {
         remotepairingdeviced)
             U_DEVICE=/mnt1/usr/libexec/remotepairingdeviced
             ;;
+        wifid)
+            U_DEVICE=/mnt1/usr/sbin/wifid
+            ;;
         CommCenter)
             U_DEVICE=/mnt1/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter
             ;;
@@ -575,6 +658,24 @@ if wants pairing && [ "$CHECK_ONLY" = 0 ]; then
         deploy_userland_daemon "$U_NAME"
     done
     enable_pairing_fallback
+fi
+
+# ------------------------------------------------------------------- wifi
+# Without SEP the system keychain cannot retain the generic-password record
+# that carries a Wi-Fi network password, so the device forgets it on the next
+# boot and a password-protected network has to be typed again. The dylib keeps
+# that one record in a file on Data instead, and only while the marker is
+# present.
+#
+# The shim stores the password unencrypted, protected only by Unix mode 0600.
+# That is an explicit security tradeoff of the experimental SEP-less system,
+# and the same one the pairing fallback already makes for the lockdownd RSA
+# key.
+if wants wifi && [ "$CHECK_ONLY" = 0 ]; then
+    say "AirPort credential fallback"
+    deploy_wifi_library
+    deploy_userland_daemon wifid
+    enable_wifi_credentials
 fi
 
 # -------------------------------------------------------------- cellular
@@ -1273,6 +1374,12 @@ mv -f /mnt2/jb/usr/bin/ddiwatch.usbl8r-new /mnt2/jb/usr/bin/ddiwatch
     ok "uicache (iOS 27 containerized registration)"
 fi
 
+# ----------------------------------------------------------------- logging
+if wants logging && [ "$CHECK_ONLY" = 0 ]; then
+    say "os_log reader on the Data volume"
+    deploy_oslog
+fi
+
 # ----------------------------------------------------------------- bundles
 # Sileo comes from payload/, built by fetch_payloads.sh from the upstream
 # release. It used to be scraped off the device (installed via dpkg, then pulled
@@ -1409,6 +1516,35 @@ note() {
     case "$2" in
         ""|*ABSENT*|*MISSING*|*LOST*|*MISMATCH*|*UNREADABLE*|*UNSAFE*|ENABLED) FAIL=1 ;;
     esac
+}
+
+# One dylib on the System volume: the local copy's hash against the copy on
+# the device, and the signature on the readback.
+verify_system_dylib() {
+    V_LABEL=$1
+    V_LOCAL=$2
+    V_DEVICE=$3
+    V_READBACK=payload/.work/verify.$(basename "$V_LOCAL")
+    if [ ! -f "$V_LOCAL" ]; then
+        note "$V_LABEL" "MISSING"
+        return
+    fi
+    V_WANT=$(shasum -a 256 "$V_LOCAL" | awk '{print $1}')
+    sh_dev "/bin/cat '$V_DEVICE'" > "$V_READBACK" 2>/dev/null || true
+    if [ -s "$V_READBACK" ] && \
+       [ "$(shasum -a 256 "$V_READBACK" | awk '{print $1}')" = "$V_WANT" ] && \
+       codesign -v "$V_READBACK" >/dev/null 2>&1; then
+        note "$V_LABEL" "OK"
+    else
+        note "$V_LABEL" "MISMATCH"
+    fi
+}
+
+# Reports a state without making it a boot-readiness failure. Used for the
+# helpers nothing else on the device depends on: their absence is worth
+# saying out loud, but it must not tell the operator not to boot.
+report() {
+    printf '    %-24s %s\n' "$1" "${2:-NO RESULT}"
 }
 
 # Decide a presence marker exactly as the code that reads it decides: a regular
@@ -1632,75 +1768,44 @@ verify_userland_patch ctkd \
     /mnt1/System/Library/Frameworks/CryptoTokenKit.framework/ctkd
 verify_userland_patch lockdownd /mnt1/usr/libexec/lockdownd
 verify_userland_patch remotepairingdeviced /mnt1/usr/libexec/remotepairingdeviced
+verify_userland_patch wifid /mnt1/usr/sbin/wifid
 verify_userland_patch CommCenter \
     /mnt1/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter
 
-if [ -f payload/l8pair.dylib ]; then
-    pairing_want=$(shasum -a 256 payload/l8pair.dylib | awk '{print $1}')
-    sh_dev '/bin/cat /mnt1/usr/lib/l8pair.dylib' \
-        > payload/.work/verify.l8pair 2>/dev/null || true
-    if [ -s payload/.work/verify.l8pair ] && \
-       [ "$(shasum -a 256 payload/.work/verify.l8pair | awk '{print $1}')" = "$pairing_want" ] && \
-       codesign -v payload/.work/verify.l8pair >/dev/null 2>&1; then
-        pairing_library_state=OK
-    else
-        pairing_library_state=MISMATCH
-    fi
-else
-    pairing_library_state=MISSING
-fi
-note "l8pair dylib" "$pairing_library_state"
-if [ -f payload/l8remotepairing.dylib ]; then
-    remotepairing_want=$(shasum -a 256 payload/l8remotepairing.dylib | awk '{print $1}')
-    sh_dev '/bin/cat /mnt1/usr/lib/l8remotepairing.dylib' \
-        > payload/.work/verify.l8remotepairing 2>/dev/null || true
-    if [ -s payload/.work/verify.l8remotepairing ] && \
-       [ "$(shasum -a 256 payload/.work/verify.l8remotepairing | awk '{print $1}')" = "$remotepairing_want" ] && \
-       codesign -v payload/.work/verify.l8remotepairing >/dev/null 2>&1; then
-        remotepairing_library_state=OK
-    else
-        remotepairing_library_state=MISMATCH
-    fi
-else
-    remotepairing_library_state=MISSING
-fi
-note "l8remotepairing dylib" "$remotepairing_library_state"
-if [ -f payload/l8coreauth.dylib ]; then
-    coreauth_want=$(shasum -a 256 payload/l8coreauth.dylib | awk '{print $1}')
-    sh_dev '/bin/cat /mnt1/usr/lib/l8coreauth.dylib' \
-        > payload/.work/verify.l8coreauth 2>/dev/null || true
-    if [ -s payload/.work/verify.l8coreauth ] && \
-       [ "$(shasum -a 256 payload/.work/verify.l8coreauth | awk '{print $1}')" = "$coreauth_want" ] && \
-       codesign -v payload/.work/verify.l8coreauth >/dev/null 2>&1; then
-        coreauth_library_state=OK
-    else
-        coreauth_library_state=MISMATCH
-    fi
-else
-    coreauth_library_state=MISSING
-fi
-note "l8coreauth dylib" "$coreauth_library_state"
-if [ -f payload/l8fdr.dylib ]; then
-    fdr_want=$(shasum -a 256 payload/l8fdr.dylib | awk '{print $1}')
-    sh_dev '/bin/cat /mnt1/usr/lib/l8fdr.dylib' \
-        > payload/.work/verify.l8fdr 2>/dev/null || true
-    if [ -s payload/.work/verify.l8fdr ] && \
-       [ "$(shasum -a 256 payload/.work/verify.l8fdr | awk '{print $1}')" = "$fdr_want" ] && \
-       codesign -v payload/.work/verify.l8fdr >/dev/null 2>&1; then
-        fdr_library_state=OK
-    else
-        fdr_library_state=MISMATCH
-    fi
-else
-    fdr_library_state=MISSING
-fi
-note "l8fdr dylib" "$fdr_library_state"
+verify_system_dylib "l8pair dylib" payload/l8pair.dylib /mnt1/usr/lib/l8pair.dylib
+verify_system_dylib "l8remotepairing dylib" payload/l8remotepairing.dylib /mnt1/usr/lib/l8remotepairing.dylib
+verify_system_dylib "l8coreauth dylib" payload/l8coreauth.dylib /mnt1/usr/lib/l8coreauth.dylib
+verify_system_dylib "l8wifi dylib" payload/l8wifi.dylib /mnt1/usr/lib/l8wifi.dylib
+verify_system_dylib "l8fdr dylib" payload/l8fdr.dylib /mnt1/usr/lib/l8fdr.dylib
 # Reported separately from the dylib: with the dylib present and the marker gone the
 # bypass is deliberately inert, which is a recovery state rather than a broken one.
 note "FDR sik bypass marker" "$(required_marker /mnt1/usr/lib/.liter8-fdr-sik-bypass)"
 note "pairing fallback marker" "$(required_marker /mnt2/root/Library/Lockdown/.liter8-pairing-fallback)"
 note "RemoteXPC fallback marker" "$(required_marker /mnt1/usr/lib/.liter8-remotepairing-fallback)"
+note "AirPort credential marker" "$(required_marker /mnt1/usr/lib/.liter8-wifi-credentials)"
 note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_pairing_key.der ] && echo generated || echo pending' | tr -d '\r')"
+
+# The os_log reader. Its state is the file's own hash, because the binary is
+# a fixed resource: the same bytes, or the tool is not the one that was
+# validated. Reported and never fatal, because the reader is a convenience
+# and nothing else on the device depends on it. Failing here would make a
+# device provisioned without the logging step report "do not boot".
+if [ -f "$OSLOG" ]; then
+    oslog_want=$(shasum -a 256 "$OSLOG" | awk '{print $1}')
+    sh_dev '/bin/cat /mnt2/root/oslog' \
+        > payload/.work/verify.oslog 2>/dev/null || true
+    if [ -s payload/.work/verify.oslog ] && \
+       [ "$(shasum -a 256 payload/.work/verify.oslog | awk '{print $1}')" = "$oslog_want" ]; then
+        oslog_state=OK
+    elif [ -s payload/.work/verify.oslog ]; then
+        oslog_state=MISMATCH
+    else
+        oslog_state="not installed"
+    fi
+else
+    oslog_state="not installed"
+fi
+report "oslog reader" "$oslog_state"
 
 sh_dev '/bin/cat /mnt2/db/com.apple.xpc.launchd/disabled.plist' \
     > payload/.work/verify.disabled.plist 2>/dev/null || true

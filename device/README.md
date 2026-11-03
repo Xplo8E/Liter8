@@ -43,6 +43,23 @@ Commands have deliberately narrow device states:
   application registration, restarts SpringBoard and verifies `com.jbboot`.
   It refuses registration when container applications already exist.
 
+Provisioning also installs the os_log reader as `/var/root/oslog`. A normally
+booted device has no `/usr/bin/log`, so this is the only way to read what a
+booted Liter8 device is logging:
+
+```sh
+liter8/tools/logdev --info --debug
+liter8/tools/logdev -p wifid
+```
+
+It goes in root's home on the Data volume because that is the only writable
+location once the device has booted; the System volume is sealed read-only.
+The binary is the pinned `payloads/oslog` resource and carries Apple's private
+logging entitlements, which `logd` checks before it opens a stream, so it is
+compared byte for byte after the transfer. Its provenance, its iOS 27 message
+layout fix and the reason it must not be re-signed with `codesign` are
+documented in `payloads/README.md`.
+
 Add `--check` to inspect the corresponding state without installing files.
 Device scripts retain `.orig` or `.prev` copies when replacing boot-critical
 content. They still require operator-controlled device state and are never run
@@ -65,6 +82,29 @@ and converts only that exact failure to success. Successful evaluations, all
 other policies, and all other errors pass through unchanged. Consequently,
 this profile retains the explicit Trust decision but cannot provide genuine
 SEP-backed passcode proof; removing the marker disables this fallback too.
+
+`wifid` weak-loads `/usr/lib/l8wifi.dylib`. Without SEP the system keychain
+cannot retain the generic-password record that carries a Wi-Fi network
+password, so the device forgets it on the next boot and a password-protected
+network has to be typed again. The dylib keeps that one record in a file on
+the Data volume instead, at
+`/private/var/preferences/SystemConfiguration/com.liter8.wifi-passwords.plist`.
+
+It is active only while the root-owned `/usr/lib/.liter8-wifi-credentials`
+marker exists, and only inside `wifid`. It interposes the four `SecItem`
+operations for exactly one class of item: service `AirPort`, class
+`kSecClassGenericPassword`. Every other service, every other item class, and
+every request that does not match pass through to the real implementation, as
+does every request made by any process other than `wifid`. A record's
+system-keychain selection is part of its identity, so it is kept in the store
+key along with the account. An update that names a new account moves the
+record to it, and a change onto an account that already holds a record is
+refused rather than overwriting that record.
+
+The stored password is not encrypted: the file is protected only by Unix mode
+`0600`, the same tradeoff the pairing fallback already makes for the
+lockdownd RSA key. Removing the marker from SSHRD returns the loaded dylib to
+complete pass-through behavior.
 
 `coreauthd` also weak-loads `/usr/lib/l8coreauth.dylib`. On the SEP-less boot
 path ACM can return an empty DTO ratchet-state `NSData` without an error;

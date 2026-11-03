@@ -160,7 +160,7 @@ fetch_cached() {
     || die "ldid at $LDID cannot run on this host; brew install ldid-procursus"
 mkdir -p "$OUT" "$WORK"
 
-WANT="${*:-sileo helpers cache injection tweaks pairing cellular}"
+WANT="${*:-sileo helpers cache injection tweaks pairing wifi cellular}"
 wants() { case " $WANT " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # Assert the boot-critical profile values only for the components that use them.
@@ -550,6 +550,16 @@ if wants pairing; then
     ok "coreauthd-only l8coreauth.dylib ready"
 fi
 
+# --------------------------------------------------------------------- wifi
+if wants wifi; then
+    say "AirPort credential fallback"
+    ( cd wififix && ./build.sh ) || die "AirPort credential shim build failed"
+    cp wififix/l8wifi.dylib "$OUT/l8wifi.dylib"
+    codesign -v "$OUT/l8wifi.dylib" \
+        || die "AirPort credential shim signature verification failed"
+    ok "marker-gated wifid-only l8wifi.dylib ready"
+fi
+
 # ----------------------------------------------------------------- cellular
 if wants cellular; then
     say "baseband calibration FDR bypass"
@@ -756,7 +766,7 @@ for p in "$OUT/Sileo.app/Sileo" "$OUT/Sileo.app/giveMeRoot" \
          "$OUT/launchd.orig" "$OUT/launchd.hooked" "$OUT/lhook.dylib" \
          "$OUT/systemhook.dylib" "$OUT/sbextissue" "$OUT/l8pair.dylib" \
          "$OUT/l8remotepairing.dylib" "$OUT/l8coreauth.dylib" \
-         "$OUT/l8fdr.dylib" "$OUT/uicache" \
+         "$OUT/l8fdr.dylib" "$OUT/l8wifi.dylib" "$OUT/uicache" \
          "$OUT/tweaks/libinjector.dylib" "$OUT/tweaks/ellekit.deb" \
          "$OUT/tweaks/TweakInject/l8localauth.dylib" \
          "$OUT/tweaks/TweakInject/l8persona.dylib" \

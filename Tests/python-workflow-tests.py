@@ -44,6 +44,7 @@ from device_boot import (  # noqa: E402
 )
 from device_provision import (  # noqa: E402
     BOOTSTRAP_SHA256,
+    OSLOG_SHA256,
     SSHRD_PAYLOAD_SHA256,
     prepared_rootfs,
     prepare_runtime,
@@ -1120,9 +1121,9 @@ class ContextTests(unittest.TestCase):
         self.assertIn("deploy_userland_daemon coreauthd", provisioner)
         self.assertIn("if ! wants userland", provisioner)
         self.assertIn(".liter8-pairing-fallback", provisioner)
-        self.assertIn('note "l8pair dylib"', provisioner)
-        self.assertIn('note "l8remotepairing dylib"', provisioner)
-        self.assertIn('note "l8coreauth dylib"', provisioner)
+        self.assertIn('verify_system_dylib "l8pair dylib"', provisioner)
+        self.assertIn('verify_system_dylib "l8remotepairing dylib"', provisioner)
+        self.assertIn('verify_system_dylib "l8coreauth dylib"', provisioner)
         self.assertIn('note "ScreenTime overrides"', provisioner)
         self.assertIn('note "Setup CodeDirectory/id"', provisioner)
         self.assertIn('note "System /bin/sh"', provisioner)
@@ -1262,6 +1263,174 @@ class ContextTests(unittest.TestCase):
         self.assertIn("length >= kRatchetStateBytes", coreauth_source)
         self.assertIn("method_setImplementation", coreauth_source)
         self.assertIn('"coreauthd": ("/usr/lib/l8coreauth.dylib"', fixups)
+
+    def test_airport_credential_shim_is_narrow_and_marker_gated(self):
+        source = (DEVICE / "wififix/l8wifi.c").read_text()
+        builder = (DEVICE / "wififix/build.sh").read_text()
+        payload_builder = (DEVICE / "fetch_payloads.sh").read_text()
+        provisioner = (DEVICE / "sshrd_provision.sh").read_text()
+        fixups = (DEVICE / "userland_fixups.py").read_text()
+
+        # The shim claims exactly the AirPort generic-password item and
+        # leaves every other keychain request to the real implementation.
+        self.assertIn('CFSTR("AirPort")', source)
+        self.assertIn("kSecClassGenericPassword", source)
+        self.assertIn("kSecUseSystemKeychain", source)
+        self.assertIn("is_airport_password_query", source)
+        self.assertIn("fallback_enabled()", source)
+        self.assertIn('strcmp(program, L8WIFI_TARGET_PROGRAM)', source)
+        self.assertIn("O_NOFOLLOW", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemCopyMatching", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemAdd", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemUpdate", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemDelete", source)
+
+        # The marker is what turns the shim on, and it must be the operator's
+        # to create: root-owned and not group or other writable.
+        self.assertIn("L8WIFI_MARKER_UID 0", source)
+        self.assertIn("S_ISREG(status.st_mode)", source)
+        self.assertIn("(status.st_mode & (S_IWGRP | S_IWOTH)) == 0", source)
+
+        # The store holds the password, so it must be private.
+        self.assertIn("S_IRUSR | S_IWUSR", source)
+        self.assertIn("kMaximumStoreBytes", source)
+
+        # The dylib belongs on the sealed System volume: a restricted platform
+        # binary declines to load a dylib from anywhere else.
+        self.assertIn("-install_name /usr/lib/l8wifi.dylib", builder)
+        self.assertIn("-framework Security", builder)
+        self.assertIn("-not_for_dyld_shared_cache", builder)
+        self.assertIn('"wifid": ("/usr/lib/l8wifi.dylib"', fixups)
+        self.assertIn('"wifid.load-l8wifi"', fixups)
+
+        # The payload set builds and ships it, and the provisioning step
+        # deploys the dylib, patches wifid and enables the marker.
+        self.assertIn("wififix/l8wifi.dylib", payload_builder)
+        self.assertIn('"/usr/lib/l8wifi.dylib"', fixups)
+        self.assertIn("deploy_wifi_library", provisioner)
+        self.assertIn("deploy_userland_daemon wifid", provisioner)
+        self.assertIn("enable_wifi_credentials", provisioner)
+        self.assertIn("verify_userland_patch wifid /mnt1/usr/sbin/wifid", provisioner)
+        self.assertIn('verify_system_dylib "l8wifi dylib"', provisioner)
+        self.assertIn("AirPort credential marker", provisioner)
+        self.assertIn("/mnt1/usr/lib/.liter8-wifi-credentials", provisioner)
+        self.assertIn("/mnt1/usr/lib/l8wifi.dylib", provisioner)
+        self.assertLessEqual(
+            {"sileo", "helpers", "cache", "injection", "pairing", "wifi"},
+            default_step_set(payload_builder, r'^WANT="\$\{\*:-([^}]*)\}"'),
+        )
+        self.assertLessEqual(
+            {"ticket", "setup", "userland", "pairing", "wifi"},
+            default_step_set(provisioner, r'^STEPS="([^"]*)"'),
+        )
+
+    def test_oslog_reader_is_pinned_installed_and_verified(self):
+        """The log reader is a fixed resource and reaches the device intact."""
+        payload = SCRIPTS.parent / "payloads/oslog"
+        provisioner = (DEVICE / "sshrd_provision.sh").read_text()
+        logdev = (SCRIPTS.parent / "tools/logdev").read_text()
+
+        # The binary is a pinned resource, not something a build produces.
+        self.assertTrue(payload.is_file())
+        self.assertEqual(sha256_file(payload), OSLOG_SHA256)
+        self.assertTrue(os.access(payload, os.X_OK))
+
+        # It reaches the device as a symlink into the immutable resources, so
+        # the mutable work directory can never supply a different binary.
+        context = Context(
+            profile_id="iphone12,1-n104ap-24A5390f",
+            work=self.work,
+            source=self.source,
+            cfw=self.work / "CFW",
+            components={},
+            liter8=self.liter8,
+            resources=SCRIPTS.parent,
+        )
+        runtime = prepare_runtime(context)
+        staged = runtime / "oslog"
+        self.assertTrue(staged.is_symlink())
+        self.assertEqual(staged.resolve(), payload.resolve())
+        self.assertEqual(sha256_file(staged), OSLOG_SHA256)
+
+        # A resource whose bytes are not the pinned ones must fail closed,
+        # rather than installing a reader that was never validated.
+        with tempfile.TemporaryDirectory(prefix="liter8-oslog-") as directory:
+            resources = Path(directory)
+            (resources / "device").mkdir()
+            (resources / "device/bootstrap_1900.tar.zst").write_bytes(b"")
+            (resources / "tools").mkdir()
+            (resources / "payloads").mkdir()
+            (resources / "payloads/ssh.tar.gz").symlink_to(
+                SCRIPTS.parent / "payloads/ssh.tar.gz"
+            )
+            (resources / "payloads/oslog").write_bytes(b"not the reader")
+            broken = Context(
+                profile_id="iphone12,1-n104ap-24A5390f",
+                work=self.work,
+                source=self.source,
+                cfw=self.work / "CFW",
+                components={},
+                liter8=self.liter8,
+                resources=resources,
+            )
+            with self.assertRaises(WorkflowError):
+                prepare_runtime(broken)
+
+        # The device copy lands in root's home on the Data volume, which is
+        # the only writable place on a booted device, and it is compared byte
+        # for byte after the transfer.
+        self.assertIn("/mnt2/root/oslog", provisioner)
+        self.assertIn("oslog readback hash mismatch", provisioner)
+        self.assertIn("com.apple.private.logging.stream", provisioner)
+        self.assertLessEqual(
+            {"logging"},
+            default_step_set(provisioner, r'^STEPS="([^"]*)"'),
+        )
+
+        # The reader is a convenience and nothing else on the device depends
+        # on it, so its absence must not make the verification say "do not
+        # boot". It is reported, and the reporting helper cannot fail.
+        self.assertIn('report "oslog reader"', provisioner)
+        self.assertNotIn('note "oslog reader"', provisioner)
+        report = re.search(r"^report\(\) \{\n(.*?)^\}", provisioner, re.M | re.S)
+        self.assertIsNotNone(report, "the report helper is missing")
+        self.assertNotIn("FAIL=1", report.group(1))
+
+        # The host helper reads the device's log through the same path.
+        self.assertIn("/var/root/oslog", logdev)
+
+    def test_oslog_reader_resolves_in_the_checkout_and_the_staged_runtime(self):
+        """The reader is found wherever the provisioning script is run from.
+
+        The staged runtime carries it beside the scripts, and the checkout
+        has it one level up. A run from the checkout that cannot find it
+        would stop half way through the device work.
+        """
+        provisioner = (DEVICE / "sshrd_provision.sh").read_text()
+        payload = SCRIPTS.parent / "payloads/oslog"
+        resolution = re.search(
+            r'^OSLOG="\$BASE/oslog"\n\[ -f "\$OSLOG" \] \|\| OSLOG="\$BASE/\.\./payloads/oslog"$',
+            provisioner,
+            re.M,
+        )
+        self.assertIsNotNone(resolution, "the reader resolution is missing")
+
+        def resolved(base: Path) -> Path:
+            result = subprocess.run(
+                ["sh", "-c", f'BASE="{base}"; {resolution.group(0)}; printf %s "$OSLOG"'],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return Path(result.stdout).resolve()
+
+        # From the checkout: the committed copy one level up.
+        self.assertEqual(resolved(DEVICE), payload.resolve())
+        # From the staged runtime: the symlink beside the scripts.
+        with tempfile.TemporaryDirectory(prefix="liter8-oslog-") as directory:
+            staged = Path(directory)
+            (staged / "oslog").symlink_to(payload)
+            self.assertEqual(resolved(staged), payload.resolve())
 
     def test_userland_builder_preserves_identity_and_entitlements(self):
         liter8 = SCRIPTS.parent / ".build/debug/liter8"
