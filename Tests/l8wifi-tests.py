@@ -277,6 +277,17 @@ static CFDictionaryRef update_attributes_with_account(const char *acct,
                               &kCFTypeDictionaryValueCallBacks);
 }
 
+/* An update whose replacement account is present but is not a string. */
+static CFDictionaryRef update_attributes_with_data_account(const char *password) {
+    CFDataRef data = CFDataCreate(NULL, (const UInt8 *)password, (CFIndex)strlen(password));
+    CFDataRef account = CFDataCreate(NULL, (const UInt8 *)"not-an-account", 13);
+    const void *keys[2] = {kSecValueData, kSecAttrAccount};
+    const void *values[2] = {data, account};
+    return CFDictionaryCreate(NULL, keys, values, 2,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
 /* An update with no account at all: a broader search the shim does not
  * implement. */
 static CFDictionaryRef update_query_without_account(void) {
@@ -883,6 +894,121 @@ int main(int argc, char **argv) {
         if (status != errSecSuccess) {
             fail("an account-less update must keep the real keychain's answer");
         }
+    } else if (strcmp(mode, "renamecollision") == 0) {
+        /* A rename onto an account that already holds a credential must be
+         * refused. Replacing that credential would destroy a password the
+         * caller never asked to change, and the keychain refuses it with
+         * errSecDuplicateItem. */
+        CFDictionaryRef source = add_with("collisionsource", "sourcepassword");
+        CFTypeRef added = NULL;
+        status = l8_SecItemAdd(source, &added);
+        if (added) { CFRelease(added); }
+        CFDictionaryRef destination = add_with("collisiontarget", "targetpassword");
+        added = NULL;
+        status = l8_SecItemAdd(destination, &added);
+        if (added) { CFRelease(added); }
+
+        CFDictionaryRef update =
+            update_attributes_with_account("collisiontarget", "replacementpassword");
+        CFDictionaryRef update_query = query_with("AirPort", "collisionsource", "genp", 0);
+        status = l8_SecItemUpdate(update_query, update);
+        if (status != errSecDuplicateItem) {
+            fail("a rename onto an occupied account must be refused");
+        }
+
+        /* The occupied account still holds its own password. */
+        CFDictionaryRef target = query_with("AirPort", "collisiontarget", "genp", 1);
+        CFTypeRef result = NULL;
+        status = l8_SecItemCopyMatching(target, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("a refused rename must leave the occupied credential in place");
+        } else {
+            if (CFGetTypeID(result) == CFDataGetTypeID() &&
+                CFDataGetLength((CFDataRef)result) != (CFIndex)strlen("targetpassword")) {
+                fail("a refused rename must leave the occupied password alone");
+            }
+            CFRelease(result);
+        }
+
+        /* The source still holds its own password. */
+        CFDictionaryRef source_read = query_with("AirPort", "collisionsource", "genp", 1);
+        result = NULL;
+        status = l8_SecItemCopyMatching(source_read, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("a refused rename must leave the source credential in place");
+        } else {
+            if (CFGetTypeID(result) == CFDataGetTypeID() &&
+                CFDataGetLength((CFDataRef)result) != (CFIndex)strlen("sourcepassword")) {
+                fail("a refused rename must leave the source password alone");
+            }
+            CFRelease(result);
+        }
+    } else if (strcmp(mode, "renamelabel") == 0) {
+        /* A rename inherits the label of the record it moves. The label
+         * belongs to the record that goes, so the new record has to hold it
+         * before the old one is removed: a label read after the removal is a
+         * pointer into freed memory, and the store is freed on every load. */
+        CFDictionaryRef labelled = add_with_label("labelrename", "originalpassword",
+                                                  "HomeNetwork");
+        CFTypeRef added = NULL;
+        status = l8_SecItemAdd(labelled, &added);
+        if (added) { CFRelease(added); }
+
+        const char *replacement = "renamedpassword";
+        CFDictionaryRef update =
+            update_attributes_with_account("labelrenamed", replacement);
+        CFDictionaryRef update_query = query_with("AirPort", "labelrename", "genp", 0);
+        status = l8_SecItemUpdate(update_query, update);
+        if (status != errSecSuccess) {
+            fail("renaming a labelled account must succeed");
+        }
+
+        /* The label came along with the record. */
+        CFDictionaryRef by_label = query_with_label("AirPort", "labelrenamed", 1,
+                                                    "HomeNetwork");
+        CFTypeRef result = NULL;
+        status = l8_SecItemCopyMatching(by_label, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("a renamed record must keep the label it had");
+        } else {
+            if (CFGetTypeID(result) == CFDataGetTypeID() &&
+                CFDataGetLength((CFDataRef)result) != (CFIndex)strlen("renamedpassword")) {
+                fail("a renamed record must keep the password it was given");
+            }
+            CFRelease(result);
+        }
+    } else if (strcmp(mode, "malformedaccount") == 0) {
+        /* A replacement account that is present but is not a string is a
+         * malformed request. It must not read as an absent account, which
+         * would make the update rewrite the old account's password in place
+         * instead of going to the real keychain. */
+        CFDictionaryRef first = add_with("malformedaccount", "originalpassword");
+        CFTypeRef added = NULL;
+        status = l8_SecItemAdd(first, &added);
+        if (added) { CFRelease(added); }
+
+        const char *replacement = "replacementpassword";
+        CFDictionaryRef update = update_attributes_with_data_account(replacement);
+        CFDictionaryRef update_query = query_with("AirPort", "malformedaccount", "genp", 0);
+        probe_called_count = 0;
+        status = l8_SecItemUpdate(update_query, update);
+        if (probe_called_count != 1) {
+            fail("a malformed replacement account must go to the real keychain");
+        }
+
+        /* The stored password is unchanged. */
+        CFDictionaryRef read = query_with("AirPort", "malformedaccount", "genp", 1);
+        CFTypeRef result = NULL;
+        status = l8_SecItemCopyMatching(read, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("a malformed replacement account must leave the record readable");
+        } else {
+            if (CFGetTypeID(result) == CFDataGetTypeID() &&
+                CFDataGetLength((CFDataRef)result) != (CFIndex)strlen("originalpassword")) {
+                fail("a malformed replacement account must not rewrite the password");
+            }
+            CFRelease(result);
+        }
     } else if (strcmp(mode, "check") == 0) {
         /* A different service must pass through to the real keychain. */
         probe_called_count = 0;
@@ -1247,6 +1373,15 @@ with tempfile.TemporaryDirectory(prefix="l8-wifi-") as work:
     result = subprocess.run([str(binary), "rename"], capture_output=True, text=True)
     if result.returncode != 0:
         raise SystemExit(f"FAIL: account rename\n{result.stdout}{result.stderr}")
+    result = subprocess.run([str(binary), "renamecollision"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: rename onto an occupied account\n{result.stdout}{result.stderr}")
+    result = subprocess.run([str(binary), "renamelabel"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: rename inherits the label\n{result.stdout}{result.stderr}")
+    result = subprocess.run([str(binary), "malformedaccount"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: malformed replacement account\n{result.stdout}{result.stderr}")
 
     # The store limit is read from the same constant the write path uses, so
     # a second build with a small limit reaches it without writing a

@@ -570,18 +570,28 @@ static OSStatus store_credential(CFDictionaryRef query, CFDataRef data,
         CFStringRef new_account = target_account != NULL ? target_account : account;
         CFStringRef new_key = store_key(new_account, system);
         if (new_key != NULL) {
-            if (!CFEqual(new_key, key)) {
-                CFDictionaryRemoveValue(store, key);
-            }
-            CFMutableDictionaryRef entry =
-                new_entry(new_account, data, synchronizable, system, label);
-            if (entry != NULL) {
-                CFDictionarySetValue(store, new_key, entry);
-                status = write_store(store) ? errSecSuccess : errSecNotAvailable;
-                if (status == errSecSuccess && entry_out != NULL) {
-                    *entry_out = (CFDictionaryRef)CFRetain(entry);
+            bool rename = !CFEqual(new_key, key);
+            /* A rename onto an account that already holds a credential would
+             * destroy that credential. The keychain refuses the change, and
+             * so does the store. */
+            if (rename && find_entry(store, new_key) != NULL) {
+                status = errSecDuplicateItem;
+            } else {
+                /* The new record is built before the old one goes, so that a
+                 * label inherited from it outlives the removal. */
+                CFMutableDictionaryRef entry =
+                    new_entry(new_account, data, synchronizable, system, label);
+                if (entry != NULL) {
+                    if (rename) {
+                        CFDictionaryRemoveValue(store, key);
+                    }
+                    CFDictionarySetValue(store, new_key, entry);
+                    status = write_store(store) ? errSecSuccess : errSecNotAvailable;
+                    if (status == errSecSuccess && entry_out != NULL) {
+                        *entry_out = (CFDictionaryRef)CFRetain(entry);
+                    }
+                    CFRelease(entry);
                 }
-                CFRelease(entry);
             }
             CFRelease(new_key);
         }
@@ -874,15 +884,18 @@ static OSStatus l8_SecItemUpdate(CFDictionaryRef query,
 
     /* The account and the label can be changed by an update. The keychain
      * replaces the item when the account changes, so the old record goes and
-     * the new one appears under the new account. */
-    bool malformed = false;
+     * the new one appears under the new account. Each attribute has its own
+     * malformed flag: one shared flag would be cleared by the second read
+     * and lose the first one's finding. */
+    bool account_malformed = false;
+    bool label_malformed = false;
     CFStringRef target_account = replacement_string(attributes_to_update,
                                                     kSecAttrAccount,
-                                                    &malformed);
+                                                    &account_malformed);
     CFStringRef target_label = replacement_string(attributes_to_update,
                                                    kSecAttrLabel,
-                                                   &malformed);
-    if (malformed) {
+                                                   &label_malformed);
+    if (account_malformed || label_malformed) {
         return SecItemUpdate(query, attributes_to_update);
     }
 

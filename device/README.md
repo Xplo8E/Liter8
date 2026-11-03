@@ -94,7 +94,9 @@ operations for exactly one class of item: service `AirPort`, class
 every request that does not match pass through to the real implementation, as
 does every request made by any process other than `wifid`. A record's
 system-keychain selection is part of its identity, so it is kept in the store
-key along with the account.
+key along with the account. An update that names a new account moves the
+record to it, and a change onto an account that already holds a record is
+refused rather than overwriting that record.
 
 The stored password is not encrypted: the file is protected only by Unix mode
 `0600`, the same tradeoff the pairing fallback already makes for the
