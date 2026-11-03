@@ -94,6 +94,22 @@
 #define L8WIFI_MARKER_UID 0
 #endif
 
+/* A test hook: the update path calls it once it has matched the stored
+ * record and before it writes. A two-thread test uses it to change the
+ * record in between, so that a match that no longer holds is caught. It is
+ * compiled out of the device build. */
+#ifdef L8WIFI_TEST_MATCH_HOOK
+extern void (*l8wifi_test_matched)(void);
+#define L8WIFI_MATCHED()                                           \
+    do {                                                           \
+        if (l8wifi_test_matched) {                                \
+            l8wifi_test_matched();                                 \
+        }                                                          \
+    } while (0)
+#else
+#define L8WIFI_MATCHED() ((void)0)
+#endif
+
 static const char *kEnablePath = L8WIFI_ENABLE_PATH;
 static const char *kStorePath = L8WIFI_STORE_PATH;
 
@@ -200,7 +216,20 @@ static bool attributes_malformed(CFDictionaryRef attributes)
     /* A label that is present but is not a string reads as an absent label
      * everywhere else, which would turn a malformed request into a bulk one. */
     CFTypeRef label = CFDictionaryGetValue(attributes, kSecAttrLabel);
-    return label != NULL && CFGetTypeID(label) != CFStringGetTypeID();
+    if (label != NULL && CFGetTypeID(label) != CFStringGetTypeID()) {
+        return true;
+    }
+    /* The system-keychain selector is read as a boolean, so a value that is
+     * present but is not one reads as the user keychain. A bulk delete would
+     * then clear the wrong keychain's passwords. */
+    CFTypeRef system = private_security_constant("kSecUseSystemKeychain");
+    if (system != NULL) {
+        CFTypeRef value = CFDictionaryGetValue(attributes, system);
+        if (value != NULL && CFGetTypeID(value) != CFBooleanGetTypeID()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /* The synchronizable attribute is part of how the keychain matches a record.
@@ -537,11 +566,21 @@ static CFStringRef replacement_string(CFDictionaryRef attributes, CFStringRef ke
  * required: a record without a password has nothing to keep.
  *
  * The account and the label are the ones the record ends up with. A null
- * account keeps the queried one, and a null label keeps the stored one. */
-static OSStatus store_credential(CFDictionaryRef query, CFDataRef data,
-                                 bool synchronizable, CFStringRef target_account,
-                                 CFStringRef target_label,
-                                 CFDictionaryRef *entry_out)
+ * account keeps the queried one, and a null label keeps the stored one.
+ *
+ * An update has to match the stored record before it may write it, because
+ * the synchronizable attribute and the label are part of how a record
+ * matches. The match and the write are one transaction, so a record that
+ * another thread changes in between cannot be overwritten by a match that no
+ * longer holds. A record that does not match is reported as not found, and
+ * the real keychain owns it.
+ *
+ * The store lock is held by the caller. */
+static OSStatus store_credential_locked(CFDictionaryRef query, CFDataRef data,
+                                        CFTypeRef requested_synchronizable,
+                                        CFStringRef target_account,
+                                        CFStringRef target_label, bool is_update,
+                                        CFDictionaryRef *entry_out)
 {
     CFStringRef account = query_account(query);
     if (account == NULL || data == NULL) {
@@ -549,51 +588,71 @@ static OSStatus store_credential(CFDictionaryRef query, CFDataRef data,
     }
     bool system = query_system_keychain(query);
 
-    pthread_mutex_lock(&gStoreLock);
     CFMutableDictionaryRef store = load_store();
     CFStringRef key = store_key(account, system);
     OSStatus status = errSecNotAvailable;
     if (store != NULL && key != NULL) {
-        /* The label, like the synchronizable attribute, is kept unless the
-         * caller names a new one. */
         CFDictionaryRef existing = find_entry(store, key);
-        CFStringRef label = target_label;
-        if (label == NULL && existing != NULL) {
-            CFTypeRef stored = CFDictionaryGetValue(existing, CFSTR("label"));
-            if (stored != NULL && CFGetTypeID(stored) == CFStringGetTypeID()) {
-                label = (CFStringRef)stored;
+        /* The synchronizable attribute and the label are part of how a
+         * record matches, so an update whose query excludes the stored
+         * record is not a match at all. */
+        bool matches = existing == NULL ||
+                       (query_accepts_synchronizable(
+                            query, dictionary_bool(existing, CFSTR("synchronizable"))) &&
+                        query_accepts_label(query,
+                                            CFDictionaryGetValue(existing, CFSTR("label"))));
+        if (is_update && !matches) {
+            status = errSecItemNotFound;
+        } else {
+            /* The match is decided and the write has not happened yet. */
+            L8WIFI_MATCHED();
+            /* The synchronizable attribute and the label are kept unless the
+             * caller names new ones. An add that names neither starts a
+             * nonsynchronizable record, the way the keychain does. */
+            bool synchronizable = false;
+            if (requested_synchronizable != NULL) {
+                synchronizable = CFEqual(requested_synchronizable, kCFBooleanTrue);
+            } else if (is_update && existing != NULL) {
+                synchronizable = dictionary_bool(existing, CFSTR("synchronizable"));
             }
-        }
-        /* The account can be changed by an update, and the keychain replaces
-         * the item when it does: the old record goes and a new one appears
-         * under the new account. */
-        CFStringRef new_account = target_account != NULL ? target_account : account;
-        CFStringRef new_key = store_key(new_account, system);
-        if (new_key != NULL) {
-            bool rename = !CFEqual(new_key, key);
-            /* A rename onto an account that already holds a credential would
-             * destroy that credential. The keychain refuses the change, and
-             * so does the store. */
-            if (rename && find_entry(store, new_key) != NULL) {
-                status = errSecDuplicateItem;
-            } else {
-                /* The new record is built before the old one goes, so that a
-                 * label inherited from it outlives the removal. */
-                CFMutableDictionaryRef entry =
-                    new_entry(new_account, data, synchronizable, system, label);
-                if (entry != NULL) {
-                    if (rename) {
-                        CFDictionaryRemoveValue(store, key);
-                    }
-                    CFDictionarySetValue(store, new_key, entry);
-                    status = write_store(store) ? errSecSuccess : errSecNotAvailable;
-                    if (status == errSecSuccess && entry_out != NULL) {
-                        *entry_out = (CFDictionaryRef)CFRetain(entry);
-                    }
-                    CFRelease(entry);
+            CFStringRef label = target_label;
+            if (label == NULL && existing != NULL) {
+                CFTypeRef stored = CFDictionaryGetValue(existing, CFSTR("label"));
+                if (stored != NULL && CFGetTypeID(stored) == CFStringGetTypeID()) {
+                    label = (CFStringRef)stored;
                 }
             }
-            CFRelease(new_key);
+            /* The account can be changed by an update, and the keychain
+             * replaces the item when it does: the old record goes and a new
+             * one appears under the new account. */
+            CFStringRef new_account = target_account != NULL ? target_account : account;
+            CFStringRef new_key = store_key(new_account, system);
+            if (new_key != NULL) {
+                bool rename = !CFEqual(new_key, key);
+                /* A rename onto an account that already holds a credential
+                 * would destroy that credential. The keychain refuses the
+                 * change, and so does the store. */
+                if (rename && find_entry(store, new_key) != NULL) {
+                    status = errSecDuplicateItem;
+                } else {
+                    /* The new record is built before the old one goes, so
+                     * that a label inherited from it outlives the removal. */
+                    CFMutableDictionaryRef entry =
+                        new_entry(new_account, data, synchronizable, system, label);
+                    if (entry != NULL) {
+                        if (rename) {
+                            CFDictionaryRemoveValue(store, key);
+                        }
+                        CFDictionarySetValue(store, new_key, entry);
+                        status = write_store(store) ? errSecSuccess : errSecNotAvailable;
+                        if (status == errSecSuccess && entry_out != NULL) {
+                            *entry_out = (CFDictionaryRef)CFRetain(entry);
+                        }
+                        CFRelease(entry);
+                    }
+                }
+                CFRelease(new_key);
+            }
         }
     }
     if (key != NULL) {
@@ -602,13 +661,27 @@ static OSStatus store_credential(CFDictionaryRef query, CFDataRef data,
     if (store != NULL) {
         CFRelease(store);
     }
-    pthread_mutex_unlock(&gStoreLock);
 
     if (status == errSecSuccess) {
         syslog(LOG_NOTICE, "l8wifi: stored one AirPort credential");
-    } else {
+    } else if (status != errSecItemNotFound) {
         syslog(LOG_ERR, "l8wifi: could not store the AirPort credential");
     }
+    return status;
+}
+
+/* Store one AirPort credential, taking the store lock around it. */
+static OSStatus store_credential(CFDictionaryRef query, CFDataRef data,
+                                 CFTypeRef requested_synchronizable,
+                                 CFStringRef target_account,
+                                 CFStringRef target_label,
+                                 CFDictionaryRef *entry_out)
+{
+    pthread_mutex_lock(&gStoreLock);
+    OSStatus status = store_credential_locked(query, data, requested_synchronizable,
+                                               target_account, target_label, false,
+                                               entry_out);
+    pthread_mutex_unlock(&gStoreLock);
     return status;
 }
 
@@ -777,8 +850,8 @@ static OSStatus l8_SecItemAdd(CFDictionaryRef attributes, CFTypeRef *result)
     CFDictionaryRef entry = NULL;
     gInsideHook = true;
     OSStatus status = store_credential(attributes, (CFDataRef)data,
-                                       dictionary_bool(attributes,
-                                                      kSecAttrSynchronizable),
+                                       CFDictionaryGetValue(attributes,
+                                                            kSecAttrSynchronizable),
                                        NULL, query_label(attributes), &entry);
     gInsideHook = false;
     if (status != errSecSuccess) {
@@ -798,43 +871,6 @@ static OSStatus l8_SecItemAdd(CFDictionaryRef attributes, CFTypeRef *result)
         CFRelease(entry);
     }
     return errSecSuccess;
-}
-
-/* The stored record for this query's account and keychain, and whether there
- * is one. The synchronizable attribute and the label are both part of how
- * the keychain matches a record, so the match is decided here, while the
- * store is still alive. */
-static bool stored_record(CFDictionaryRef query, bool *synchronizable,
-                           bool *matches)
-{
-    CFStringRef account = query_account(query);
-    if (account == NULL) {
-        return false;
-    }
-    pthread_mutex_lock(&gStoreLock);
-    CFMutableDictionaryRef store = load_store();
-    bool found = false;
-    bool accepted = false;
-    if (store != NULL) {
-        CFStringRef key = store_key(account, query_system_keychain(query));
-        if (key != NULL) {
-            CFDictionaryRef entry = find_entry(store, key);
-            if (entry != NULL) {
-                *synchronizable = dictionary_bool(entry, CFSTR("synchronizable"));
-                accepted = query_accepts_synchronizable(query, *synchronizable) &&
-                           query_accepts_label(
-                               query, CFDictionaryGetValue(entry, CFSTR("label")));
-                found = true;
-            }
-            CFRelease(key);
-        }
-        CFRelease(store);
-    }
-    pthread_mutex_unlock(&gStoreLock);
-    if (matches != NULL) {
-        *matches = accepted;
-    }
-    return found;
 }
 
 static OSStatus l8_SecItemUpdate(CFDictionaryRef query,
@@ -859,30 +895,6 @@ static OSStatus l8_SecItemUpdate(CFDictionaryRef query,
         return SecItemUpdate(query, attributes_to_update);
     }
 
-    /* The synchronizable attribute and the label are part of how a record
-     * matches. An update that does not name a new synchronizable value
-     * keeps the stored one, and an update whose query excludes the stored
-     * record is not a match at all, so the real keychain owns it. */
-    bool stored = false;
-    bool synchronizable = false;
-    bool matches = false;
-    if (stored_record(query, &synchronizable, &matches)) {
-        stored = true;
-        if (!matches) {
-            return SecItemUpdate(query, attributes_to_update);
-        }
-    }
-    CFTypeRef requested = attributes_to_update == NULL
-                              ? NULL
-                              : CFDictionaryGetValue(attributes_to_update,
-                                                     kSecAttrSynchronizable);
-    if (requested != NULL) {
-        synchronizable = dictionary_bool(attributes_to_update,
-                                         kSecAttrSynchronizable);
-    } else if (!stored) {
-        synchronizable = false;
-    }
-
     /* The account and the label can be changed by an update. The keychain
      * replaces the item when the account changes, so the old record goes and
      * the new one appears under the new account. */
@@ -890,11 +902,25 @@ static OSStatus l8_SecItemUpdate(CFDictionaryRef query,
                                                     kSecAttrAccount);
     CFStringRef target_label = replacement_string(attributes_to_update,
                                                    kSecAttrLabel);
+    CFTypeRef requested = attributes_to_update == NULL
+                              ? NULL
+                              : CFDictionaryGetValue(attributes_to_update,
+                                                     kSecAttrSynchronizable);
 
+    /* The match and the write are one transaction. The store lock is held
+     * across both, so a record that another thread changes between them
+     * cannot be overwritten by a match that no longer holds. A record that
+     * does not match the query belongs to the real keychain. */
+    pthread_mutex_lock(&gStoreLock);
     gInsideHook = true;
-    OSStatus status = store_credential(query, (CFDataRef)data, synchronizable,
-                                       target_account, target_label, NULL);
+    OSStatus status = store_credential_locked(query, (CFDataRef)data, requested,
+                                               target_account, target_label,
+                                               true, NULL);
     gInsideHook = false;
+    pthread_mutex_unlock(&gStoreLock);
+    if (status == errSecItemNotFound) {
+        return SecItemUpdate(query, attributes_to_update);
+    }
     return status;
 }
 

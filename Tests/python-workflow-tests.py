@@ -1348,6 +1348,39 @@ class ContextTests(unittest.TestCase):
         # The host helper reads the device's log through the same path.
         self.assertIn("/var/root/oslog", logdev)
 
+    def test_oslog_reader_resolves_in_the_checkout_and_the_staged_runtime(self):
+        """The reader is found wherever the provisioning script is run from.
+
+        The staged runtime carries it beside the scripts, and the checkout
+        has it one level up. A run from the checkout that cannot find it
+        would stop half way through the device work.
+        """
+        provisioner = (DEVICE / "sshrd_provision.sh").read_text()
+        payload = SCRIPTS.parent / "payloads/oslog"
+        resolution = re.search(
+            r'^OSLOG="\$BASE/oslog"\n\[ -f "\$OSLOG" \] \|\| OSLOG="\$BASE/\.\./payloads/oslog"$',
+            provisioner,
+            re.M,
+        )
+        self.assertIsNotNone(resolution, "the reader resolution is missing")
+
+        def resolved(base: Path) -> Path:
+            result = subprocess.run(
+                ["sh", "-c", f'BASE="{base}"; {resolution.group(0)}; printf %s "$OSLOG"'],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return Path(result.stdout).resolve()
+
+        # From the checkout: the committed copy one level up.
+        self.assertEqual(resolved(DEVICE), payload.resolve())
+        # From the staged runtime: the symlink beside the scripts.
+        with tempfile.TemporaryDirectory(prefix="liter8-oslog-") as directory:
+            staged = Path(directory)
+            (staged / "oslog").symlink_to(payload)
+            self.assertEqual(resolved(staged), payload.resolve())
+
     def test_userland_builder_preserves_identity_and_entitlements(self):
         liter8 = SCRIPTS.parent / ".build/debug/liter8"
         ldid = SCRIPTS.parent / "tools/ldid_macosx_arm64"

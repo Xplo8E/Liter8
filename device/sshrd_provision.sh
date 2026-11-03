@@ -26,6 +26,12 @@ cd "$BASE"
 # it is resolved once here rather than spelled out at each call site.
 TOOLS="$BASE/../tools"
 
+# The unified-log reader. The staged runtime carries it beside the scripts,
+# as a symlink into the immutable resource directory. A run from the checkout
+# finds the committed copy one level up, beside the tools.
+OSLOG="$BASE/oslog"
+[ -f "$OSLOG" ] || OSLOG="$BASE/../payloads/oslog"
+
 STEPS="mounts ticket setup userland pairing wifi cellular screentime injection tweaks cache jbtools logging sileo resolv apps verify"
 
 usage() {
@@ -513,13 +519,13 @@ echo DONE_OK
 # private logging entitlements, and logd checks the caller's entitlements
 # before it will open a stream, so the copy has to arrive byte for byte.
 deploy_oslog() {
-    O_LOCAL=oslog
+    O_LOCAL="$OSLOG"
     O_DEVICE=/mnt2/root/oslog
     O_STAGED=$O_DEVICE.liter8-new
     O_READBACK=payload/.work/oslog.readback
     mkdir -p payload/.work
 
-    [ -f "$O_LOCAL" ] || die "missing $O_LOCAL; it is a Liter8 resource beside the scripts"
+    [ -f "$O_LOCAL" ] || die "missing $O_LOCAL; it is a Liter8 resource beside the scripts or in payloads/"
     O_WANT=$(shasum -a 256 "$O_LOCAL" | awk '{print $1}')
     put "$O_LOCAL" "$O_STAGED"
     must_dev "
@@ -1784,8 +1790,8 @@ note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_p
 # validated. Reported and never fatal, because the reader is a convenience
 # and nothing else on the device depends on it. Failing here would make a
 # device provisioned without the logging step report "do not boot".
-if [ -f oslog ]; then
-    oslog_want=$(shasum -a 256 oslog | awk '{print $1}')
+if [ -f "$OSLOG" ]; then
+    oslog_want=$(shasum -a 256 "$OSLOG" | awk '{print $1}')
     sh_dev '/bin/cat /mnt2/root/oslog' \
         > payload/.work/verify.oslog 2>/dev/null || true
     if [ -s payload/.work/verify.oslog ] && \

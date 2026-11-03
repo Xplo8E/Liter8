@@ -28,9 +28,11 @@ SRC = ROOT / "device/wififix"
 HARNESS = r"""
 #include <Security/Security.h>
 #include <dlfcn.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 /* The probe stands in for the real keychain. A shim that passes a call
  * through lands here; a shim that claims the call does not. */
@@ -92,6 +94,21 @@ static CFDictionaryRef query_with(const char *svc, const char *acct,
     return CFDictionaryCreate(NULL, keys, values, count,
                               &kCFTypeDictionaryKeyCallBacks,
                               &kCFTypeDictionaryValueCallBacks);
+}
+
+/* Whether a read result holds the expected password. The bytes are compared,
+ * not the length: two passwords of the same length would pass a length
+ * check and hide which one the store really holds. */
+static bool data_equals(CFTypeRef result, const char *expected) {
+    if (result == NULL || CFGetTypeID(result) != CFDataGetTypeID()) {
+        return false;
+    }
+    CFDataRef data = (CFDataRef)result;
+    size_t length = strlen(expected);
+    if (CFDataGetLength(data) != (CFIndex)length) {
+        return false;
+    }
+    return memcmp(CFDataGetBytePtr(data), expected, length) == 0;
 }
 
 /* A query that asks for the attributes as well as the data. The keychain
@@ -261,6 +278,20 @@ static CFDictionaryRef delete_with_data_label(void) {
     keys[count] = kSecAttrService; values[count] = cfstr("AirPort"); count++;
     keys[count] = kSecClass; values[count] = cfstr("genp"); count++;
     keys[count] = kSecAttrLabel; values[count] = label; count++;
+    return CFDictionaryCreate(NULL, keys, values, count,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
+/* A delete whose system-keychain selector is present but is not a boolean. */
+static CFDictionaryRef delete_with_data_system(void) {
+    CFDataRef system = CFDataCreate(NULL, (const UInt8 *)"not-a-boolean", 14);
+    const void *keys[3];
+    const void *values[3];
+    int count = 0;
+    keys[count] = kSecAttrService; values[count] = cfstr("AirPort"); count++;
+    keys[count] = kSecClass; values[count] = cfstr("genp"); count++;
+    keys[count] = system_keychain_constant(); values[count] = system; count++;
     return CFDictionaryCreate(NULL, keys, values, count,
                               &kCFTypeDictionaryKeyCallBacks,
                               &kCFTypeDictionaryValueCallBacks);
@@ -442,6 +473,96 @@ static void check_small_stack(void) {
     if (!small_stack_finished) {
         fail("the small-stack thread did not finish the store path");
     }
+}
+
+/* The two-thread test for the update path.
+ *
+ * The shim calls the hook once it has matched the stored record and before
+ * it writes. The stale update waits in the hook while the other thread
+ * relabels the record, so that the update would write over a record its own
+ * label selector no longer matches. The store lock decides whether that can
+ * happen: the update holds it across the match and the write, so the other
+ * thread cannot change anything in between. */
+static pthread_mutex_t hook_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t hook_condition = PTHREAD_COND_INITIALIZER;
+static int hook_reached = 0;   /* the stale update reached the hook */
+static int hook_changed = 0;   /* the other thread changed the record */
+static int hook_missed = 0;    /* the stale update never reached the hook */
+
+void (*l8wifi_test_matched)(void) = NULL;
+
+static void matched_hook(void) {
+    pthread_mutex_lock(&hook_lock);
+    if (!hook_reached) {
+        hook_reached = 1;
+        pthread_cond_broadcast(&hook_condition);
+        /* The change cannot finish while the update holds the store lock, so
+         * the wait ends on the timeout instead. */
+        struct timespec deadline;
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_sec += 1;
+        while (!hook_changed &&
+               pthread_cond_timedwait(&hook_condition, &hook_lock, &deadline) != ETIMEDOUT) {
+        }
+    }
+    pthread_mutex_unlock(&hook_lock);
+}
+
+/* The update that selects the record by its label and writes a new
+ * password. */
+static void *stale_update(void *argument) {
+    (void)argument;
+    const char *replacement = "updatepassword";
+    CFDataRef data = CFDataCreate(NULL, (const UInt8 *)replacement,
+                                  (CFIndex)strlen(replacement));
+    const void *keys[1] = {kSecValueData};
+    const void *values[1] = {data};
+    CFDictionaryRef update = CFDictionaryCreate(NULL, keys, values, 1,
+                                               &kCFTypeDictionaryKeyCallBacks,
+                                               &kCFTypeDictionaryValueCallBacks);
+    CFDictionaryRef query = update_query_with_label("raceaccount", "Home");
+    l8_SecItemUpdate(query, update);
+    return NULL;
+}
+
+/* The change that moves the record to another label. It waits for the stale
+ * update to reach the hook, then writes through the shim, which takes the
+ * store lock. */
+static void *relabelling_update(void *argument) {
+    (void)argument;
+    pthread_mutex_lock(&hook_lock);
+    /* A shim that never calls the hook would leave this waiting forever, so
+     * the wait ends on a timeout and the mode reports it. */
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += 10;
+    while (!hook_reached) {
+        if (pthread_cond_timedwait(&hook_condition, &hook_lock, &deadline) == ETIMEDOUT) {
+            hook_missed = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&hook_lock);
+    if (hook_missed) {
+        return NULL;
+    }
+
+    const char *replacement = "changepassword";
+    CFDataRef data = CFDataCreate(NULL, (const UInt8 *)replacement,
+                                  (CFIndex)strlen(replacement));
+    const void *keys[2] = {kSecValueData, kSecAttrLabel};
+    const void *values[2] = {data, cfstr("Work")};
+    CFDictionaryRef update = CFDictionaryCreate(NULL, keys, values, 2,
+                                               &kCFTypeDictionaryKeyCallBacks,
+                                               &kCFTypeDictionaryValueCallBacks);
+    CFDictionaryRef query = update_query_with_label("raceaccount", "Home");
+    l8_SecItemUpdate(query, update);
+
+    pthread_mutex_lock(&hook_lock);
+    hook_changed = 1;
+    pthread_cond_broadcast(&hook_condition);
+    pthread_mutex_unlock(&hook_lock);
+    return NULL;
 }
 
 int main(int argc, char **argv) {
@@ -935,8 +1056,7 @@ int main(int argc, char **argv) {
         if (status != errSecSuccess || result == NULL) {
             fail("a refused rename must leave the occupied credential in place");
         } else {
-            if (CFGetTypeID(result) == CFDataGetTypeID() &&
-                CFDataGetLength((CFDataRef)result) != (CFIndex)strlen("targetpassword")) {
+            if (!data_equals(result, "targetpassword")) {
                 fail("a refused rename must leave the occupied password alone");
             }
             CFRelease(result);
@@ -949,8 +1069,7 @@ int main(int argc, char **argv) {
         if (status != errSecSuccess || result == NULL) {
             fail("a refused rename must leave the source credential in place");
         } else {
-            if (CFGetTypeID(result) == CFDataGetTypeID() &&
-                CFDataGetLength((CFDataRef)result) != (CFIndex)strlen("sourcepassword")) {
+            if (!data_equals(result, "sourcepassword")) {
                 fail("a refused rename must leave the source password alone");
             }
             CFRelease(result);
@@ -983,8 +1102,7 @@ int main(int argc, char **argv) {
         if (status != errSecSuccess || result == NULL) {
             fail("a renamed record must keep the label it had");
         } else {
-            if (CFGetTypeID(result) == CFDataGetTypeID() &&
-                CFDataGetLength((CFDataRef)result) != (CFIndex)strlen("renamedpassword")) {
+            if (!data_equals(result, "renamedpassword")) {
                 fail("a renamed record must keep the password it was given");
             }
             CFRelease(result);
@@ -1015,8 +1133,7 @@ int main(int argc, char **argv) {
         if (status != errSecSuccess || result == NULL) {
             fail("a malformed replacement account must leave the record readable");
         } else {
-            if (CFGetTypeID(result) == CFDataGetTypeID() &&
-                CFDataGetLength((CFDataRef)result) != (CFIndex)strlen("originalpassword")) {
+            if (!data_equals(result, "originalpassword")) {
                 fail("a malformed replacement account must not rewrite the password");
             }
             CFRelease(result);
@@ -1047,8 +1164,7 @@ int main(int argc, char **argv) {
         if (status != errSecSuccess || result == NULL) {
             fail("a malformed replacement synchronizable value must leave the record alone");
         } else {
-            if (CFGetTypeID(result) == CFDataGetTypeID() &&
-                CFDataGetLength((CFDataRef)result) != (CFIndex)strlen("originalpassword")) {
+            if (!data_equals(result, "originalpassword")) {
                 fail("a malformed replacement synchronizable value must not rewrite the password");
             }
             CFRelease(result);
@@ -1061,6 +1177,77 @@ int main(int argc, char **argv) {
         status = l8_SecItemCopyMatching(now_plain, &result);
         if (status == errSecSuccess) {
             fail("a malformed replacement synchronizable value must not clear the stored attribute");
+        }
+    } else if (strcmp(mode, "staleupdate") == 0) {
+        /* An update that has matched the record must not write over a
+         * record that changed in between: its label selector no longer
+         * matches, so the change owns the record. */
+        CFDictionaryRef labelled = add_with_label("raceaccount", "firstpassword",
+                                                  "Home");
+        CFTypeRef added = NULL;
+        status = l8_SecItemAdd(labelled, &added);
+        if (added) { CFRelease(added); }
+
+        l8wifi_test_matched = matched_hook;
+        pthread_t stale;
+        pthread_t changer;
+        pthread_create(&stale, NULL, stale_update, NULL);
+        pthread_create(&changer, NULL, relabelling_update, NULL);
+        void *stale_status = NULL;
+        void *changer_status = NULL;
+        pthread_join(stale, &stale_status);
+        pthread_join(changer, &changer_status);
+        l8wifi_test_matched = NULL;
+        if (stale_status != NULL) {
+            fail("the stale update thread died");
+        }
+        if (changer_status != NULL) {
+            fail("the relabelling thread died");
+        }
+        if (hook_missed) {
+            fail("the update never reached the hook between its match and its write");
+            return 1;
+        }
+
+        /* The change's label and its password are the record's. */
+        CFDictionaryRef by_label = query_with_label("AirPort", "raceaccount", 1,
+                                                    "Work");
+        CFTypeRef result = NULL;
+        status = l8_SecItemCopyMatching(by_label, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("a stale update must not take the record from the change that followed it");
+        } else {
+            if (!data_equals(result, "changepassword")) {
+                fail("a stale update must not write over the changed password");
+            }
+            CFRelease(result);
+        }
+    } else if (strcmp(mode, "malformedsystem") == 0) {
+        /* A system-keychain selector that is present but is not a boolean is
+         * malformed. It must not read as false, which would make the delete
+         * clear the user keychain's passwords. */
+        CFDictionaryRef user_add = add_with("systemmalformed", "userpassword");
+        CFTypeRef added = NULL;
+        status = l8_SecItemAdd(user_add, &added);
+        if (added) { CFRelease(added); }
+
+        probe_called_count = 0;
+        status = l8_SecItemDelete(delete_with_data_system());
+        if (probe_called_count != 1) {
+            fail("a malformed system-keychain selector must go to the real keychain");
+        }
+
+        /* The saved password is still there. */
+        CFDictionaryRef kept = query_with("AirPort", "systemmalformed", "genp", 1);
+        CFTypeRef result = NULL;
+        status = l8_SecItemCopyMatching(kept, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("a malformed system-keychain selector must not delete a stored credential");
+        } else {
+            if (!data_equals(result, "userpassword")) {
+                fail("a malformed system-keychain selector must not delete a stored credential");
+            }
+            CFRelease(result);
         }
     } else if (strcmp(mode, "check") == 0) {
         /* A different service must pass through to the real keychain. */
@@ -1307,6 +1494,9 @@ with tempfile.TemporaryDirectory(prefix="l8-wifi-") as work:
         # The marker must be root-owned on the device. The test runs as an
         # ordinary user, so the required owner is this user instead.
         "-DL8WIFI_MARKER_UID=geteuid()",
+        # The hook the update path calls between its match and its write, so
+        # that a two-thread test can change the record in between.
+        "-DL8WIFI_TEST_MATCH_HOOK",
         "-I", str(SRC),
     ]
 
@@ -1438,6 +1628,12 @@ with tempfile.TemporaryDirectory(prefix="l8-wifi-") as work:
     result = subprocess.run([str(binary), "malformedsync"], capture_output=True, text=True)
     if result.returncode != 0:
         raise SystemExit(f"FAIL: malformed replacement synchronizable\n{result.stdout}{result.stderr}")
+    result = subprocess.run([str(binary), "malformedsystem"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: malformed system-keychain selector\n{result.stdout}{result.stderr}")
+    result = subprocess.run([str(binary), "staleupdate"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: stale update\n{result.stdout}{result.stderr}")
 
     # The store limit is read from the same constant the write path uses, so
     # a second build with a small limit reaches it without writing a
