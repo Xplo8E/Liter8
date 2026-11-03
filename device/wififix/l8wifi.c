@@ -187,8 +187,14 @@ static bool selector_malformed(CFDictionaryRef query)
     }
     CFTypeRef synchronizable =
         CFDictionaryGetValue(query, kSecAttrSynchronizable);
-    return synchronizable != NULL &&
-           CFGetTypeID(synchronizable) != CFBooleanGetTypeID();
+    if (synchronizable != NULL &&
+        CFGetTypeID(synchronizable) != CFBooleanGetTypeID()) {
+        return true;
+    }
+    /* A label that is present but is not a string reads as an absent label
+     * everywhere else, which would turn a malformed request into a bulk one. */
+    CFTypeRef label = CFDictionaryGetValue(query, kSecAttrLabel);
+    return label != NULL && CFGetTypeID(label) != CFStringGetTypeID();
 }
 
 /* The synchronizable attribute is part of how the keychain matches a record.

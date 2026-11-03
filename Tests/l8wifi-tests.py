@@ -252,6 +252,20 @@ static CFDictionaryRef enumerate_account_query(const char *acct) {
                               &kCFTypeDictionaryValueCallBacks);
 }
 
+/* A delete whose label selector is present but is not a string. */
+static CFDictionaryRef delete_with_data_label(void) {
+    CFDataRef label = CFDataCreate(NULL, (const UInt8 *)"not-a-label", 10);
+    const void *keys[3];
+    const void *values[3];
+    int count = 0;
+    keys[count] = kSecAttrService; values[count] = cfstr("AirPort"); count++;
+    keys[count] = kSecClass; values[count] = cfstr("genp"); count++;
+    keys[count] = kSecAttrLabel; values[count] = label; count++;
+    return CFDictionaryCreate(NULL, keys, values, count,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
 /* The store file as it is on disk, for checking that a refused write left
  * it alone. */
 static uint8_t *read_file(const char *path, size_t *length) {
@@ -764,6 +778,38 @@ int main(int argc, char **argv) {
         if (status != errSecSuccess || result == NULL) {
             fail("a refused write must leave the earlier credentials readable");
         }
+    } else if (strcmp(mode, "malformedlabel") == 0) {
+        /* A label selector that is present but is not a string is a malformed
+         * request. It must not read as an absent label, which would turn it
+         * into a delete of everything in the keychain. */
+        CFDictionaryRef first = add_with_label("malformedone", "firstpassword", "Home");
+        CFTypeRef added = NULL;
+        l8_SecItemAdd(first, &added);
+        if (added) { CFRelease(added); }
+        CFDictionaryRef second = add_with_label("malformedtwo", "secondpassword", "Work");
+        added = NULL;
+        l8_SecItemAdd(second, &added);
+        if (added) { CFRelease(added); }
+
+        probe_called_count = 0;
+        status = l8_SecItemDelete(delete_with_data_label());
+        if (probe_called_count != 1) {
+            fail("a malformed label selector must reach the real keychain");
+        }
+
+        /* Neither stored credential may have changed. */
+        CFDictionaryRef one = query_with_label("AirPort", "malformedone", 1, NULL);
+        CFTypeRef result = NULL;
+        status = l8_SecItemCopyMatching(one, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("a malformed label selector must not delete a stored credential");
+        }
+        CFDictionaryRef two = query_with_label("AirPort", "malformedtwo", 1, NULL);
+        result = NULL;
+        status = l8_SecItemCopyMatching(two, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("a malformed label selector must not delete a stored credential");
+        }
     } else if (strcmp(mode, "check") == 0) {
         /* A different service must pass through to the real keychain. */
         probe_called_count = 0;
@@ -1122,6 +1168,9 @@ with tempfile.TemporaryDirectory(prefix="l8-wifi-") as work:
     result = subprocess.run([str(binary), "updatelabel"], capture_output=True, text=True)
     if result.returncode != 0:
         raise SystemExit(f"FAIL: update label\n{result.stdout}{result.stderr}")
+    result = subprocess.run([str(binary), "malformedlabel"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: malformed label\n{result.stdout}{result.stderr}")
 
     # The store limit is read from the same constant the write path uses, so
     # a second build with a small limit reaches it without writing a
