@@ -11,6 +11,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 import urllib.request
@@ -1016,6 +1017,56 @@ class ContextTests(unittest.TestCase):
         self.assertIn("report_key", installer)
         self.assertIn("$CHMOD 600", installer)
         self.assertIn("closes during key exchange", (DEVICE / "finalize.sh").read_text())
+
+    def test_normal_boot_dropbear_installs_the_sftp_subsystem_binary(self):
+        """Dropbear execs a compiled-in SFTPSERVER_PATH; the System volume must hold it.
+
+        The path is not configurable at runtime, and OpenSSH 9 and later use SFTP
+        for scp with no fallback, so omitting this binary breaks both sftp and scp
+        against a normally-booted device.
+        """
+        installer = (DEVICE / "install_dropbear.sh").read_text()
+        optional = installer.split("OPTIONAL_FILES=(", 1)[1].split(")", 1)[0]
+        self.assertIn('"usr/libexec/sftp-server|/mnt1/usr/libexec/sftp-server"', optional)
+        self.assertIn("/mnt1/usr/libexec/sftp-server", installer.split("$CHMOD 755", 1)[1])
+        self.assertIn("/mnt1/usr/libexec", installer.split("/bin/mkdir -p", 1)[1])
+        # The archive member the installer names has to exist, or every provisioning
+        # run fails in the preflight loop instead of at install time.
+        payload = SCRIPTS.parent / "payloads" / "ssh.tar.gz"
+        with tarfile.open(payload) as archive:
+            member = archive.getmember("usr/libexec/sftp-server")
+        self.assertTrue(member.isfile())
+
+    def test_optional_dropbear_payload_cannot_fail_the_run_or_the_check(self):
+        """sftp-server is a convenience and must not gate anything boot-critical.
+
+        A sixth fatal transfer would let one flaky copy abort before the chmod and
+        host-key steps, and counting it in the check would fail `fw provision
+        --check` on every device provisioned before the file existed, stopping
+        sshrd_provision.sh --check from running at all.
+        """
+        installer = (DEVICE / "install_dropbear.sh").read_text()
+        critical = installer.split("FILES=(", 1)[1].split(")", 1)[0]
+        self.assertNotIn("sftp-server", critical)
+        # The recovery-critical set still ends with the files a login shell and
+        # com.jbboot need, so nothing optional is transferred ahead of them.
+        for entry in ('"bin/sh|/mnt1/bin/sh"', '"bin/ls|/mnt1/bin/ls"',
+                      '"bin/cat|/mnt1/bin/cat"'):
+            self.assertIn(entry, critical)
+        # Every loop over the optional set has to be non-fatal: no `exit 1`, and the
+        # report status discarded rather than folded into check_failed or fail.
+        standalone = installer.split('for e in "${OPTIONAL_FILES[@]}"')[1:]
+        self.assertEqual(len(standalone), 3, "install, --check and verify loops")
+        for block in standalone:
+            loop = block.split("done", 1)[0]
+            self.assertNotIn("exit 1", loop)
+            self.assertNotIn("check_failed=1", loop)
+            self.assertNotIn("fail=1", loop)
+        # The digest-pinned archive is a local resource, so a missing member there
+        # stays fail-closed in the staging preflight.
+        preflight = installer.split('for e in "${FILES[@]}" "${OPTIONAL_FILES[@]}"', 1)
+        self.assertEqual(len(preflight), 2)
+        self.assertIn("not in the tarball", preflight[1].split("done", 1)[0])
 
     def test_setup_shell_owns_its_usb_forward_and_reports_transport_failure(self):
         """A refused SSH connection must not be mislabeled as missing zsh."""

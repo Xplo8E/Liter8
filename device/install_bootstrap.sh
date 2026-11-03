@@ -269,8 +269,10 @@ sshdev "[ -f '$DEV_JB/usr/bin/launchctl.procursus' ] || \
     || { print -u2 "[!] could not back up the original launchctl"; exit 1; }
 
 # Staged next to the target and renamed, so an interrupted transfer can never
-# leave a truncated launchctl in place. cat rather than scp: the ramdisk ships
-# no sftp-server, and scp -r would dereference symlinks anyway.
+# leave a truncated launchctl in place. cat rather than scp so the staged name is
+# chosen here rather than by the transfer, and because scp -r would dereference
+# symlinks anyway. The ramdisk does carry /usr/libexec/sftp-server from
+# ssh.tar.gz, which is what makes the plain scpdev above work at all.
 sshdev_send "$LAUNCHCTL" "/bin/cat > '$DEV_JB/usr/bin/launchctl.new'" \
     || { print -u2 "[!] could not transfer launchctl"; exit 1; }
 

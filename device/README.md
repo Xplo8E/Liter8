@@ -25,7 +25,10 @@ Commands have deliberately narrow device states:
   its one pairing identity when the no-content-protection profile cannot
   persist the corresponding system-keychain row. The Dropbear
   payload also supplies the minimal System `/bin/sh`, `ls` and `cat`; the shell
-  is required by both root logins and the `com.jbboot` launchd-cache job. It
+  is required by both root logins and the `com.jbboot` launchd-cache job. The
+  same payload installs `/usr/libexec/sftp-server`, the path Dropbear has
+  compiled in for the `sftp` subsystem, which is what makes `sftp` and `scp`
+  work against a normally-booted device rather than only `ssh`. It
   requires `fw bootstrap` to have created `/var/jb` first. Provisioning also
   installs `/usr/local/bin/l8boot` (`boothelper/`), which that job runs every
   boot: it links Dropbear's `/tmp/bin` and `/tmp/usr/bin` PATH entries into
