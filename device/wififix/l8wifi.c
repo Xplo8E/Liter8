@@ -512,10 +512,35 @@ static bool query_accepts_label(CFDictionaryRef query, CFTypeRef stored_label)
            CFEqual(stored_label, wanted);
 }
 
+/* The replacement account or label an update names, and whether the one
+ * named is malformed. An absent value is not malformed: it means the caller
+ * did not change that attribute. */
+static CFStringRef replacement_string(CFDictionaryRef attributes,
+                                       CFStringRef key, bool *malformed)
+{
+    *malformed = false;
+    if (attributes == NULL) {
+        return NULL;
+    }
+    CFTypeRef value = CFDictionaryGetValue(attributes, key);
+    if (value == NULL) {
+        return NULL;
+    }
+    if (CFGetTypeID(value) != CFStringGetTypeID()) {
+        *malformed = true;
+        return NULL;
+    }
+    return (CFStringRef)value;
+}
+
 /* Store one AirPort credential. The account and the password are both
- * required: a record without a password has nothing to keep. */
+ * required: a record without a password has nothing to keep.
+ *
+ * The account and the label are the ones the record ends up with. A null
+ * account keeps the queried one, and a null label keeps the stored one. */
 static OSStatus store_credential(CFDictionaryRef query, CFDataRef data,
-                                 bool synchronizable,
+                                 bool synchronizable, CFStringRef target_account,
+                                 CFStringRef target_label,
                                  CFDictionaryRef *entry_out)
 {
     CFStringRef account = query_account(query);
@@ -532,22 +557,33 @@ static OSStatus store_credential(CFDictionaryRef query, CFDataRef data,
         /* The label, like the synchronizable attribute, is kept unless the
          * caller names a new one. */
         CFDictionaryRef existing = find_entry(store, key);
-        CFStringRef label = query_label(query);
+        CFStringRef label = target_label;
         if (label == NULL && existing != NULL) {
             CFTypeRef stored = CFDictionaryGetValue(existing, CFSTR("label"));
             if (stored != NULL && CFGetTypeID(stored) == CFStringGetTypeID()) {
                 label = (CFStringRef)stored;
             }
         }
-        CFMutableDictionaryRef entry =
-            new_entry(account, data, synchronizable, system, label);
-        if (entry != NULL) {
-            CFDictionarySetValue(store, key, entry);
-            status = write_store(store) ? errSecSuccess : errSecNotAvailable;
-            if (status == errSecSuccess && entry_out != NULL) {
-                *entry_out = (CFDictionaryRef)CFRetain(entry);
+        /* The account can be changed by an update, and the keychain replaces
+         * the item when it does: the old record goes and a new one appears
+         * under the new account. */
+        CFStringRef new_account = target_account != NULL ? target_account : account;
+        CFStringRef new_key = store_key(new_account, system);
+        if (new_key != NULL) {
+            if (!CFEqual(new_key, key)) {
+                CFDictionaryRemoveValue(store, key);
             }
-            CFRelease(entry);
+            CFMutableDictionaryRef entry =
+                new_entry(new_account, data, synchronizable, system, label);
+            if (entry != NULL) {
+                CFDictionarySetValue(store, new_key, entry);
+                status = write_store(store) ? errSecSuccess : errSecNotAvailable;
+                if (status == errSecSuccess && entry_out != NULL) {
+                    *entry_out = (CFDictionaryRef)CFRetain(entry);
+                }
+                CFRelease(entry);
+            }
+            CFRelease(new_key);
         }
     }
     if (key != NULL) {
@@ -709,7 +745,7 @@ static OSStatus l8_SecItemAdd(CFDictionaryRef attributes, CFTypeRef *result)
     OSStatus status = store_credential(attributes, (CFDataRef)data,
                                        dictionary_bool(attributes,
                                                       kSecAttrSynchronizable),
-                                       &entry);
+                                       NULL, query_label(attributes), &entry);
     gInsideHook = false;
     if (status != errSecSuccess) {
         if (entry != NULL) {
@@ -782,11 +818,16 @@ static OSStatus l8_SecItemUpdate(CFDictionaryRef query,
         return SecItemUpdate(query, attributes_to_update);
     }
 
+    /* An update with no account is a broader search. The shim only
+     * implements single-account updates, so the real keychain owns it. */
+    if (query_account(query) == NULL) {
+        return SecItemUpdate(query, attributes_to_update);
+    }
+
     /* The synchronizable attribute and the label are part of how a record
-     * matches, and the keychain does not let either be updated. An update
-     * that does not name one keeps the stored value, and an update whose
-     * query excludes the stored record is not a match at all, so the real
-     * keychain owns it. */
+     * matches. An update that does not name a new synchronizable value
+     * keeps the stored one, and an update whose query excludes the stored
+     * record is not a match at all, so the real keychain owns it. */
     bool stored = false;
     bool synchronizable = false;
     bool matches = false;
@@ -807,9 +848,23 @@ static OSStatus l8_SecItemUpdate(CFDictionaryRef query,
         synchronizable = false;
     }
 
+    /* The account and the label can be changed by an update. The keychain
+     * replaces the item when the account changes, so the old record goes and
+     * the new one appears under the new account. */
+    bool malformed = false;
+    CFStringRef target_account = replacement_string(attributes_to_update,
+                                                    kSecAttrAccount,
+                                                    &malformed);
+    CFStringRef target_label = replacement_string(attributes_to_update,
+                                                   kSecAttrLabel,
+                                                   &malformed);
+    if (malformed) {
+        return SecItemUpdate(query, attributes_to_update);
+    }
+
     gInsideHook = true;
-    OSStatus status =
-        store_credential(query, (CFDataRef)data, synchronizable, NULL);
+    OSStatus status = store_credential(query, (CFDataRef)data, synchronizable,
+                                       target_account, target_label, NULL);
     gInsideHook = false;
     return status;
 }

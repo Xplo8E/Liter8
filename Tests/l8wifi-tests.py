@@ -266,6 +266,30 @@ static CFDictionaryRef delete_with_data_label(void) {
                               &kCFTypeDictionaryValueCallBacks);
 }
 
+/* An update whose attributes name a new account and a new password. */
+static CFDictionaryRef update_attributes_with_account(const char *acct,
+                                                       const char *password) {
+    CFDataRef data = CFDataCreate(NULL, (const UInt8 *)password, (CFIndex)strlen(password));
+    const void *keys[2] = {kSecValueData, kSecAttrAccount};
+    const void *values[2] = {data, cfstr(acct)};
+    return CFDictionaryCreate(NULL, keys, values, 2,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
+/* An update with no account at all: a broader search the shim does not
+ * implement. */
+static CFDictionaryRef update_query_without_account(void) {
+    const void *keys[2];
+    const void *values[2];
+    int count = 0;
+    keys[count] = kSecAttrService; values[count] = cfstr("AirPort"); count++;
+    keys[count] = kSecClass; values[count] = cfstr("genp"); count++;
+    return CFDictionaryCreate(NULL, keys, values, count,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
 /* The store file as it is on disk, for checking that a refused write left
  * it alone. */
 static uint8_t *read_file(const char *path, size_t *length) {
@@ -810,6 +834,55 @@ int main(int argc, char **argv) {
         if (status != errSecSuccess || result == NULL) {
             fail("a malformed label selector must not delete a stored credential");
         }
+    } else if (strcmp(mode, "rename") == 0) {
+        /* An update can change the account. The keychain replaces the item
+         * when it does: the old account no longer finds it and the new one
+         * does. */
+        CFDictionaryRef first = add_with("renameold", "originalpassword");
+        CFTypeRef added = NULL;
+        status = l8_SecItemAdd(first, &added);
+        if (added) { CFRelease(added); }
+
+        const char *replacement = "renamedpassword";
+        CFDictionaryRef update =
+            update_attributes_with_account("renamenew", replacement);
+        CFDictionaryRef update_query = query_with("AirPort", "renameold", "genp", 0);
+        status = l8_SecItemUpdate(update_query, update);
+        if (status != errSecSuccess) {
+            fail("renaming an account must succeed");
+        }
+
+        /* Only the new account finds it, with the new password. */
+        CFDictionaryRef renamed = query_with("AirPort", "renamenew", "genp", 1);
+        CFTypeRef result = NULL;
+        status = l8_SecItemCopyMatching(renamed, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("the renamed account must hold the new password");
+        } else {
+            if (CFGetTypeID(result) == CFDataGetTypeID() &&
+                CFDataGetLength((CFDataRef)result) !=
+                    (CFIndex)strlen("renamedpassword")) {
+                fail("the renamed account must hold the new password");
+            }
+            CFRelease(result);
+        }
+        CFDictionaryRef old = query_with("AirPort", "renameold", "genp", 1);
+        result = NULL;
+        status = l8_SecItemCopyMatching(old, &result);
+        if (status == errSecSuccess) {
+            fail("the old account must no longer hold the credential");
+        }
+
+        /* An update with no account is a broader search the shim does not
+         * implement, so it goes to the real keychain. */
+        probe_called_count = 0;
+        status = l8_SecItemUpdate(update_query_without_account(), update);
+        if (probe_called_count != 1) {
+            fail("an account-less update must go to the real keychain");
+        }
+        if (status != errSecSuccess) {
+            fail("an account-less update must keep the real keychain's answer");
+        }
     } else if (strcmp(mode, "check") == 0) {
         /* A different service must pass through to the real keychain. */
         probe_called_count = 0;
@@ -1171,6 +1244,9 @@ with tempfile.TemporaryDirectory(prefix="l8-wifi-") as work:
     result = subprocess.run([str(binary), "malformedlabel"], capture_output=True, text=True)
     if result.returncode != 0:
         raise SystemExit(f"FAIL: malformed label\n{result.stdout}{result.stderr}")
+    result = subprocess.run([str(binary), "rename"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: account rename\n{result.stdout}{result.stderr}")
 
     # The store limit is read from the same constant the write path uses, so
     # a second build with a small limit reaches it without writing a
