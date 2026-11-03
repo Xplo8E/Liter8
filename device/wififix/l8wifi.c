@@ -171,29 +171,35 @@ static CFStringRef query_account(CFDictionaryRef query)
                : NULL;
 }
 
-/* A selector the shim cannot act on faithfully is a request the caller got
+/* An attribute the shim cannot act on faithfully is a request the caller got
  * wrong. The real keychain rejects it, and so does the shim: passing it
- * through keeps the stock behaviour and stops a malformed selector from
+ * through keeps the stock behaviour and stops a malformed attribute from
  * being read as an absent one, which would turn a single wrong call into a
- * bulk one. */
-static bool selector_malformed(CFDictionaryRef query)
+ * bulk one.
+ *
+ * A query is a set of attributes and an update names the attributes it
+ * replaces, so the same check covers both. */
+static bool attributes_malformed(CFDictionaryRef attributes)
 {
-    if (query == NULL) {
+    if (attributes == NULL) {
         return false;
     }
-    CFTypeRef account = CFDictionaryGetValue(query, kSecAttrAccount);
+    if (CFGetTypeID(attributes) != CFDictionaryGetTypeID()) {
+        return true;
+    }
+    CFTypeRef account = CFDictionaryGetValue(attributes, kSecAttrAccount);
     if (account != NULL && CFGetTypeID(account) != CFStringGetTypeID()) {
         return true;
     }
     CFTypeRef synchronizable =
-        CFDictionaryGetValue(query, kSecAttrSynchronizable);
+        CFDictionaryGetValue(attributes, kSecAttrSynchronizable);
     if (synchronizable != NULL &&
         CFGetTypeID(synchronizable) != CFBooleanGetTypeID()) {
         return true;
     }
     /* A label that is present but is not a string reads as an absent label
      * everywhere else, which would turn a malformed request into a bulk one. */
-    CFTypeRef label = CFDictionaryGetValue(query, kSecAttrLabel);
+    CFTypeRef label = CFDictionaryGetValue(attributes, kSecAttrLabel);
     return label != NULL && CFGetTypeID(label) != CFStringGetTypeID();
 }
 
@@ -512,22 +518,16 @@ static bool query_accepts_label(CFDictionaryRef query, CFTypeRef stored_label)
            CFEqual(stored_label, wanted);
 }
 
-/* The replacement account or label an update names, and whether the one
- * named is malformed. An absent value is not malformed: it means the caller
- * did not change that attribute. */
-static CFStringRef replacement_string(CFDictionaryRef attributes,
-                                       CFStringRef key, bool *malformed)
+/* The replacement account or label an update names. An absent value means
+ * the caller did not change that attribute. The caller has already refused a
+ * malformed attribute, so the value here is a string. */
+static CFStringRef replacement_string(CFDictionaryRef attributes, CFStringRef key)
 {
-    *malformed = false;
     if (attributes == NULL) {
         return NULL;
     }
     CFTypeRef value = CFDictionaryGetValue(attributes, key);
-    if (value == NULL) {
-        return NULL;
-    }
-    if (CFGetTypeID(value) != CFStringGetTypeID()) {
-        *malformed = true;
+    if (value == NULL || CFGetTypeID(value) != CFStringGetTypeID()) {
         return NULL;
     }
     return (CFStringRef)value;
@@ -667,7 +667,7 @@ static CFArrayRef matching_entries(CFDictionaryRef store, CFDictionaryRef query,
 static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
 {
     if (gInsideHook || !fallback_enabled() || !is_wifid() ||
-        !is_airport_password_query(query) || selector_malformed(query)) {
+        !is_airport_password_query(query) || attributes_malformed(query)) {
         return SecItemCopyMatching(query, result);
     }
     if (result != NULL) {
@@ -757,7 +757,7 @@ static OSStatus l8_SecItemCopyMatching(CFDictionaryRef query, CFTypeRef *result)
 static OSStatus l8_SecItemAdd(CFDictionaryRef attributes, CFTypeRef *result)
 {
     if (gInsideHook || !fallback_enabled() || !is_wifid() ||
-        !is_airport_password_query(attributes) || selector_malformed(attributes)) {
+        !is_airport_password_query(attributes) || attributes_malformed(attributes)) {
         return SecItemAdd(attributes, result);
     }
     if (result != NULL) {
@@ -841,7 +841,8 @@ static OSStatus l8_SecItemUpdate(CFDictionaryRef query,
                                  CFDictionaryRef attributes_to_update)
 {
     if (gInsideHook || !fallback_enabled() || !is_wifid() ||
-        !is_airport_password_query(query) || selector_malformed(query)) {
+        !is_airport_password_query(query) || attributes_malformed(query) ||
+        attributes_malformed(attributes_to_update)) {
         return SecItemUpdate(query, attributes_to_update);
     }
 
@@ -884,20 +885,11 @@ static OSStatus l8_SecItemUpdate(CFDictionaryRef query,
 
     /* The account and the label can be changed by an update. The keychain
      * replaces the item when the account changes, so the old record goes and
-     * the new one appears under the new account. Each attribute has its own
-     * malformed flag: one shared flag would be cleared by the second read
-     * and lose the first one's finding. */
-    bool account_malformed = false;
-    bool label_malformed = false;
+     * the new one appears under the new account. */
     CFStringRef target_account = replacement_string(attributes_to_update,
-                                                    kSecAttrAccount,
-                                                    &account_malformed);
+                                                    kSecAttrAccount);
     CFStringRef target_label = replacement_string(attributes_to_update,
-                                                   kSecAttrLabel,
-                                                   &label_malformed);
-    if (account_malformed || label_malformed) {
-        return SecItemUpdate(query, attributes_to_update);
-    }
+                                                   kSecAttrLabel);
 
     gInsideHook = true;
     OSStatus status = store_credential(query, (CFDataRef)data, synchronizable,
@@ -909,7 +901,7 @@ static OSStatus l8_SecItemUpdate(CFDictionaryRef query,
 static OSStatus l8_SecItemDelete(CFDictionaryRef query)
 {
     if (gInsideHook || !fallback_enabled() || !is_wifid() ||
-        !is_airport_password_query(query) || selector_malformed(query)) {
+        !is_airport_password_query(query) || attributes_malformed(query)) {
         return SecItemDelete(query);
     }
 

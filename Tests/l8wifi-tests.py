@@ -288,6 +288,18 @@ static CFDictionaryRef update_attributes_with_data_account(const char *password)
                               &kCFTypeDictionaryValueCallBacks);
 }
 
+/* An update whose replacement synchronizable value is present but is not a
+ * boolean. */
+static CFDictionaryRef update_attributes_with_data_sync(const char *password) {
+    CFDataRef data = CFDataCreate(NULL, (const UInt8 *)password, (CFIndex)strlen(password));
+    CFDataRef synchronizable = CFDataCreate(NULL, (const UInt8 *)"not-a-boolean", 14);
+    const void *keys[2] = {kSecValueData, kSecAttrSynchronizable};
+    const void *values[2] = {data, synchronizable};
+    return CFDictionaryCreate(NULL, keys, values, 2,
+                              &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
 /* An update with no account at all: a broader search the shim does not
  * implement. */
 static CFDictionaryRef update_query_without_account(void) {
@@ -1009,6 +1021,47 @@ int main(int argc, char **argv) {
             }
             CFRelease(result);
         }
+    } else if (strcmp(mode, "malformedsync") == 0) {
+        /* A replacement synchronizable value that is present but is not a
+         * boolean is malformed. It must not read as false, which would make
+         * the record nonsynchronizable and rewrite its password. */
+        CFDictionaryRef sync_add = add_with_sync("malformedsync", "originalpassword", 1);
+        CFTypeRef added = NULL;
+        status = l8_SecItemAdd(sync_add, &added);
+        if (added) { CFRelease(added); }
+
+        const char *replacement = "replacementpassword";
+        CFDictionaryRef update = update_attributes_with_data_sync(replacement);
+        CFDictionaryRef update_query = query_with("AirPort", "malformedsync", "genp", 0);
+        probe_called_count = 0;
+        status = l8_SecItemUpdate(update_query, update);
+        if (probe_called_count != 1) {
+            fail("a malformed replacement synchronizable value must go to the real keychain");
+        }
+
+        /* The record is still synchronizable, and still holds its password. */
+        CFDictionaryRef still_sync =
+            query_with_sync("AirPort", "malformedsync", "genp", 1, 1);
+        CFTypeRef result = NULL;
+        status = l8_SecItemCopyMatching(still_sync, &result);
+        if (status != errSecSuccess || result == NULL) {
+            fail("a malformed replacement synchronizable value must leave the record alone");
+        } else {
+            if (CFGetTypeID(result) == CFDataGetTypeID() &&
+                CFDataGetLength((CFDataRef)result) != (CFIndex)strlen("originalpassword")) {
+                fail("a malformed replacement synchronizable value must not rewrite the password");
+            }
+            CFRelease(result);
+        }
+
+        /* And it is not reachable as a nonsynchronizable record. */
+        CFDictionaryRef now_plain =
+            query_with_sync("AirPort", "malformedsync", "genp", 1, 0);
+        result = NULL;
+        status = l8_SecItemCopyMatching(now_plain, &result);
+        if (status == errSecSuccess) {
+            fail("a malformed replacement synchronizable value must not clear the stored attribute");
+        }
     } else if (strcmp(mode, "check") == 0) {
         /* A different service must pass through to the real keychain. */
         probe_called_count = 0;
@@ -1382,6 +1435,9 @@ with tempfile.TemporaryDirectory(prefix="l8-wifi-") as work:
     result = subprocess.run([str(binary), "malformedaccount"], capture_output=True, text=True)
     if result.returncode != 0:
         raise SystemExit(f"FAIL: malformed replacement account\n{result.stdout}{result.stderr}")
+    result = subprocess.run([str(binary), "malformedsync"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL: malformed replacement synchronizable\n{result.stdout}{result.stderr}")
 
     # The store limit is read from the same constant the write path uses, so
     # a second build with a small limit reaches it without writing a
