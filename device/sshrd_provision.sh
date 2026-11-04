@@ -32,7 +32,7 @@ TOOLS="$BASE/../tools"
 OSLOG="$BASE/oslog"
 [ -f "$OSLOG" ] || OSLOG="$BASE/../payloads/oslog"
 
-STEPS="mounts ticket setup userland pairing wifi cellular screentime injection tweaks cache jbtools logging sileo resolv apps verify"
+STEPS="mounts ticket setup userland pairing wifi keychain cellular screentime injection tweaks cache jbtools logging sileo resolv apps verify"
 
 usage() {
     echo "steps: $STEPS"
@@ -42,6 +42,8 @@ usage() {
     echo "  userland patch and re-sign the SEP/activation daemons"
     echo "  pairing  install lockdownd, coreauthd companion guard and RemoteXPC repair"
     echo "  wifi     keep Wi-Fi network passwords across reboots without SEP"
+    echo "  keychain software system keychain: securityd wraps keychain items"
+    echo "           with software class keys (marker-gated; see E04 notes)"
     echo "  cellular unseal baseband calibration and stop CommCenter refusing a data context"
     echo "  screentime make Setup's unavailable ScreenTime requests fail fast"
     echo "  injection install launchd hook plus icon grant, disabled for first boot"
@@ -677,6 +679,104 @@ if wants wifi && [ "$CHECK_ONLY" = 0 ]; then
     deploy_userland_daemon wifid
     enable_wifi_credentials
 fi
+
+# ---------------------------------------------------------------- keychain
+# The software system keychain: securityd gets a dyld interposer that wraps
+# and unwraps keychain items with software class keys (marker-gated). The
+# master key persists on Data so items survive reboots. See
+# docs/aks-research/E04 and the research story document.
+deploy_keychain_library() {
+    K_LOCAL=payload/l8keychain.dylib
+    K_DEVICE=/mnt1/usr/lib/l8keychain.dylib
+    K_STAGED=$K_DEVICE.liter8-new
+    K_READBACK=payload/.work/userland/l8keychain.readback
+    mkdir -p payload/.work/userland
+
+    [ -f "$K_LOCAL" ] || die "missing $K_LOCAL; run fetch_payloads.sh keychain"
+    codesign -v "$K_LOCAL" || die "l8keychain.dylib has an invalid CodeDirectory"
+    K_WANT=$(shasum -a 256 "$K_LOCAL" | awk '{print $1}')
+    put "$K_LOCAL" "$K_STAGED"
+    must_dev "
+chmod 0755 '$K_STAGED'
+mv -f '$K_STAGED' '$K_DEVICE'
+echo DONE_OK
+" "could not activate l8keychain.dylib"
+    sh_dev "/bin/cat '$K_DEVICE'" > "$K_READBACK" \
+        || die "could not read back l8keychain.dylib"
+    K_GOT=$(shasum -a 256 "$K_READBACK" | awk '{print $1}')
+    [ "$K_GOT" = "$K_WANT" ] || die "l8keychain.dylib readback hash mismatch"
+    ok "l8keychain.dylib deployed and read back ($K_WANT)"
+}
+
+create_keychain_master() {
+    K_MASTER=/mnt2/var/Keychains/l8keychain.master
+    must_dev "
+if [ ! -s '$K_MASTER' ]; then
+  mkdir -p /mnt2/var/Keychains
+  dd if=/dev/urandom of='$K_MASTER.new' bs=32 count=1 2>/dev/null
+  chmod 0600 '$K_MASTER.new'
+  chown 0:0 '$K_MASTER.new'
+  mv -f '$K_MASTER.new' '$K_MASTER'
+fi
+ls -la '$K_MASTER'
+echo DONE_OK
+" "could not create the l8keychain master key"
+    ok "l8keychain master key present (32 bytes, 0600)"
+}
+
+if wants keychain && [ "$CHECK_ONLY" = 0 ]; then
+    say "software system keychain"
+    deploy_keychain_library
+    patch_securityd_for_keychain
+    create_keychain_master
+fi
+
+# securityd is patched with LC_LOAD_WEAK_DYLIB for /usr/lib/l8keychain.dylib
+# (the same structural edit launchdhook/patch_launchd.py applies to the other
+# shim consumers), then re-signed preserving Apple's identity and
+# entitlements. The pristine binary is preserved as keybagd.orig-style
+# .orig for rollback.
+patch_securityd_for_keychain() {
+    S_NAME=securityd
+    S_DEVICE=/mnt1/usr/libexec/securityd
+    S_DIR=payload/.work/userland
+    S_PRISTINE=$S_DIR/$S_NAME.pristine
+    S_PATCHED=$S_DIR/$S_NAME.patched
+    mkdir -p "$S_DIR"
+
+    sh_dev "if [ -f '$S_DEVICE.orig' ]; then /bin/cat '$S_DEVICE.orig'; else /bin/cat '$S_DEVICE'; fi" \
+        > "$S_PRISTINE" || die "could not read pristine securityd"
+    [ -s "$S_PRISTINE" ] || die "pristine securityd is empty"
+
+    python3 launchdhook/patch_launchd.py "$S_PRISTINE" \
+        -o "$S_PATCHED" --path /usr/lib/l8keychain.dylib --apply \
+        || die "could not append the weak l8keychain load command"
+
+    # Re-sign preserving Apple's identity and entitlements.
+    IDENT=$(/usr/bin/codesign -d --verbose=4 "$S_PRISTINE" 2>&1 | sed -n 's/^Identifier=//p' | head -1)
+    [ -n "$IDENT" ] || die "codesign did not report securityd's identifier"
+    /usr/bin/codesign -d --entitlements "$S_DIR/securityd.entitlements" --xml "$S_PRISTINE" >/dev/null 2>&1 \
+        || die "could not read securityd entitlements"
+    "$LDID" -I"$IDENT" -S"$S_DIR/securityd.entitlements" -Cadhoc "$S_PATCHED" \
+        || die "could not re-sign patched securityd"
+    /usr/bin/codesign -v "$S_PATCHED" >/dev/null 2>&1 \
+        || die "patched securityd signature verification failed"
+
+    S_STAGED=$S_DEVICE.liter8-new
+    S_WANT=$(shasum -a 256 "$S_PATCHED" | awk '{print $1}')
+    put "$S_PATCHED" "$S_STAGED"
+    must_dev "
+[ -f '$S_DEVICE.orig' ] || cp '$S_DEVICE' '$S_DEVICE.orig'
+chmod 0755 '$S_STAGED'
+mv -f '$S_STAGED' '$S_DEVICE'
+echo DONE_OK
+" "could not activate patched securityd"
+    sh_dev "/bin/cat '$S_DEVICE'" > "$WORK/securityd.readback" \
+        || die "could not read back securityd"
+    S_GOT=$(shasum -a 256 "$WORK/securityd.readback" | awk '{print $1}')
+    [ "$S_GOT" = "$S_WANT" ] || die "securityd readback hash mismatch"
+    ok "securityd patched, deployed and read back ($S_WANT)"
+}
 
 # -------------------------------------------------------------- cellular
 # Baseband calibration is sealed to an AP identity key this device cannot
