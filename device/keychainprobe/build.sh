@@ -17,6 +17,10 @@ LDID="$TOOLS/ldid_macosx_arm64"
 "$LDID" -v 2>&1 | grep -q "Link Identity Editor" || LDID=$(command -v ldid || true)
 SDK="${LITER8_IOS_SDK:-$(xcrun --sdk iphoneos --show-sdk-path)}"
 [ -d "$SDK" ] || { echo "[!] iOS SDK missing: $SDK" >&2; exit 1; }
+# Deterministic-build note: the hardware-validated binary (E04 full-pass
+# matrix, byte-identical check against the deployed dylib) was produced with
+# Xcode 27.0 (27A266a), iPhoneOS27.0 SDK. Same toolchain + source = same
+# bytes; verify with the cksum recorded in the deployment log if it matters.
 OUT="$BASE/l8keychain.dylib"
 
 # Self-test on the host first: blob round-trip, gates, pass-through wiring.

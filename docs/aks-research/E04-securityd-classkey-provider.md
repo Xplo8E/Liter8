@@ -1,4 +1,79 @@
-# E04 design note: securityd class-key provider (post-E06 iteration 1)
+# E04: l8keychain - software system keychain for securityd (CURATED)
+
+> **Read-this-first (final state, 2026-11-05):** l8keychain v2 is deployed,
+> hardware-validated, and shipping via the draft PR (#34 on GitHub). The
+> validated deployment route is the STRUCTURAL WEAK LOAD: stock securityd +
+> `LC_LOAD_WEAK_DYLIB /usr/lib/l8keychain.dylib` (pristine kept as
+> `securityd.orig`), dylib on the sealed System volume, master key created
+> from device urandom at `/private/var/Keychains/l8keychain.master`.
+> Everything below the curated header is the chronological session log,
+> preserved for evidence; the appendices carry the incident analyses that
+> produced the standing rules (arm64-only rebuilds, sandbox paths, corpse
+> quota, debugserver recipe).
+
+## Curated summary
+
+### The problem
+
+On the SEP-less Liter8 boot the device keybag has no per-class keys, so
+every system-keychain write fails `-25291` ("No key available for class").
+Live capture pinned the boundary: `aks_wrap_key` inside AppleKeyStore,
+below securityd's `ks_crypt`, below SecItemAdd.
+
+### The fix
+
+`l8keychain.dylib` - a dyld interposer weak-loaded into securityd that
+intercepts the AppleKeyStore client calls `aks_wrap_key` / `aks_unwrap_key`
+and implements software keybag semantics for the item-secret classes
+(6 ak, 7 ck) on keybag handle 0:
+
+- L8KC blob = magic | ver | class | nonce | ciphertext | HMAC-SHA256
+- per-class keys derived from a master key (persisted 0600 at
+  `/private/var/Keychains/l8keychain.master`, created from device urandom)
+- marker-gated: `/usr/lib/.liter8-keychain` (root 0600) or the legacy
+  Data-volume marker; dormant without it
+- pass-through for everything else: unserved classes, foreign keybags,
+  tampered blobs (kAKSStatusDrop), marker-off
+
+Explicit tradeoff (same stance as l8wifi/l8pair): software keys protect
+nothing against the device operator. Not hardware-backed Data Protection.
+
+### Hardware validation (iPhone 12,1, iOS 27.2 24B119)
+
+| Test | Result |
+|---|---|
+| SecItemAdd / CopyMatching / Update / Delete | green on plain, system, data-protection shapes |
+| Items survive a full tethered reboot | readback returns stored secrets |
+| Wi-Fi join -> reboot -> auto-reconnect from the keychain | live-captured (l8wifi retired) |
+| asd crash-loop (keychain-store dependent) | resolved on the first keychain boot |
+| MKB probes, pairing, USB | identical to baseline |
+
+### Deployment route (canonical, validated)
+
+`fetch_payloads.sh keychain` builds and stages the dylib;
+`sshrd_provision.sh keychain` deploys it to `/usr/lib/l8keychain.dylib`
+(staged + readback), appends `LC_LOAD_WEAK_DYLIB` to stock securityd
+(pristine kept as `securityd.orig`, re-signed preserving Apple identity +
+entitlements), and creates the master key from the device's `/dev/urandom`.
+The PR-branch build is byte-identical to the hardware-validated binary.
+
+### Standing rules produced by this arc
+
+- TweakInject dylibs: no `-Wl,-undefined,dynamic_lookup` (the v1 AMFI
+  storm trigger); fat arm64+arm64e is the proven shape for shim dylibs
+- securityd's sandbox denies `/var/root` (create AND read); master keys
+  live in `/private/var/Keychains/`
+- When the corpse quota is exhausted, `.ips` generation silently stops -
+  diagnose through oslog captures
+- The known TweakInject filter route (Foundation filter reaching
+  securityd) also works as an interim load path, but the weak-load route is
+  the canonical one this PR ships
+
+---
+
+# Chronological session log (preserved for evidence)
+
+
 
 **Status:** design, not implementation. Date 2026-11-03. Evidence tags per
 research.md. Companion to AKS_INTERFACE_MAP.md and the E06 run record
@@ -208,7 +283,7 @@ exactly as today (fail cleanly).
 
 1. Write `device/keychainprobe/l8keychain.m` per this design (swizzles +
    CommonCrypto AES-GCM + marker + persistence), self-test on host.
-2. Provision into securityd (weak load or TweakInject for the ObjC daemon;
+2. Provision into securityd (weak load; the validated route is the structural LC_LOAD_WEAK_DYLIB edit on the stock binary;
    securityd has ObjC runtime), reboot, run the E01 CRUD matrix + reboot
    persistence readback.
 3. Expected positive signal: add returns 0 AND read-immediate returns the
