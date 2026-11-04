@@ -160,7 +160,7 @@ fetch_cached() {
     || die "ldid at $LDID cannot run on this host; brew install ldid-procursus"
 mkdir -p "$OUT" "$WORK"
 
-WANT="${*:-sileo helpers cache injection tweaks pairing wifi cellular}"
+WANT="${*:-sileo helpers cache injection tweaks pairing wifi cellular keychain}"
 wants() { case " $WANT " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # Assert the boot-critical profile values only for the components that use them.
@@ -558,6 +558,22 @@ if wants wifi; then
     codesign -v "$OUT/l8wifi.dylib" \
         || die "AirPort credential shim signature verification failed"
     ok "marker-gated wifid-only l8wifi.dylib ready"
+fi
+
+# --------------------------------------------------------------- keychain
+# The software system keychain: without a SEP the device keybag has no
+# per-class keys, so every system-keychain write fails -25291. The
+# interposer gives securityd software wrap/unwrap for the keychain classes,
+# marker-gated, with the same explicit 0600-file security tradeoff as the
+# Wi-Fi and pairing fallbacks. See docs/aks-research/E04 and the research
+# story document.
+if wants keychain; then
+    say "software system keychain"
+    ( cd keychainprobe && ./build.sh ) || die "l8keychain build failed"
+    cp keychainprobe/l8keychain.dylib "$OUT/l8keychain.dylib"
+    codesign -v "$OUT/l8keychain.dylib" \
+        || die "l8keychain signature verification failed"
+    ok "marker-gated securityd-only l8keychain.dylib ready"
 fi
 
 # ----------------------------------------------------------------- cellular
