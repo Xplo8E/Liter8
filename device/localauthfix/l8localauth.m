@@ -26,6 +26,41 @@
  * A public method that calls a hooked private one is translated once: the
  * translated error no longer matches the SEP-less signature.
  *
+ * E07 passcode-set gate (decoded from the 24B119 shared cache; see
+ * docs/aks-research/E07-passcode-milestone-recon.md): Settings' passcode pane
+ * and every canEvaluatePolicy answer read "passcode is set" from
+ * -[LACPasscodeUserHelper isPasscodeSetForUser:error:] via
+ * LACManagedConfiguration.isPasscodeSet = keybagState != 1. The keybag-state
+ * table can never produce state 1 on this boot, so the belief is always true
+ * and the pane demands a passcode that does not exist. The hook answers the
+ * same NO with the same error the class itself produces in that case
+ * (LACError -5 "Passcode not set."), which routes the whole stack down its
+ * real no-passcode branch: the mechanism factory stores the availability
+ * error, canEvaluatePolicy stops claiming a passcode, and the pane stops
+ * opening the LAPSPasscode sheet that aborts on the SEP-less ACM query.
+ *   LACPasscodeUserHelper isPasscodeSetForUser:error:   concrete gate
+ *   LACPasscodeHelper       isPasscodeSetForUser:error:   the wrapper above it
+ * Both are hooked because the mechanism factory reaches the gate through a
+ * dependencies object whose helper class is not named in the callers; either
+ * class answering NO settles the question.
+ *
+ * Device test result (2026-11-05 clean boot): Settings' "Face ID & Passcode"
+ * pane still demanded the passcode with zero calls through the LACore gate,
+ * so the pane consults the LocalAuthenticationPrivateUI passcode stack
+ * instead. That stack's passcode-present source is -hasPasscode on the
+ * LAPSPasscode* adapter family; the MCAdapter variant reads the
+ * ManagedConfiguration profile connection, a state store that knows nothing
+ * about this boot's missing keybag. Hooked here, each forwarding unless the
+ * marker is on:
+ *   LAPSPasscodePersistenceAdapter hasPasscode   (base forwarder)
+ *   LAPSPasscodePersistenceMCAdapter hasPasscode (profile-connection backed)
+ *   LAPSCurrentPasscodeService hasPasscode
+ *   LAPSPasscodePersistence hasPasscode
+ *   LAPSPasscodeChangeSystem{Standard,Verification,Recovery,Stubbed}Adapter,
+ *   LAPSPasscodeChangeSystemDispatchDecorator
+ * With the marker on the three state-backed providers answer NO; the pure
+ * forwarders keep forwarding so the probe log shows which one the pane hits.
+ *
  * Built without ARC on purpose: the reply wrappers forward the first block
  * argument untouched, so its exact type (object or BOOL) cannot be
  * mis-retained.
@@ -54,6 +89,7 @@
  */
 
 #import <Foundation/Foundation.h>
+#import <objc/message.h>
 #import <objc/runtime.h>
 
 #include <mach-o/dyld.h>
@@ -80,6 +116,8 @@ typedef BOOL (*CanEvaluateIMP)(id, SEL, NSInteger, NSError **);
 typedef void (*AccessIMP)(id, SEL, CFTypeRef, NSInteger, NSString *, AccessReply);
 typedef void (*AccessOptionsIMP)(id, SEL, CFTypeRef, NSInteger, NSDictionary *, PolicyReply);
 typedef id (*AccessSyncIMP)(id, SEL, CFTypeRef, NSInteger, NSDictionary *, NSError **);
+typedef BOOL (*PasscodeSetIMP)(id, SEL, unsigned int, id *);
+typedef BOOL (*HasPasscodeIMP)(id, SEL);
 
 static EvaluateIMP gOriginalEvaluate;
 static EvaluateSyncIMP gOriginalEvaluateSync;
@@ -87,13 +125,43 @@ static CanEvaluateIMP gOriginalCanEvaluate;
 static AccessIMP gOriginalAccess;
 static AccessOptionsIMP gOriginalAccessOptions;
 static AccessSyncIMP gOriginalAccessSync;
+static PasscodeSetIMP gOriginalUserHelperPasscodeSet;
+static PasscodeSetIMP gOriginalHelperPasscodeSet;
 
-static const char *kMarker = "/private/var/jb/.liter8-localauth";
+/* One original per hooked class; the replacement recovers its own pair from
+ * the receiver's class so a single body serves the whole adapter family. */
+#define L8_PERSISTENCE_HOOKS \
+    HOOK(LAPSPasscodePersistenceAdapter) \
+    HOOK(LAPSPasscodePersistenceMCAdapter) \
+    HOOK(LAPSCurrentPasscodeService) \
+    HOOK(LAPSPasscodePersistence) \
+    HOOK(LAPSPasscodeChangeSystemStandardAdapter) \
+    HOOK(LAPSPasscodeChangeSystemVerificationAdapter) \
+    HOOK(LAPSPasscodeChangeSystemRecoveryAdapter) \
+    HOOK(LAPSPasscodeChangeSystemStubbedAdapter) \
+    HOOK(LAPSPasscodeChangeSystemDispatchDecorator)
+
+#define HOOK(cls) static HasPasscodeIMP gOriginal_##cls##_hasPasscode;
+L8_PERSISTENCE_HOOKS
+#undef HOOK
+
+static const char *const kHasPasscodeEncodings[] = { "B@:", "c@:" };
+
+#ifndef LITER8_LOCALAUTH_MARKER
+#define LITER8_LOCALAUTH_MARKER "/private/var/jb/.liter8-localauth"
+#endif
+/* The device marker must be root-owned; the host self-test runs unprivileged
+ * and re-declares both as -D flags from build.sh. */
+#ifndef LITER8_LOCALAUTH_MARKER_UID
+#define LITER8_LOCALAUTH_MARKER_UID 0
+#endif
+
+static const char *kMarker = LITER8_LOCALAUTH_MARKER;
 
 static BOOL marker_enabled(void) {
     struct stat st;
     if (lstat(kMarker, &st) != 0) return NO;
-    return S_ISREG(st.st_mode) && st.st_uid == 0 &&
+    return S_ISREG(st.st_mode) && st.st_uid == LITER8_LOCALAUTH_MARKER_UID &&
            (st.st_mode & (S_IWGRP | S_IWOTH)) == 0;
 }
 
@@ -199,6 +267,84 @@ static id l8_accessSync(id self, SEL sel, CFTypeRef accessControl, NSInteger ope
     return result;
 }
 
+/* The error the class itself reports when the managed configuration says no
+ * passcode is set (decompiled 24B119: [LACError errorWithCode:-5
+ * debugDescription:"Passcode not set."]). Producing the identical object keeps
+ * every downstream consumer on the branch it already has for that case. */
+static NSError *passcode_not_set_error(void) {
+    Class lacError = NSClassFromString(@"LACError");
+    SEL factory = sel_registerName("errorWithCode:debugDescription:");
+    if (lacError != Nil && ((BOOL (*)(id, SEL, SEL))objc_msgSend)(
+                               (id)lacError, sel_registerName("respondsToSelector:"),
+                               factory)) {
+        return ((id (*)(id, SEL, NSInteger, NSString *))objc_msgSend)(
+            (id)lacError, factory, kL8PasscodeNotSet, @"Passcode not set.");
+    }
+    return [NSError errorWithDomain:kL8LADomain code:kL8PasscodeNotSet userInfo:nil];
+}
+
+/* One body for both hooked classes: NO with the not-set error. The passcode
+ * gate is a state question, not a verification, so no original is consulted
+ * and there is no failure signature to match - on this boot "no passcode" is
+ * simply the truth, and every consumer has an existing no-passcode branch. */
+static BOOL l8_passcode_set_replacement(id self, SEL sel, unsigned int userId, id *error,
+                                        PasscodeSetIMP original) {
+    if (!marker_enabled()) return original(self, sel, userId, error);
+    os_log_error(OS_LOG_DEFAULT, "l8localauth: isPasscodeSetForUser:%u -> NO (pid %d)",
+                 userId, getpid());
+    if (error != NULL) *error = passcode_not_set_error();
+    return NO;
+}
+
+static BOOL l8_userHelperPasscodeNotSet(id self, SEL sel, unsigned int userId, id *error) {
+    return l8_passcode_set_replacement(self, sel, userId, error, gOriginalUserHelperPasscodeSet);
+}
+
+static BOOL l8_helperPasscodeNotSet(id self, SEL sel, unsigned int userId, id *error) {
+    return l8_passcode_set_replacement(self, sel, userId, error, gOriginalHelperPasscodeSet);
+}
+
+/* ManagedConfiguration answers from its profile store, a persisted state that
+ * predates this boot's missing keybag, so it is one of the two providers the
+ * override answers NO. CurrentPasscodeService is the other: the change-system
+ * adapters all read it. */
+static BOOL l8_mcAdapter_hasPasscode(id self, SEL sel) {
+    if (!marker_enabled()) return gOriginal_LAPSPasscodePersistenceMCAdapter_hasPasscode(self, sel);
+    BOOL forwarded = gOriginal_LAPSPasscodePersistenceMCAdapter_hasPasscode(self, sel);
+    os_log_error(OS_LOG_DEFAULT,
+                 "l8localauth: MCAdapter hasPasscode %{public}s -> NO (pid %d)",
+                 forwarded ? "YES" : "NO", getpid());
+    return NO;
+}
+
+static BOOL l8_currentPasscodeService_hasPasscode(id self, SEL sel) {
+    if (!marker_enabled()) return gOriginal_LAPSCurrentPasscodeService_hasPasscode(self, sel);
+    BOOL forwarded = gOriginal_LAPSCurrentPasscodeService_hasPasscode(self, sel);
+    os_log_error(OS_LOG_DEFAULT,
+                 "l8localauth: CurrentPasscodeService hasPasscode %{public}s -> NO (pid %d)",
+                 forwarded ? "YES" : "NO", getpid());
+    return NO;
+}
+
+/* Everything else in the family forwards with a log line, so the probe names
+ * the provider the pane actually consults. */
+static BOOL l8_persistence_probe(id self, SEL sel, HasPasscodeIMP original) {
+    BOOL forwarded = original(self, sel);
+    if (marker_enabled()) {
+        os_log_error(OS_LOG_DEFAULT,
+                     "l8localauth: [%@ hasPasscode] -> %{public}s (probe, pid %d)",
+                     NSStringFromClass([self class]), forwarded ? "YES" : "NO", getpid());
+    }
+    return forwarded;
+}
+
+#define HOOK(cls) \
+    static BOOL l8_##cls##_hasPasscode(id self, SEL sel) { \
+        return l8_persistence_probe(self, sel, gOriginal_##cls##_hasPasscode); \
+    }
+L8_PERSISTENCE_HOOKS
+#undef HOOK
+
 /* A method's type encoding with the frame offsets stripped, leaving only the
  * type letters. The offsets are frame-layout detail and say nothing about
  * whether the casts above are valid; the letters are exactly what they depend
@@ -241,14 +387,111 @@ static BOOL swap(Class cls, const char *name, unsigned arguments, const char *ty
     return YES;
 }
 
-static atomic_bool gInstalled;
+/* swap() against a list of acceptable encodings. The passcode-set gate's BOOL
+ * return and unsigned argument each have two spellings the runtime uses ('B'
+ * vs 'c', 'I' vs 'i' vs 'Q'); they are ABI-identical, but an unknown encoding
+ * is still refused rather than forwarded through a guessed cast. */
+static BOOL swap_any(Class cls, const char *name, unsigned arguments,
+                     const char *const *candidates, unsigned candidate_count,
+                     IMP replacement, IMP *original) {
+    Method method = class_getInstanceMethod(cls, sel_registerName(name));
+    if (method == NULL || method_getNumberOfArguments(method) != arguments) return NO;
+    char letters[160];
+    encoding_letters(method_getTypeEncoding(method), letters, sizeof letters);
+    for (unsigned i = 0; i < candidate_count; i++) {
+        if (strcmp(letters, candidates[i]) != 0) continue;
+        *original = method_getImplementation(method);
+        method_setImplementation(method, replacement);
+        return YES;
+    }
+    os_log_error(OS_LOG_DEFAULT,
+                 "l8localauth: %{public}s encoding is %{public}s, expected one of "
+                 "%{public}s; not hooked",
+                 name, letters, candidates[0]);
+    return NO;
+}
+
+static atomic_bool gLAFInstalled;
+static atomic_bool gHelperInstalled;
+static atomic_bool gPersistenceInstalled;
+
+/* BOOL/integer spellings the runtime uses for isPasscodeSetForUser:error:.
+ * Read as type letters with offsets stripped; see swap_any. */
+static const char *const kPasscodeSetEncodings[] = {
+    "B@:I^@", "c@:I^@", "B@:i^@", "c@:i^@", "B@:Q^@", "c@:Q^@",
+};
 
 static void install_if_ready(void) {
-    if (atomic_load(&gInstalled)) return;
+    /* LocalAuthenticationCore side. LocalAuthenticationCore loads before (and
+     * often without) LocalAuthentication, so this is what fires wherever the
+     * passcode-pane machinery lives. The one-shot flag is only consumed when
+     * at least one of the two classes is present, so an early call cannot burn
+     * the attempt before the framework has registered its classes. */
+    if (!atomic_load(&gHelperInstalled)) {
+        Class userHelper = objc_lookUpClass("LACPasscodeUserHelper");
+        Class helper = objc_lookUpClass("LACPasscodeHelper");
+        if (userHelper != Nil || helper != Nil) {
+            bool expected = false;
+            if (atomic_compare_exchange_strong(&gHelperInstalled, &expected, true)) {
+                int hooked = 0;
+                if (userHelper != Nil)
+                    hooked |= swap_any(userHelper, "isPasscodeSetForUser:error:", 4,
+                                       kPasscodeSetEncodings, 6, (IMP)l8_userHelperPasscodeNotSet,
+                                       (IMP *)&gOriginalUserHelperPasscodeSet)
+                              << 0;
+                if (helper != Nil)
+                    hooked |= swap_any(helper, "isPasscodeSetForUser:error:", 4,
+                                       kPasscodeSetEncodings, 6, (IMP)l8_helperPasscodeNotSet,
+                                       (IMP *)&gOriginalHelperPasscodeSet)
+                              << 1;
+                os_log_error(OS_LOG_DEFAULT,
+                             "l8localauth: passcode-set gate mask 0x%x in pid %d",
+                             hooked, getpid());
+            }
+        }
+    }
+
+    /* LocalAuthenticationPrivateUI side: the passcode pane's persistence
+     * family. LocalAuthenticationEmbeddedUI pulls this in for the pane flow,
+     * so the flag is consumed only when a member class exists. */
+    if (!atomic_load(&gPersistenceInstalled)) {
+        bool anyPresent = false;
+#define HOOK(cls) anyPresent |= objc_lookUpClass(#cls) != Nil;
+        L8_PERSISTENCE_HOOKS
+#undef HOOK
+        if (anyPresent) {
+            bool expected = false;
+            if (atomic_compare_exchange_strong(&gPersistenceInstalled, &expected, true)) {
+                int hooked = 0;
+                int k = 0;
+#define HOOK(cls) \
+    { \
+        Class c = objc_lookUpClass(#cls); \
+        if (c != Nil) { \
+            IMP replacement = (IMP)l8_##cls##_hasPasscode; \
+            if (strcmp(#cls, "LAPSPasscodePersistenceMCAdapter") == 0) \
+                replacement = (IMP)l8_mcAdapter_hasPasscode; \
+            else if (strcmp(#cls, "LAPSCurrentPasscodeService") == 0) \
+                replacement = (IMP)l8_currentPasscodeService_hasPasscode; \
+            hooked |= swap_any(c, "hasPasscode", 2, kHasPasscodeEncodings, 2, \
+                               replacement, (IMP *)&gOriginal_##cls##_hasPasscode) << k; \
+        } \
+        k++; \
+    }
+                L8_PERSISTENCE_HOOKS
+#undef HOOK
+                os_log_error(OS_LOG_DEFAULT,
+                             "l8localauth: persistence mask 0x%x in pid %d", hooked, getpid());
+            }
+        }
+    }
+
+    /* LocalAuthentication side: the six LAContext hooks. */
+    if (atomic_load(&gLAFInstalled)) return;
     Class cls = objc_lookUpClass("LAContext");
     if (cls == Nil) return;
     bool expected = false;
-    if (!atomic_compare_exchange_strong(&gInstalled, &expected, true)) return;
+    if (!atomic_compare_exchange_strong(&gLAFInstalled, &expected, true)) return;
 
     /* Encodings read from the live runtime on n104/24B5099f, offsets stripped.
      * CFTypeRef comes back concretely typed as the SecAccessControl struct
@@ -275,7 +518,9 @@ static void install_if_ready(void) {
                  getpid(), hooked);
 }
 
-/* Whether a loaded image is LocalAuthentication, read from its own
+/* Whether a loaded image is one of the LocalAuthentication family (the
+ * passcode gate lives in Core, the pane's persistence family in PrivateUI,
+ * which EmbeddedUI pulls in for the pane flow), read from the image's own
  * LC_ID_DYLIB. Pure memory parsing: the objc image-load callback runs with the
  * runtime lock held, so it must not call into the objc runtime (that
  * deadlocks, measured) or dyld. */
@@ -287,7 +532,10 @@ static BOOL is_localauth_image(const struct mach_header *header) {
         if (command->cmd == LC_ID_DYLIB) {
             const struct dylib_command *dylib = (const struct dylib_command *)command;
             const char *name = (const char *)command + dylib->dylib.name.offset;
-            return strstr(name, "/LocalAuthentication.framework/") != NULL;
+            return strstr(name, "/LocalAuthentication.framework/") != NULL ||
+                   strstr(name, "/LocalAuthenticationCore.framework/") != NULL ||
+                   strstr(name, "/LocalAuthenticationPrivateUI.framework/") != NULL ||
+                   strstr(name, "/LocalAuthenticationEmbeddedUI.framework/") != NULL;
         }
         command = (const struct load_command *)((const char *)command + command->cmdsize);
     }
@@ -307,7 +555,9 @@ static void deferred_install(void *context) {
  * translated; processes that link LocalAuthentication are hooked directly by
  * the constructor and never take this path. */
 static void image_loaded(const struct mach_header *header) {
-    if (atomic_load(&gInstalled) || !is_localauth_image(header)) return;
+    if (!is_localauth_image(header)) return;
+    if (atomic_load(&gLAFInstalled) && atomic_load(&gHelperInstalled) &&
+        atomic_load(&gPersistenceInstalled)) return;
     dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), NULL,
                      deferred_install);
 }
@@ -316,7 +566,9 @@ __attribute__((constructor))
 static void install(void) {
     @autoreleasepool {
         install_if_ready();
-        if (!atomic_load(&gInstalled)) objc_addLoadImageFunc(image_loaded);
+        if (!atomic_load(&gLAFInstalled) || !atomic_load(&gHelperInstalled) ||
+            !atomic_load(&gPersistenceInstalled))
+            objc_addLoadImageFunc(image_loaded);
     }
 }
 #else
@@ -366,15 +618,58 @@ int main(void) {
         // hooked private one cannot translate twice into something else.
         if (translated(translated(acm)).code != kL8PasscodeNotSet) return 6;
 
-        // The image-load callback recognises LocalAuthentication by header.
+        // The image-load callback recognises the framework family by header.
         BOOL found = NO, wrong = NO;
         for (uint32_t i = 0; i < _dyld_image_count(); i++) {
             BOOL match = is_localauth_image(_dyld_get_image_header(i));
-            BOOL named = strstr(_dyld_get_image_name(i), "/LocalAuthentication.framework/") != NULL;
+            const char *imageName = _dyld_get_image_name(i);
+            BOOL named = strstr(imageName, "/LocalAuthentication.framework/") != NULL ||
+                         strstr(imageName, "/LocalAuthenticationCore.framework/") != NULL ||
+                         strstr(imageName, "/LocalAuthenticationPrivateUI.framework/") != NULL ||
+                         strstr(imageName, "/LocalAuthenticationEmbeddedUI.framework/") != NULL;
             found |= match && named;
             wrong |= match != named;
         }
         if (!found || wrong) return 8;
+
+        // The passcode-set gate. The LocalAuthenticationCore classes are
+        // usually present on the host too; when they are, the gate must hook
+        // and answer NO with the not-set error while the marker is on, and
+        // must forward without it. When the host has neither class, the gate
+        // is skipped and the device install path still covers it.
+        Class userHelper = NSClassFromString(@"LACPasscodeUserHelper");
+        Class helper = NSClassFromString(@"LACPasscodeHelper");
+        unsigned gateMask = 0;
+        if (userHelper != Nil || helper != Nil) {
+            install_if_ready();
+            gateMask = (gOriginalUserHelperPasscodeSet != NULL ? 1u : 0u) |
+                       (gOriginalHelperPasscodeSet != NULL ? 2u : 0u);
+            if (!gateMask) return 17;
+            Class gateClass = (gateMask & 1u) ? userHelper : helper;
+            id instance = ((id (*)(id, SEL))objc_msgSend)(
+                (id)gateClass, sel_registerName("new"));
+            if (instance == nil) return 19;
+            /* The replacement consults the marker at call time; create it at
+             * the sandbox path (re-declared as -D flags by build.sh, uid-tuned
+             * so the unprivileged test run satisfies the owner check). */
+            FILE *markerFile = fopen(kMarker, "w");
+            if (markerFile == NULL) return 20;
+            fclose(markerFile);
+            chmod(kMarker, 0600);
+            SEL gate = sel_registerName("isPasscodeSetForUser:error:");
+            NSError *gateError = nil;
+            BOOL set = ((BOOL (*)(id, SEL, unsigned int, NSError **))objc_msgSend)(
+                instance, gate, 501u, &gateError);
+            if (set || gateError == nil || gateError.code != kL8PasscodeNotSet) return 18;
+            /* Marker off: the original runs. The host's own answer is whatever
+             * it is; the assertion is that the forward survives it. */
+            remove(kMarker);
+            gateError = nil;
+            (void)((BOOL (*)(id, SEL, unsigned int, NSError **))objc_msgSend)(
+                instance, gate, 501u, &gateError);
+        } else {
+            printf("note: passcode gate classes absent on this host; gate test skipped\n");
+        }
 
         // LAContext is linked into this test binary, so the path the
         // constructor takes must find and hook all three.
@@ -382,8 +677,9 @@ int main(void) {
         if (!gOriginalEvaluate || !gOriginalCanEvaluate || !gOriginalAccess) return 7;
         printf("PASS: SEP-less ACM -3 translated; cancellation, other errors and success "
                "preserved; public LAContext methods hooked (private: sync=%d "
-               "access-options=%d access-sync=%d)\n", gOriginalEvaluateSync != NULL,
-               gOriginalAccessOptions != NULL, gOriginalAccessSync != NULL);
+               "access-options=%d access-sync=%d) passcode-gate mask 0x%x\n",
+               gOriginalEvaluateSync != NULL, gOriginalAccessOptions != NULL,
+               gOriginalAccessSync != NULL, gateMask);
         return 0;
     }
 }
