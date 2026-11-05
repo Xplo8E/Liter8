@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  ElleKit/Substrate filter. Foundation is in every Objective-C process,
+	  so this reaches apps and daemons alike. l8acmuc links no ObjC at all:
+	  it interposes five IOKit framework exports, is one pointer-compare on
+	  the forward path, and marker-gates every interception, so processes
+	  that never touch the ACM user client pay nothing.
+	-->
+	<key>Filter</key>
+	<dict>
+		<key>Bundles</key>
+		<array>
+			<string>com.apple.Foundation</string>
+		</array>
+	</dict>
+</dict>
+</plist>
