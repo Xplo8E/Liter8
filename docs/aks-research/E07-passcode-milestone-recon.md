@@ -1,5 +1,36 @@
 # E07: passcode pane arc + state-scalar consumer decode
 
+> **Setup-flow arc (2026-11-05, in progress):** goal is passcode
+> setup / turn off / change working without a SEP. Progress so far:
+> the pane's row state derives from `MCProfileConnection isPasscodeSet`
+> (the ManagedConfiguration profile connection answers YES from its
+> daemon state forever on this boot - keybagd never reports passcode
+> state through its broken AKS, so managedconfiguration sits at its
+> fail-closed default). Overriding it to NO flipped the pane to the
+> no-passcode view: "Turn Passcode On" renders, the whole LAPS family
+> cascades NO, and coreauthd (the auth daemon) answers NO through the
+> LACore gate hook. Tapping Turn Passcode On starts
+> `LAPasscodeChangeService ('Set Passcode')` and dies at the
+> **Stolen Device Protection change ratchet**: it demands prior
+> authentication via `evaluatePolicy:1026`, whose evaluation fails
+> correctly ("SDP is not available when Passcode is not set") because
+> the ratchet state comes from SEP-less ACM context properties
+> (`-[LACStorageValueTransformer transformFromACMValue:forKey:error:]`
+> rejects them; KVS reads for ratchet keys 7/25/27 error). The ratchet
+> gate code lives in the PasscodeAndBiometricsSettings stack, which is
+> in no cache image and no on-disk binary we can find - the next lever
+> is runtime image hunting plus overriding the `LACDTORatchetManager`
+> XPC reads. Decoded en route: `passcodeType` derives from
+> `hasPasscode` in the MCAdapter (`noneType` when NO); the credential
+> crypto funnel is `LAContext _encodeCredential/_decodeCredential` ->
+> `LACContextCredentialCoder encode/decode:seed:` ->
+> `+[LACACMHelper encodeData/decodeData:seed:externalizedContext:error:]`
+> -> `ACMEncryptDataEx`/`ACMDecryptDataEx` (the -3 wall), now answered
+> by the l8acm software crypto (L8CM blobs, master key at
+> /var/mobile/Library/l8acm.master).
+
+# E07: passcode pane arc + state-scalar consumer decode
+
 > **Read-this-first (final state, 2026-11-05):** SOLVED. The day-one
 > "Enter your passcode" demand in Settings came from
 > `LAPSPasscodePersistenceMCAdapter.hasPasscode` — the pane consults the

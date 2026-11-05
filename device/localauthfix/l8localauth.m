@@ -92,6 +92,9 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 
+#import "l8_hooking.h"
+#import "l8_acm_core.h"
+
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 #include <os/log.h>
@@ -145,24 +148,27 @@ static PasscodeSetIMP gOriginalHelperPasscodeSet;
 L8_PERSISTENCE_HOOKS
 #undef HOOK
 
+/* passcodeType probe: the pane's row rendering (Turn Passcode Off vs On)
+ * stayed passcode-era even with every hasPasscode answering NO, so the rows
+ * read passcodeType from some provider this family has not named yet. Each
+ * class gets a forwarding probe that logs the answering class and the class
+ * of the returned LACPasscode. */
+#define HOOK(cls) static id (*gOriginal_##cls##_passcodeType)(id, SEL);
+L8_PERSISTENCE_HOOKS
+#undef HOOK
+
 static const char *const kHasPasscodeEncodings[] = { "B@:", "c@:" };
+static const char *const kPasscodeTypeEncodings[] = { "@@:" };
 
-#ifndef LITER8_LOCALAUTH_MARKER
-#define LITER8_LOCALAUTH_MARKER "/private/var/jb/.liter8-localauth"
+/* The marker, its owner check and the swizzle plumbing live in l8_hooking.h
+ * so the ACM section file compiles the same helpers. kMarker is the name the
+ * self-test creates and removes the marker under. */
+#ifdef LITER8_LOCALAUTH_TEST
+static const char *const kMarker = LITER8_LOCALAUTH_MARKER;
 #endif
-/* The device marker must be root-owned; the host self-test runs unprivileged
- * and re-declares both as -D flags from build.sh. */
-#ifndef LITER8_LOCALAUTH_MARKER_UID
-#define LITER8_LOCALAUTH_MARKER_UID 0
-#endif
-
-static const char *kMarker = LITER8_LOCALAUTH_MARKER;
 
 static BOOL marker_enabled(void) {
-    struct stat st;
-    if (lstat(kMarker, &st) != 0) return NO;
-    return S_ISREG(st.st_mode) && st.st_uid == LITER8_LOCALAUTH_MARKER_UID &&
-           (st.st_mode & (S_IWGRP | S_IWOTH)) == 0;
+    return l8_marker_enabled();
 }
 
 /* The SEP-less condition, not a specific prompt: ACM could not verify the
@@ -327,12 +333,13 @@ static BOOL l8_currentPasscodeService_hasPasscode(id self, SEL sel) {
 }
 
 /* Everything else in the family forwards with a log line, so the probe names
- * the provider the pane actually consults. */
+ * the provider the pane actually consults. Dynamic strings are marked public:
+ * os_log redacts %@ otherwise, and class names are not sensitive. */
 static BOOL l8_persistence_probe(id self, SEL sel, HasPasscodeIMP original) {
     BOOL forwarded = original(self, sel);
     if (marker_enabled()) {
         os_log_error(OS_LOG_DEFAULT,
-                     "l8localauth: [%@ hasPasscode] -> %{public}s (probe, pid %d)",
+                     "l8localauth: [%{public}@ hasPasscode] -> %{public}s (probe, pid %d)",
                      NSStringFromClass([self class]), forwarded ? "YES" : "NO", getpid());
     }
     return forwarded;
@@ -344,6 +351,205 @@ static BOOL l8_persistence_probe(id self, SEL sel, HasPasscodeIMP original) {
     }
 L8_PERSISTENCE_HOOKS
 #undef HOOK
+
+#define HOOK(cls) \
+    static id l8_##cls##_passcodeType(id self, SEL sel) { \
+        id result = gOriginal_##cls##_passcodeType(self, sel); \
+        if (l8_marker_enabled()) { \
+            os_log_error(OS_LOG_DEFAULT, \
+                         "l8localauth: [%{public}@ passcodeType] -> %{public}@ (probe, pid %d)", \
+                         NSStringFromClass([self class]), \
+                         result != nil ? NSStringFromClass([result class]) : @"nil", \
+                         getpid()); \
+        } \
+        return result; \
+    }
+L8_PERSISTENCE_HOOKS
+#undef HOOK
+
+/* The DTO provider and the profile connection are the row-source suspects
+ * outside the LAPS family: LACDTODeviceInfoProvider backs the DTO policy
+ * processor (its class is defined in a binary outside the shared cache, but
+ * it registers at runtime wherever its image loads), and MCProfileConnection
+ * is the ManagedConfiguration store the MCAdapter wraps. Both are probed
+ * forwarding-only: this cycle names what the pane consults. */
+static IMP gOriginalDTOHasPasscodeSet;
+static IMP gOriginalDTOHasPasscodeSetCurrentUser;
+static IMP gOriginalMCIsPasscodeSet;
+
+static BOOL l8_dto_hasPasscodeSetForUser(id self, SEL sel, unsigned int userId) {
+    BOOL forwarded = ((BOOL (*)(id, SEL, unsigned int))gOriginalDTOHasPasscodeSet)(
+        self, sel, userId);
+    if (marker_enabled()) {
+        os_log_error(OS_LOG_DEFAULT,
+                     "l8localauth: [LACDTODeviceInfoProvider hasPasscodeSetForUser:%u] -> "
+                     "%{public}s (probe, pid %d)", userId, forwarded ? "YES" : "NO", getpid());
+    }
+    return forwarded;
+}
+
+static BOOL l8_dto_hasPasscodeSetForCurrentUser(id self, SEL sel) {
+    BOOL forwarded = ((BOOL (*)(id, SEL))gOriginalDTOHasPasscodeSetCurrentUser)(self, sel);
+    if (marker_enabled()) {
+        os_log_error(OS_LOG_DEFAULT,
+                     "l8localauth: [LACDTODeviceInfoProvider hasPasscodeSetForCurrentUser] -> "
+                     "%{public}s (probe, pid %d)", forwarded ? "YES" : "NO", getpid());
+    }
+    return forwarded;
+}
+
+static BOOL l8_mc_isPasscodeSet(id self, SEL sel) {
+    BOOL forwarded = ((BOOL (*)(id, SEL))gOriginalMCIsPasscodeSet)(self, sel);
+    if (!marker_enabled()) return forwarded;
+    /* The profile connection sits at its fail-closed default on this boot:
+     * keybagd never reports passcode state (its own AKS is broken), so
+     * managedconfiguration answers YES forever - the day-one belief every
+     * consumer (the pane's rows, the MCAdapter, the DTO stack) hangs off.
+     * NO is truthful: there is no passcode on this device. */
+    os_log_error(OS_LOG_DEFAULT,
+                 "l8localauth: [MCProfileConnection isPasscodeSet] forwarded %{public}s "
+                 "-> NO (pid %d)", forwarded ? "YES" : "NO", getpid());
+    return NO;
+}
+
+static void l8_dto_install(void);
+static void l8_ratchet_install(void);
+
+static void l8_dto_install(void) {
+    Class dto = objc_lookUpClass("LACDTODeviceInfoProvider");
+    Class mc = objc_lookUpClass("MCProfileConnection");
+    int hooked = 0;
+    static const char *const uintEncodings[] = {"B@:I", "c@:I", "B@:Q", "c@:Q"};
+    static const char *const plainEncodings[] = {"B@:", "c@:"};
+    if (dto != Nil) {
+        Method m = class_getInstanceMethod(dto, sel_registerName("hasPasscodeSetForUser:"));
+        if (l8_swap_any(m, "LACDTODeviceInfoProvider hasPasscodeSetForUser:", 3,
+                        uintEncodings, 4, (IMP)l8_dto_hasPasscodeSetForUser,
+                        &gOriginalDTOHasPasscodeSet))
+            hooked |= 1 << 0;
+        m = class_getInstanceMethod(
+            dto, sel_registerName("hasPasscodeSetForCurrentUser"));
+        if (l8_swap_any(m, "LACDTODeviceInfoProvider hasPasscodeSetForCurrentUser", 2,
+                        plainEncodings, 2, (IMP)l8_dto_hasPasscodeSetForCurrentUser,
+                        &gOriginalDTOHasPasscodeSetCurrentUser))
+            hooked |= 1 << 1;
+    }
+    if (mc != Nil) {
+        Method m = class_getInstanceMethod(mc, sel_registerName("isPasscodeSet"));
+        if (l8_swap_any(m, "MCProfileConnection isPasscodeSet", 2, plainEncodings, 2,
+                        (IMP)l8_mc_isPasscodeSet, &gOriginalMCIsPasscodeSet))
+            hooked |= 1 << 2;
+    }
+    if (hooked) {
+        os_log_error(OS_LOG_DEFAULT,
+                     "l8localauth: dto/mc probe mask 0x%x in pid %d", hooked, getpid());
+    }
+    l8_ratchet_install();
+}
+
+/* The passcode-change ratchet. The set flow gets as far as LAPasscodeChangeService
+ * ('Set Passcode') and then demands prior authentication per the change ratchet,
+ * which cannot complete on a boot with no passcode - so the screen never presents.
+ * Two levers, both forwarding-first:
+ *   1. +[LACACMHelper requirement:uint32Property:] (ACMRequirementGetProperty) - the
+ *      ratchet's state source. Without a SEP the property read fails and the
+ *      caller treats it as "no proof of recent auth". On failure the shim answers
+ *      0 ("requirement satisfied") instead of nil.
+ *   2. LARatchetManager reads - probed so the log shows what the flow consults. */
+static IMP gOriginalACMRequirement;
+static IMP gOriginalRatchetFeatureEnabled;
+static IMP gOriginalRatchetFeatureAvailable;
+static IMP gOriginalRatchetFeatureSupported;
+
+static id l8_acm_requirement(id self, SEL sel, void *requirement, unsigned int property) {
+    id result = ((id (*)(id, SEL, void *, unsigned int))gOriginalACMRequirement)(
+        self, sel, requirement, property);
+    if (result == nil && marker_enabled()) {
+        os_log_error(OS_LOG_DEFAULT,
+                     "l8localauth: ACM requirement property %u failed -> answering 0 "
+                     "(pid %d)", property, getpid());
+        return @0;
+    }
+    if (marker_enabled()) {
+        os_log_error(OS_LOG_DEFAULT,
+                     "l8localauth: ACM requirement property %u -> %@ (probe, pid %d)",
+                     property, result, getpid());
+    }
+    return result;
+}
+
+static BOOL l8_ratchet_bool_probe(id self, SEL sel, IMP original, const char *what) {
+    BOOL forwarded = ((BOOL (*)(id, SEL))original)(self, sel);
+    if (marker_enabled()) {
+        os_log_error(OS_LOG_DEFAULT,
+                     "l8localauth: [LARatchetManager %{public}s] -> %{public}s (probe, pid %d)",
+                     what, forwarded ? "YES" : "NO", getpid());
+    }
+    return forwarded;
+}
+
+static BOOL l8_ratchet_featureEnabled(id self, SEL sel) {
+    return l8_ratchet_bool_probe(self, sel, gOriginalRatchetFeatureEnabled, "isFeatureEnabled");
+}
+static BOOL l8_ratchet_featureAvailable(id self, SEL sel) {
+    return l8_ratchet_bool_probe(self, sel, gOriginalRatchetFeatureAvailable,
+                                 "isFeatureAvailable");
+}
+static BOOL l8_ratchet_featureSupported(id self, SEL sel) {
+    return l8_ratchet_bool_probe(self, sel, gOriginalRatchetFeatureSupported,
+                                 "isFeatureSupported");
+}
+
+static void l8_ratchet_install(void) {
+    int hooked = 0;
+    static const char *const plainEncodings[] = {"B@:", "c@:"};
+
+    /* The ACM requirement read: a class method taking a C requirement pointer
+     * and a property index, returning an NSNumber. The encoding embeds the
+     * struct spelling, so match on arity plus the return/self prefix and log
+     * the full letters when they do not fit. */
+    Class acmHelper = objc_lookUpClass("LACACMHelper");
+    if (acmHelper != Nil) {
+        Method m = class_getClassMethod(
+            acmHelper, sel_registerName("requirement:uint32Property:"));
+        if (m != NULL && method_getNumberOfArguments(m) == 4) {
+            char letters[160];
+            l8_encoding_letters(method_getTypeEncoding(m), letters, sizeof letters);
+            if (strncmp(letters, "@@:^", 4) == 0) {
+                gOriginalACMRequirement = method_getImplementation(m);
+                method_setImplementation(m, (IMP)l8_acm_requirement);
+                hooked |= 1 << 0;
+            } else {
+                os_log_error(OS_LOG_DEFAULT,
+                             "l8localauth: requirement:uint32Property: encoding "
+                             "%{public}s unexpected; not hooked", letters);
+            }
+        }
+    }
+
+    Class ratchet = objc_lookUpClass("LARatchetManager");
+    if (ratchet != Nil) {
+        struct { const char *sel; IMP *original; IMP replacement; const char *what; int bit; }
+        reads[] = {
+            {"isFeatureEnabled", &gOriginalRatchetFeatureEnabled,
+             (IMP)l8_ratchet_featureEnabled, "isFeatureEnabled", 1},
+            {"isFeatureAvailable", &gOriginalRatchetFeatureAvailable,
+             (IMP)l8_ratchet_featureAvailable, "isFeatureAvailable", 2},
+            {"isFeatureSupported", &gOriginalRatchetFeatureSupported,
+             (IMP)l8_ratchet_featureSupported, "isFeatureSupported", 4},
+        };
+        for (size_t i = 0; i < sizeof reads / sizeof reads[0]; i++) {
+            Method m = class_getInstanceMethod(ratchet, sel_registerName(reads[i].sel));
+            if (l8_swap_any(m, reads[i].sel, 2, plainEncodings, 2, reads[i].replacement,
+                            reads[i].original))
+                hooked |= reads[i].bit;
+        }
+    }
+    if (hooked) {
+        os_log_error(OS_LOG_DEFAULT,
+                     "l8localauth: ratchet probe mask 0x%x in pid %d", hooked, getpid());
+    }
+}
 
 /* A method's type encoding with the frame offsets stripped, leaving only the
  * type letters. The offsets are frame-layout detail and say nothing about
@@ -480,11 +686,36 @@ static void install_if_ready(void) {
     }
                 L8_PERSISTENCE_HOOKS
 #undef HOOK
+                int typeHooked = 0;
+                int t = 0;
+#define HOOK(cls) \
+    { \
+        Class c = objc_lookUpClass(#cls); \
+        if (c != Nil) { \
+            Method m = class_getInstanceMethod(c, sel_registerName("passcodeType")); \
+            if (l8_swap_any(m, #cls " passcodeType", 2, kPasscodeTypeEncodings, 1, \
+                            (IMP)l8_##cls##_passcodeType, \
+                            (IMP *)&gOriginal_##cls##_passcodeType)) \
+                typeHooked |= 1 << t; \
+        } \
+        t++; \
+    }
+                L8_PERSISTENCE_HOOKS
+#undef HOOK
                 os_log_error(OS_LOG_DEFAULT,
-                             "l8localauth: persistence mask 0x%x in pid %d", hooked, getpid());
+                             "l8localauth: persistence mask 0x%x passcodeType mask 0x%x "
+                             "in pid %d", hooked, typeHooked, getpid());
             }
         }
     }
+
+    /* Software credential crypto (l8_acm.m): the LACACMHelper class-method
+     * swizzles that answer the SEP-bound ACM encode/decode. */
+    l8_acm_install_if_ready();
+
+    /* Row-source probes: the DTO provider and the profile connection. Their
+     * images load with the pane flow, so this runs per install pass. */
+    l8_dto_install();
 
     /* LocalAuthentication side: the six LAContext hooks. */
     if (atomic_load(&gLAFInstalled)) return;
@@ -557,7 +788,7 @@ static void deferred_install(void *context) {
 static void image_loaded(const struct mach_header *header) {
     if (!is_localauth_image(header)) return;
     if (atomic_load(&gLAFInstalled) && atomic_load(&gHelperInstalled) &&
-        atomic_load(&gPersistenceInstalled)) return;
+        atomic_load(&gPersistenceInstalled) && l8_acm_installed()) return;
     dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), NULL,
                      deferred_install);
 }
@@ -567,12 +798,13 @@ static void install(void) {
     @autoreleasepool {
         install_if_ready();
         if (!atomic_load(&gLAFInstalled) || !atomic_load(&gHelperInstalled) ||
-            !atomic_load(&gPersistenceInstalled))
+            !atomic_load(&gPersistenceInstalled) || !l8_acm_installed())
             objc_addLoadImageFunc(image_loaded);
     }
 }
 #else
 #import <LocalAuthentication/LocalAuthentication.h>
+#include <stdlib.h>
 
 static const NSInteger kL8UserCancel = -2;
 
@@ -671,13 +903,51 @@ int main(void) {
             printf("note: passcode gate classes absent on this host; gate test skipped\n");
         }
 
+        // The software ACM crypto core: round-trip, seed/context binding,
+        // tamper refusal, foreign-blob pass-through.
+        uint8_t master[L8_ACM_MASTER_LEN];
+        for (int i = 0; i < L8_ACM_MASTER_LEN; i++) master[i] = (uint8_t)(i * 7 + 1);
+        const char *seed = "seed-1234";
+        const char *ctxBytes = "\x01\x02\x03\x04";
+        const char *secret = "the passcode credential bytes";
+        uint8_t *blob = NULL;
+        size_t blobLen = 0;
+        if (l8_acm_core_encode(master, seed, strlen(seed), ctxBytes, 4, secret,
+                               strlen(secret), &blob, &blobLen) != 0) return 21;
+        if (!l8_acm_core_is_our_blob(blob, blobLen)) return 22;
+        uint8_t *plain = NULL;
+        size_t plainLen = 0;
+        if (l8_acm_core_decode(master, seed, strlen(seed), ctxBytes, 4, blob, blobLen,
+                               &plain, &plainLen) != 0) return 23;
+        if (plainLen != strlen(secret) || memcmp(plain, secret, (size_t)plainLen) != 0) return 24;
+        free(plain);
+        plain = NULL;
+        blob[blobLen - 1] ^= 0x40; /* flip a MAC byte */
+        if (l8_acm_core_decode(master, seed, strlen(seed), ctxBytes, 4, blob, blobLen,
+                               &plain, &plainLen) != -3) return 25;
+        free(blob);
+        blob = NULL;
+        if (l8_acm_core_encode(master, seed, strlen(seed), ctxBytes, 4, secret,
+                               strlen(secret), &blob, &blobLen) != 0) return 26;
+        /* A different seed or a different externalized context must refuse the
+         * blob: the tag binds both. */
+        if (l8_acm_core_decode(master, "other-seed", 10, ctxBytes, 4, blob, blobLen,
+                               &plain, &plainLen) != -3) return 27;
+        if (l8_acm_core_decode(master, seed, strlen(seed), "\x09", 1, blob, blobLen,
+                               &plain, &plainLen) != -3) return 28;
+        free(blob);
+        /* Input that is not an L8CM blob is simply not ours. */
+        if (l8_acm_core_decode(master, seed, strlen(seed), ctxBytes, 4, "garbage!!", 9,
+                               &plain, &plainLen) != -2) return 29;
+
         // LAContext is linked into this test binary, so the path the
         // constructor takes must find and hook all three.
         install_if_ready();
         if (!gOriginalEvaluate || !gOriginalCanEvaluate || !gOriginalAccess) return 7;
         printf("PASS: SEP-less ACM -3 translated; cancellation, other errors and success "
                "preserved; public LAContext methods hooked (private: sync=%d "
-               "access-options=%d access-sync=%d) passcode-gate mask 0x%x\n",
+               "access-options=%d access-sync=%d) passcode-gate mask 0x%x "
+               "l8acm-core round-trip ok\n",
                gOriginalEvaluateSync != NULL, gOriginalAccessOptions != NULL,
                gOriginalAccessSync != NULL, gateMask);
         return 0;
