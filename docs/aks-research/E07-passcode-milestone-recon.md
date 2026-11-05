@@ -1,5 +1,24 @@
 # E07: passcode pane arc + state-scalar consumer decode
 
+> **Setup-flow wall reached (2026-11-05, live-debugged):** the userspace
+> layers are ALL beaten — pane shows "Turn Passcode On", the SDP ratchet
+> arm is intercepted before the coreauthd round-trip (which previously
+> CRASHED coreauthd via its SEP-payload anomaly tripwire: 'Ratchet
+> config-and-status payload anomaly' -> corpse), the credential seed is
+> served locally (deterministic, master-key-derived; the XPC seed reply
+> carried malformed objects that SIGSEGV'd the pool), and the credential
+> ENCODE succeeds in software (l8acm: 6 bytes -> 62-byte L8CM blob).
+> The remaining crash (live LLDB backtrace through iproxy; shim
+> over-release hypothesis disproven by the autorelease fix + unchanged
+> crash): an over-release of an ACM-era freed chunk during Preferences'
+> autorelease pool pop, poisoned by coreauthd's reply to the
+> credential-STORE step (`LACSContext storeCredentialData:securely:error:`
+> -> XPC to coreauthd -> ACM context store — daemon-side, SEP-bound).
+> The wall is now the daemon-side ACM credential store itself: full
+> set/verify/change requires emulating coreauthd's ACM store, not more
+> userspace crypto. That is the outcome-2 mega-arc boundary.
+> LLDB live-debug recipe: memory/liter8-lldb-recipe.md.
+
 > **Setup-flow arc (2026-11-05, in progress):** goal is passcode
 > setup / turn off / change working without a SEP. Progress so far:
 > the pane's row state derives from `MCProfileConnection isPasscodeSet`

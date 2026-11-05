@@ -52,12 +52,41 @@
 
 static IMP gOriginalEncode;
 static IMP gOriginalDecode;
+static IMP gOriginalSeedWithReply;
+static uint8_t gMasterKey[L8_ACM_MASTER_LEN];
+static BOOL gMasterLoaded = NO;
+static BOOL l8_acm_load_master(void);
+
+/* The credential-encoding seed comes over a synchronous XPC to coreauthd,
+ * which derives it from the SEP-bound ACM context. The reply payload carries
+ * a malformed object on this boot and the autorelease pop of the XPC
+ * transaction SIGSEGVs the caller (measured: crash right after the encode
+ * succeeded). Serving the seed locally keeps the reply pool clean, and a
+ * deterministic derivation keeps encode/decode HKDF-consistent. The reply
+ * block is ^(NSData *seed, NSError *error). */
+static void l8_acm_seedWithReply(id self, SEL sel, id reply) {
+    if (!l8_marker_enabled() || !l8_acm_load_master()) {
+        ((void (*)(id, SEL, id))gOriginalSeedWithReply)(self, sel, reply);
+        return;
+    }
+    uint8_t seed[32];
+    CC_SHA256(gMasterKey, L8_ACM_MASTER_LEN, seed);
+    /* Autoreleased factory object, never explicitly released: the ARC machinery
+     * across the reply block owns the lifetime, and an explicit release here
+     * over-releases once the pool also drains its reference (measured: delayed
+     * SIGSEGV in AutoreleasePoolPage::releaseUntil on the freed chunk). */
+    id seedData = [NSData dataWithBytes:seed length:sizeof seed];
+    memset(seed, 0, sizeof seed);
+    os_log_error(OS_LOG_DEFAULT, "l8acm: serving deterministic encoding seed (pid %d)",
+                 getpid());
+    if (reply != nil) {
+        ((void (^)(id, id))reply)(seedData, nil);
+    }
+}
 
 /* The master key loads once per process. A failed load is remembered as an
  * empty key so every call takes the same forward path instead of retrying
  * the filesystem per credential. */
-static uint8_t gMasterKey[L8_ACM_MASTER_LEN];
-static BOOL gMasterLoaded = NO;
 
 static BOOL l8_acm_read_random(uint8_t out[L8_ACM_MASTER_LEN]) {
     int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
@@ -261,6 +290,16 @@ void l8_acm_install_if_ready(void) {
                           "+decodeData:seed:externalizedContext:error:", 6,
                           kAcmEncodings, 1, (IMP)l8_acm_decode, &gOriginalDecode)
               << 1;
+    /* The credential-encoding seed: served locally, never fetched over XPC. */
+    Class client = objc_lookUpClass("LAClient");
+    if (client != Nil) {
+        static const char *const seedEncodings[] = {"v@:@?", "v@:@"};
+        Method seedMethod =
+            class_getInstanceMethod(client, sel_registerName("credentialEncodingSeedWithReply:"));
+        if (l8_swap_any(seedMethod, "credentialEncodingSeedWithReply:", 3, seedEncodings, 2,
+                        (IMP)l8_acm_seedWithReply, &gOriginalSeedWithReply))
+            hooked |= 1 << 2;
+    }
     os_log_error(OS_LOG_DEFAULT, "l8acm: credential crypto mask 0x%x in pid %d", hooked,
                  getpid());
 }

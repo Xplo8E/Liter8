@@ -460,6 +460,57 @@ static IMP gOriginalACMRequirement;
 static IMP gOriginalRatchetFeatureEnabled;
 static IMP gOriginalRatchetFeatureAvailable;
 static IMP gOriginalRatchetFeatureSupported;
+static IMP gOriginalDTOFeatureEnabled;
+static IMP gOriginalDTOFeatureAvailable;
+static IMP gOriginalDTOStrictModeEnabled;
+static IMP gOriginalDTOArmRequest;
+
+/* The arm request is what kills the set flow: it makes coreauthd fetch the
+ * ratchet config-and-status from the SEP interface, whose payload is invalid
+ * on a SEP-less boot - a payload anomaly tripwire then deliberately crashes
+ * coreauthd (measured: 'Ratchet config-and-status payload anomaly' -> corpse).
+ * Completing the request locally with the null ratchet state tells the change
+ * flow "no ratchet owed" and the SEP fetch never happens. The completion is a
+ * block taking (LACDTORatchetState *, NSError *). */
+static void l8_dto_armRequest(id self, SEL sel, id context, id options, id completion) {
+    if (!marker_enabled()) {
+        ((void (*)(id, SEL, id, id, id))gOriginalDTOArmRequest)(self, sel, context, options,
+                                                                 completion);
+        return;
+    }
+    /* (nil, nil): the arm's completion block feeds its first argument through
+     * +[LARatchetManager ratchetResultForResult:], which nil-checks and maps
+     * nil to a nil result - the authorizer then sees "ratchet produced no
+     * result" instead of a daemon round-trip that would crash coreauthd on
+     * the SEP payload anomaly. The composite object crashes here: the block
+     * expects the XPC reply dictionary shape (objectForKeyedSubscript:). */
+    os_log_error(OS_LOG_DEFAULT,
+                 "l8localauth: ratchet arm request intercepted -> nil result (pid %d)",
+                 getpid());
+    if (completion != nil) {
+        ((void (^)(id, id))completion)(nil, nil);
+    }
+}
+
+/* The DTO ratchet manager's feature-disabled family answers NO. SDP cannot
+ * exist on a SEP-less boot; NO everywhere means no ratchet for any consumer
+ * that consults the manager instead of its own cached verdict. One body
+ * serves the three selectors; the original is picked by name so the
+ * marker-off forward stays faithful. */
+static BOOL l8_dto_ratchet_no(id self, SEL sel) {
+    const char *name = sel_getName(sel);
+    IMP original = gOriginalDTOFeatureEnabled;
+    if (strcmp(name, "isFeatureAvailable") == 0) {
+        original = gOriginalDTOFeatureAvailable;
+    } else if (strcmp(name, "isFeatureStrictModeEnabled") == 0) {
+        original = gOriginalDTOStrictModeEnabled;
+    }
+    if (!marker_enabled()) return ((BOOL (*)(id, SEL))original)(self, sel);
+    os_log_error(OS_LOG_DEFAULT,
+                 "l8localauth: [LACDTORatchetManager %{public}s] -> NO (override, pid %d)",
+                 name, getpid());
+    return NO;
+}
 
 static id l8_acm_requirement(id self, SEL sel, void *requirement, unsigned int property) {
     id result = ((id (*)(id, SEL, void *, unsigned int))gOriginalACMRequirement)(
@@ -543,6 +594,58 @@ static void l8_ratchet_install(void) {
             if (l8_swap_any(m, reads[i].sel, 2, plainEncodings, 2, reads[i].replacement,
                             reads[i].original))
                 hooked |= reads[i].bit;
+        }
+    }
+
+    /* The DTO ratchet manager (LocalAuthenticationCore): an XPC proxy to the
+     * daemon's Stolen Device Protection state. The daemon already answers NO
+     * on this boot, yet the pane's ratchet verdict came out armed - force the
+     * feature-disabled family NO here so every consumer sees one truth, and
+     * log where the deciding classes come from (the pane framework is in no
+     * cache image and no on-disk binary we can find; the runtime knows). */
+    Class dtoRatchet = objc_lookUpClass("LACDTORatchetManager");
+    if (dtoRatchet != Nil) {
+        struct { const char *sel; IMP *original; int bit; }
+        dtoReads[] = {
+            {"isFeatureEnabled", &gOriginalDTOFeatureEnabled, 1 << 3},
+            {"isFeatureAvailable", &gOriginalDTOFeatureAvailable, 1 << 4},
+            {"isFeatureStrictModeEnabled", &gOriginalDTOStrictModeEnabled, 1 << 5},
+        };
+        for (size_t i = 0; i < sizeof dtoReads / sizeof dtoReads[0]; i++) {
+            Method m = class_getInstanceMethod(dtoRatchet, sel_registerName(dtoReads[i].sel));
+            if (l8_swap_any(m, dtoReads[i].sel, 2, plainEncodings, 2,
+                            (IMP)l8_dto_ratchet_no, dtoReads[i].original))
+                hooked |= dtoReads[i].bit;
+        }
+        /* The arm request: intercepted before the XPC to coreauthd. The
+         * completion is a block, so its encoding letter can be '?' or '@';
+         * the rest is (context object, options dictionary, completion). */
+        Method arm = class_getInstanceMethod(
+            dtoRatchet, sel_registerName("performArmRequestWithContext:options:completion:"));
+        if (arm != NULL && method_getNumberOfArguments(arm) == 5) {
+            char armLetters[160];
+            l8_encoding_letters(method_getTypeEncoding(arm), armLetters, sizeof armLetters);
+            if (strncmp(armLetters, "v@:@@@", 6) == 0) {
+                gOriginalDTOArmRequest = method_getImplementation(arm);
+                method_setImplementation(arm, (IMP)l8_dto_armRequest);
+                hooked |= 1 << 6;
+            } else {
+                os_log_error(OS_LOG_DEFAULT,
+                             "l8localauth: performArmRequest encoding %{public}s unexpected; "
+                             "not hooked", armLetters);
+            }
+        }
+    }
+    {
+        const char *classes[] = {"FAPasscodeSettingsController", "LAPasscodeChangeService",
+                                 "LACDTORatchetManager", "LACDTOPolicyProcessorEmptyPasscode",
+                                 "LACDTODeviceInfoProvider"};
+        for (size_t i = 0; i < sizeof classes / sizeof classes[0]; i++) {
+            Class c = objc_lookUpClass(classes[i]);
+            const char *image = c != Nil ? class_getImageName(c) : NULL;
+            os_log_error(OS_LOG_DEFAULT,
+                         "l8localauth: class %{public}s -> image %{public}s (pid %d)",
+                         classes[i], image != NULL ? image : "(not loaded)", getpid());
         }
     }
     if (hooked) {
