@@ -20,7 +20,7 @@ if command -v clang >/dev/null 2>&1 && [ "$(uname)" = Darwin ]; then
         -DLITER8_LOCALAUTH_MARKER="\"/tmp/l8la-sandbox/marker\"" \
         -DLITER8_LOCALAUTH_MARKER_UID="$(id -u)" \
         -framework Foundation -framework LocalAuthentication \
-        l8localauth.m l8_acm.m l8_acm_core.c -o .l8localauth-test
+        l8localauth.m l8_acm.m l8_acmpool.m l8_acmdaemon.m l8_passcodematch.m l8_acm_core.c -o .l8localauth-test
     mkdir -p /tmp/l8la-sandbox
     ./.l8localauth-test
     rm -f .l8localauth-test /tmp/l8la-sandbox/marker
@@ -30,7 +30,7 @@ xcrun clang -isysroot "$SDK" -arch arm64 -arch arm64e \
     -miphoneos-version-min=15.0 -O2 -Wall -Wextra -dynamiclib \
     -Wl,-not_for_dyld_shared_cache -install_name /var/jb/usr/lib/TweakInject/l8localauth.dylib \
     -framework Foundation \
-    l8localauth.m l8_acm.m l8_acm_core.c -o l8localauth.dylib
+    l8localauth.m l8_acm.m l8_acmpool.m l8_acmdaemon.m l8_passcodematch.m l8_acm_core.c -o l8localauth.dylib
 # The filter reaches every Objective-C process; linking LocalAuthentication
 # would load it into all of them. The hook installs when LAContext appears.
 otool -L l8localauth.dylib | grep -q LocalAuthentication \

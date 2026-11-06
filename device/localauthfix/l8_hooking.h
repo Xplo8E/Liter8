@@ -18,6 +18,32 @@
 void l8_acm_install_if_ready(void);
 BOOL l8_acm_installed(void);
 
+/* l8_acmpool.m - the daemon-side ACM pool accounting override. */
+void l8_acmpool_install_if_ready(void);
+BOOL l8_acmpool_installed(void);
+
+/* l8_acmdaemon.m - the daemon-side credential read-back server. */
+void l8_acmdaemon_install_if_ready(void);
+BOOL l8_acmdaemon_installed(void);
+
+/* The passcode-set state file: the daemon blob store (l8_acmdaemon.m, in
+ * coreauthd) writes it when a credential is stored; the client-side pane
+ * overrides read it so the UI flips to Turn Passcode Off once the shim's
+ * software store actually holds a credential. */
+#ifndef LITER8_PASSCODE_STATE
+#define LITER8_PASSCODE_STATE "/var/mobile/Library/l8acm.passcode-set"
+#endif
+
+static inline BOOL l8_passcode_state_on(void) {
+    struct stat st;
+    if (stat(LITER8_PASSCODE_STATE, &st) != 0) return NO;
+    return S_ISREG(st.st_mode) && (st.st_mode & (S_IWGRP | S_IWOTH)) == 0;
+}
+
+/* l8_passcodematch.m - the confirm-compare plaintext hook. */
+void l8_passcodematch_install_if_ready(void);
+BOOL l8_passcodematch_installed(void);
+
 #ifndef LITER8_LOCALAUTH_MARKER
 #define LITER8_LOCALAUTH_MARKER "/private/var/jb/.liter8-localauth"
 #endif

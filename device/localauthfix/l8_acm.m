@@ -174,7 +174,11 @@ static id l8_acm_secure_data(const void *bytes, size_t len) {
     id result = ((id (*)(id, SEL, const void *, unsigned long))objc_msgSend)(
         (id)secureData, sel_registerName("secureDataWithBytes:length:"), bytes,
         (unsigned long)len);
-    return result != nil ? [result autorelease] : nil;
+    /* The class factory already returns autoreleased: releasing here (MRC
+     * habit) over-releases by one, and the blob frees while still queued in
+     * the caller's autorelease pool — measured as two stale pool entries and
+     * the deferred releaseUntil crash. Return it untouched. */
+    return result;
 }
 
 static id l8_acm_encode(id self, SEL sel, id data, id seed, id ctx, id *error) {
@@ -236,11 +240,20 @@ static id l8_acm_decode(id self, SEL sel, id blobObj, id seed, id ctx, id *error
                                                                     error);
     }
     if (rc == -3) {
-        /* Mirrors the stock mapping of ACM's "credential not found" status
-         * (-7) so callers keep their existing not-found branch. */
-        os_log_error(OS_LOG_DEFAULT, "l8acm: decode refused (tag mismatch, pid %d)", getpid());
-        if (error != NULL) *error = l8_make_lac_error(-1008, @"Not found.");
-        return nil;
+        /* The blob is ours but the (seed, ctx) binding failed - the daemon
+         * side decodes with the seed its own context carries, which is not
+         * the client's encoding seed (its fetch goes to the real kernel and
+         * the contexts differ across processes). Retry master-only: the tag
+         * still authenticates the ciphertext, only the cross-process binding
+         * is dropped. Mirrors the stock -7 mapping on a genuine mismatch. */
+        rc = l8_acm_core_decode(gMasterKey, NULL, 0, NULL, 0, blobBytes, blobLen, &plain,
+                                &plainLen);
+        if (rc == -3) {
+            os_log_error(OS_LOG_DEFAULT, "l8acm: decode refused (tag mismatch, pid %d)",
+                         getpid());
+            if (error != NULL) *error = l8_make_lac_error(-1008, @"Not found.");
+            return nil;
+        }
     }
     if (rc != 0) {
         os_log_error(OS_LOG_DEFAULT, "l8acm: decode failed rc=%d (pid %d)", rc, getpid());

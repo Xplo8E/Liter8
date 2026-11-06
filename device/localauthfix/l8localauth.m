@@ -296,6 +296,12 @@ static NSError *passcode_not_set_error(void) {
 static BOOL l8_passcode_set_replacement(id self, SEL sel, unsigned int userId, id *error,
                                         PasscodeSetIMP original) {
     if (!marker_enabled()) return original(self, sel, userId, error);
+    if (l8_passcode_state_on()) {
+        os_log_error(OS_LOG_DEFAULT,
+                     "l8localauth: isPasscodeSetForUser:%u -> YES (shim store, pid %d)",
+                     userId, getpid());
+        return YES;
+    }
     os_log_error(OS_LOG_DEFAULT, "l8localauth: isPasscodeSetForUser:%u -> NO (pid %d)",
                  userId, getpid());
     if (error != NULL) *error = passcode_not_set_error();
@@ -317,19 +323,22 @@ static BOOL l8_helperPasscodeNotSet(id self, SEL sel, unsigned int userId, id *e
 static BOOL l8_mcAdapter_hasPasscode(id self, SEL sel) {
     if (!marker_enabled()) return gOriginal_LAPSPasscodePersistenceMCAdapter_hasPasscode(self, sel);
     BOOL forwarded = gOriginal_LAPSPasscodePersistenceMCAdapter_hasPasscode(self, sel);
+    BOOL state = l8_passcode_state_on();
     os_log_error(OS_LOG_DEFAULT,
-                 "l8localauth: MCAdapter hasPasscode %{public}s -> NO (pid %d)",
-                 forwarded ? "YES" : "NO", getpid());
-    return NO;
+                 "l8localauth: MCAdapter hasPasscode %{public}s -> %{public}s (pid %d)",
+                 forwarded ? "YES" : "NO", state ? "YES" : "NO", getpid());
+    return state;
 }
 
 static BOOL l8_currentPasscodeService_hasPasscode(id self, SEL sel) {
     if (!marker_enabled()) return gOriginal_LAPSCurrentPasscodeService_hasPasscode(self, sel);
     BOOL forwarded = gOriginal_LAPSCurrentPasscodeService_hasPasscode(self, sel);
+    BOOL state = l8_passcode_state_on();
     os_log_error(OS_LOG_DEFAULT,
-                 "l8localauth: CurrentPasscodeService hasPasscode %{public}s -> NO (pid %d)",
-                 forwarded ? "YES" : "NO", getpid());
-    return NO;
+                 "l8localauth: CurrentPasscodeService hasPasscode %{public}s -> %{public}s "
+                 "(pid %d)",
+                 forwarded ? "YES" : "NO", state ? "YES" : "NO", getpid());
+    return state;
 }
 
 /* Everything else in the family forwards with a log line, so the probe names
@@ -406,10 +415,56 @@ static BOOL l8_mc_isPasscodeSet(id self, SEL sel) {
      * managedconfiguration answers YES forever - the day-one belief every
      * consumer (the pane's rows, the MCAdapter, the DTO stack) hangs off.
      * NO is truthful: there is no passcode on this device. */
+    BOOL state = l8_passcode_state_on();
     os_log_error(OS_LOG_DEFAULT,
                  "l8localauth: [MCProfileConnection isPasscodeSet] forwarded %{public}s "
-                 "-> NO (pid %d)", forwarded ? "YES" : "NO", getpid());
-    return NO;
+                 "-> %{public}s (pid %d)", forwarded ? "YES" : "NO",
+                 state ? "YES" : "NO", getpid());
+    return state;
+}
+
+static IMP gOriginalMCPasscodeConstraints;
+
+/* The new-passcode strength gate: the change system's
+ * verifyNewPasscodeMeetsPlatformRequirements forwards the candidate through
+ * the MCAdapter to this profile-connection call, whose "current constraints"
+ * sit on the same fail-closed daemon state as isPasscodeSet and reject every
+ * candidate as easily guessed (measured: 000000 and strong 6-digit codes
+ * alike). With the marker on the constraints are answered as met: the shim's
+ * own software store has no policy profile to satisfy. */
+static BOOL l8_mc_passcodeConstraints(id self, SEL sel, id passcodeContext, id *outError) {
+    BOOL forwarded = ((BOOL (*)(id, SEL, id, id *))gOriginalMCPasscodeConstraints)(
+        self, sel, passcodeContext, outError);
+    if (!marker_enabled()) return forwarded;
+    os_log_error(OS_LOG_DEFAULT,
+                 "l8localauth: [MCProfileConnection passcodeContext:meetsCurrentConstraints"
+                 "OutError:] forwarded %{public}s -> YES (pid %d)",
+                 forwarded ? "YES" : "NO", getpid());
+    if (outError != NULL) *outError = nil;
+    return YES;
+}
+
+static IMP gOriginalMCChangePasscode;
+
+/* The change itself: the persistence adapter forwards
+ * changePasscode:to:enableRecovery:error: through the MCAdapter to this
+ * profile-connection call, which fails on the same fail-closed daemon state
+ * (measured: all three credentials stored, constraints passed, then the
+ * client cancels its own connection and reports PASSCODE_CHANGE_FAILED).
+ * With the marker on the change is answered as done: the credential store
+ * already holds the new credential. */
+static BOOL l8_mc_changePasscode(id self, SEL sel, id oldContext, id newContext,
+                                 BOOL skipRecovery, id *outError) {
+    BOOL forwarded = ((BOOL (*)(id, SEL, id, id, BOOL, id *))gOriginalMCChangePasscode)(
+        self, sel, oldContext, newContext, skipRecovery, outError);
+    if (!marker_enabled()) return forwarded;
+    os_log_error(OS_LOG_DEFAULT,
+                 "l8localauth: [MCProfileConnection changePasscodeWithOldPasscodeContext:"
+                 "newPasscodeContext:skipRecovery:outError:] forwarded %{public}s -> YES "
+                 "(pid %d)",
+                 forwarded ? "YES" : "NO", getpid());
+    if (outError != NULL) *outError = nil;
+    return YES;
 }
 
 static void l8_dto_install(void);
@@ -439,6 +494,25 @@ static void l8_dto_install(void) {
         if (l8_swap_any(m, "MCProfileConnection isPasscodeSet", 2, plainEncodings, 2,
                         (IMP)l8_mc_isPasscodeSet, &gOriginalMCIsPasscodeSet))
             hooked |= 1 << 2;
+        /* The new-passcode strength gate: BOOL(object, error*). */
+        static const char *const constraintEncodings[] = {"B@:@^@", "c@:@^@"};
+        m = class_getInstanceMethod(
+            mc, sel_registerName("passcodeContext:meetsCurrentConstraintsOutError:"));
+        if (l8_swap_any(m, "MCProfileConnection passcodeContext:meetsCurrentConstraints"
+                            "OutError:",
+                        4, constraintEncodings, 2, (IMP)l8_mc_passcodeConstraints,
+                        &gOriginalMCPasscodeConstraints))
+            hooked |= 1 << 3;
+        static const char *const changeEncodings[] = {"B@:@@c^@", "B@:@@B^@", "c@:@@c^@",
+                                                      "c@:@@B^@"};
+        m = class_getInstanceMethod(
+            mc, sel_registerName("changePasscodeWithOldPasscodeContext:newPasscodeContext:"
+                                 "skipRecovery:outError:"));
+        if (l8_swap_any(m, "MCProfileConnection changePasscodeWithOldPasscodeContext:"
+                           "newPasscodeContext:skipRecovery:outError:",
+                        6, changeEncodings, 4, (IMP)l8_mc_changePasscode,
+                        &gOriginalMCChangePasscode))
+            hooked |= 1 << 4;
     }
     if (hooked) {
         os_log_error(OS_LOG_DEFAULT,
@@ -816,6 +890,16 @@ static void install_if_ready(void) {
      * swizzles that answer the SEP-bound ACM encode/decode. */
     l8_acm_install_if_ready();
 
+    /* Daemon-side ACM pool accounting (l8_acmpool.m): the LACACMPoolInfo
+     * getter override that keeps the SEP-less pool from evicting the flow's
+     * own context mid-operation. */
+    l8_acmpool_install_if_ready();
+
+    /* Confirm-compare plaintext hook (l8_passcodematch.m): serves
+     * -[LAPSPasscode data] from the entered string instead of the SEP-bound
+     * extractable-password decrypt. */
+    l8_passcodematch_install_if_ready();
+
     /* Row-source probes: the DTO provider and the profile connection. Their
      * images load with the pane flow, so this runs per install pass. */
     l8_dto_install();
@@ -899,6 +983,13 @@ static void image_loaded(const struct mach_header *header) {
 __attribute__((constructor))
 static void install(void) {
     @autoreleasepool {
+        /* NSZombie for the over-release hunt: the crash under investigation is
+         * a deferred over-release of a freed chunk whose isa is unrecoverable;
+         * with zombies on, the second release aborts with the CLASS name in
+         * the corpse instead. Constructor-time setenv is the only reliable
+         * route: launchctl setenv does not reach SpringBoard-spawned apps and
+         * LLDB cannot setenv a hardened target (both measured). */
+        setenv("NSZombieEnabled", "1", 1);
         install_if_ready();
         if (!atomic_load(&gLAFInstalled) || !atomic_load(&gHelperInstalled) ||
             !atomic_load(&gPersistenceInstalled) || !l8_acm_installed())
