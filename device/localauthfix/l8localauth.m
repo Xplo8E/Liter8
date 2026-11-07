@@ -900,6 +900,11 @@ static void install_if_ready(void) {
      * extractable-password decrypt. */
     l8_passcodematch_install_if_ready();
 
+    /* Lock-screen prompt enabler (l8_lockstate.m): the MKBKeyStoreDevice
+     * lock-state fabrication that makes SpringBoard's cover sheet show the
+     * passcode entry. */
+    l8_lockstate_install_if_ready();
+
     /* Row-source probes: the DTO provider and the profile connection. Their
      * images load with the pane flow, so this runs per install pass. */
     l8_dto_install();

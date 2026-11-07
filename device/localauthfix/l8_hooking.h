@@ -44,6 +44,10 @@ static inline BOOL l8_passcode_state_on(void) {
 void l8_passcodematch_install_if_ready(void);
 BOOL l8_passcodematch_installed(void);
 
+/* l8_lockstate.m - the lock-screen passcode-prompt enabler. */
+void l8_lockstate_install_if_ready(void);
+BOOL l8_lockstate_installed(void);
+
 #ifndef LITER8_LOCALAUTH_MARKER
 #define LITER8_LOCALAUTH_MARKER "/private/var/jb/.liter8-localauth"
 #endif
