@@ -32,7 +32,7 @@ TOOLS="$BASE/../tools"
 OSLOG="$BASE/oslog"
 [ -f "$OSLOG" ] || OSLOG="$BASE/../payloads/oslog"
 
-STEPS="mounts ticket setup userland pairing wifi cellular screentime injection tweaks cache jbtools logging sileo resolv apps verify"
+STEPS="mounts ticket setup userland pairing wifi keychain cellular screentime injection tweaks cache jbtools logging sileo resolv apps verify"
 
 usage() {
     echo "steps: $STEPS"
@@ -42,6 +42,8 @@ usage() {
     echo "  userland patch and re-sign the SEP/activation daemons"
     echo "  pairing  install lockdownd, coreauthd companion guard and RemoteXPC repair"
     echo "  wifi     keep Wi-Fi network passwords across reboots without SEP"
+    echo "  keychain software system keychain: securityd wraps keychain items"
+    echo "           with software class keys (marker-gated; see E04 notes)"
     echo "  cellular unseal baseband calibration and stop CommCenter refusing a data context"
     echo "  screentime make Setup's unavailable ScreenTime requests fail fast"
     echo "  injection install launchd hook plus icon grant, disabled for first boot"
@@ -498,6 +500,22 @@ echo DONE_OK
     ok "l8wifi.dylib deployed and read back ($W_WANT)"
 }
 
+retire_wifi_library() {
+    # Remove a previously deployed l8wifi fallback (dylib, marker, patched
+    # wifid restored from .orig if present) so AirPort SecItem writes reach
+    # securityd and the keychain path owns them.
+    must_dev "
+rm -f /mnt1/usr/lib/l8wifi.dylib /mnt1/usr/lib/.liter8-wifi-credentials
+if [ -f /mnt1/usr/sbin/wifid.orig ]; then
+  cp /mnt1/usr/sbin/wifid.orig /mnt1/usr/sbin/wifid
+  chmod 0755 /mnt1/usr/sbin/wifid
+fi
+ls -la /mnt1/usr/lib/l8wifi.dylib 2>/dev/null || echo L8WIFI-GONE
+echo DONE_OK
+" "could not retire the l8wifi fallback"
+    ok "l8wifi fallback retired (keychain owns AirPort credentials)"
+}
+
 # The shim is inert without this marker, so a device whose Wi-Fi misbehaves is
 # recovered by deleting one file from SSHRD rather than by restoring a
 # re-signed binary. It sits beside the dylib on the System volume.
@@ -672,10 +690,135 @@ fi
 # and the same one the pairing fallback already makes for the lockdownd RSA
 # key.
 if wants wifi && [ "$CHECK_ONLY" = 0 ]; then
-    say "AirPort credential fallback"
-    deploy_wifi_library
-    deploy_userland_daemon wifid
-    enable_wifi_credentials
+    if wants keychain; then
+        # The keychain path supersedes the l8wifi side store: wifid's hooks
+        # would keep AirPort SecItem writes out of securityd, so the real
+        # keychain never sees them. Retire the fallback instead of enabling
+        # both (the PR body: "l8wifi is hereby retired").
+        say "AirPort credential fallback (retired: superseded by the keychain)"
+        retire_wifi_library
+    else
+        say "AirPort credential fallback"
+        deploy_wifi_library
+        deploy_userland_daemon wifid
+        enable_wifi_credentials
+    fi
+fi
+
+# ---------------------------------------------------------------- keychain
+# The software system keychain: securityd gets a dyld interposer that wraps
+# and unwraps keychain items with software class keys (marker-gated). The
+# master key persists on Data so items survive reboots. See
+# docs/aks-research/E04 and the research story document.
+deploy_keychain_library() {
+    K_LOCAL=payload/l8keychain.dylib
+    K_DEVICE=/mnt1/usr/lib/l8keychain.dylib
+    K_STAGED=$K_DEVICE.liter8-new
+    K_READBACK=payload/.work/userland/l8keychain.readback
+    mkdir -p payload/.work/userland
+
+    [ -f "$K_LOCAL" ] || die "missing $K_LOCAL; run fetch_payloads.sh keychain"
+    codesign -v "$K_LOCAL" || die "l8keychain.dylib has an invalid CodeDirectory"
+    K_WANT=$(shasum -a 256 "$K_LOCAL" | awk '{print $1}')
+    put "$K_LOCAL" "$K_STAGED"
+    must_dev "
+chmod 0755 '$K_STAGED'
+mv -f '$K_STAGED' '$K_DEVICE'
+echo DONE_OK
+" "could not activate l8keychain.dylib"
+    sh_dev "/bin/cat '$K_DEVICE'" > "$K_READBACK" \
+        || die "could not read back l8keychain.dylib"
+    K_GOT=$(shasum -a 256 "$K_READBACK" | awk '{print $1}')
+    [ "$K_GOT" = "$K_WANT" ] || die "l8keychain.dylib readback hash mismatch"
+    ok "l8keychain.dylib deployed and read back ($K_WANT)"
+}
+
+create_keychain_master() {
+    # /private/var on the device is the Data-volume ROOT (= /mnt2), so the
+    # shim's /private/var/Keychains/... is /mnt2/Keychains/... - the previous
+    # /mnt2/var/Keychains path was a double-var and the shim never saw it.
+    K_MASTER=/mnt2/Keychains/l8keychain.master
+    must_dev "
+if [ ! -s '$K_MASTER' ]; then
+  mkdir -p /mnt2/Keychains
+  dd if=/dev/urandom of='$K_MASTER.new' bs=32 count=1 2>/dev/null
+  chmod 0600 '$K_MASTER.new'
+  chown 0:0 '$K_MASTER.new'
+  mv -f '$K_MASTER.new' '$K_MASTER'
+fi
+wc -c < '$K_MASTER'
+ls -la '$K_MASTER'
+echo DONE_OK
+" "could not create the l8keychain master key"
+    ok "l8keychain master key present at the shim's path (32 bytes, 0600)"
+}
+
+create_keychain_marker() {
+    # The shim's shim_enabled() requires one of these markers; without it the
+    # weak-loaded interposer stays inert on a fresh device.
+    K_MARKER=/mnt1/usr/lib/.liter8-keychain
+    must_dev "
+touch '$K_MARKER'
+chown 0:0 '$K_MARKER'
+chmod 0600 '$K_MARKER'
+ls -la '$K_MARKER'
+echo DONE_OK
+" "could not create the l8keychain enable marker"
+    ok "l8keychain enable marker present (root 0600)"
+}
+
+# securityd is patched with LC_LOAD_WEAK_DYLIB for /usr/lib/l8keychain.dylib
+# (the same structural edit launchdhook/patch_launchd.py applies to the other
+# shim consumers), then re-signed preserving Apple's identity and
+# entitlements. The pristine binary is preserved as keybagd.orig-style
+# .orig for rollback.
+patch_securityd_for_keychain() {
+    S_NAME=securityd
+    S_DEVICE=/mnt1/usr/libexec/securityd
+    S_DIR=payload/.work/userland
+    S_PRISTINE=$S_DIR/$S_NAME.pristine
+    S_PATCHED=$S_DIR/$S_NAME.patched
+    mkdir -p "$S_DIR"
+
+    sh_dev "if [ -f '$S_DEVICE.orig' ]; then /bin/cat '$S_DEVICE.orig'; else /bin/cat '$S_DEVICE'; fi" \
+        > "$S_PRISTINE" || die "could not read pristine securityd"
+    [ -s "$S_PRISTINE" ] || die "pristine securityd is empty"
+
+    python3 launchdhook/patch_launchd.py "$S_PRISTINE" \
+        -o "$S_PATCHED" --path /usr/lib/l8keychain.dylib --apply \
+        || die "could not append the weak l8keychain load command"
+
+    # Re-sign preserving Apple's identity and entitlements.
+    IDENT=$(/usr/bin/codesign -d --verbose=4 "$S_PRISTINE" 2>&1 | sed -n 's/^Identifier=//p' | head -1)
+    [ -n "$IDENT" ] || die "codesign did not report securityd's identifier"
+    /usr/bin/codesign -d --entitlements "$S_DIR/securityd.entitlements" --xml "$S_PRISTINE" >/dev/null 2>&1 \
+        || die "could not read securityd entitlements"
+    "$LDID" -I"$IDENT" -S"$S_DIR/securityd.entitlements" -Cadhoc "$S_PATCHED" \
+        || die "could not re-sign patched securityd"
+    /usr/bin/codesign -v "$S_PATCHED" >/dev/null 2>&1 \
+        || die "patched securityd signature verification failed"
+
+    S_STAGED=$S_DEVICE.liter8-new
+    S_WANT=$(shasum -a 256 "$S_PATCHED" | awk '{print $1}')
+    put "$S_PATCHED" "$S_STAGED"
+    must_dev "
+[ -f '$S_DEVICE.orig' ] || cp '$S_DEVICE' '$S_DEVICE.orig'
+chmod 0755 '$S_STAGED'
+mv -f '$S_STAGED' '$S_DEVICE'
+echo DONE_OK
+" "could not activate patched securityd"
+    sh_dev "/bin/cat '$S_DEVICE'" > "$S_DIR/securityd.readback" \
+        || die "could not read back securityd"
+    S_GOT=$(shasum -a 256 "$S_DIR/securityd.readback" | awk '{print $1}')
+    [ "$S_GOT" = "$S_WANT" ] || die "securityd readback hash mismatch"
+    ok "securityd patched, deployed and read back ($S_WANT)"
+}
+if wants keychain && [ "$CHECK_ONLY" = 0 ]; then
+    say "software system keychain"
+    deploy_keychain_library
+    patch_securityd_for_keychain
+    create_keychain_master
+    create_keychain_marker
 fi
 
 # -------------------------------------------------------------- cellular
@@ -1783,6 +1926,10 @@ note "FDR sik bypass marker" "$(required_marker /mnt1/usr/lib/.liter8-fdr-sik-by
 note "pairing fallback marker" "$(required_marker /mnt2/root/Library/Lockdown/.liter8-pairing-fallback)"
 note "RemoteXPC fallback marker" "$(required_marker /mnt1/usr/lib/.liter8-remotepairing-fallback)"
 note "AirPort credential marker" "$(required_marker /mnt1/usr/lib/.liter8-wifi-credentials)"
+note "l8keychain dylib" "$(test -f /mnt1/usr/lib/l8keychain.dylib && echo present || echo MISSING)"
+note "l8keychain enable marker" "$(required_marker /mnt1/usr/lib/.liter8-keychain)"
+note "securityd weak load" "$(must_dev "lipo -thin arm64 -output /dev/null /mnt1/usr/libexec/securityd 2>/dev/null; strings /mnt1/usr/libexec/securityd | grep -q 'l8keychain.dylib' && echo present || echo MISSING" 2>/dev/null || echo CHECK-FAILED)"
+note "l8keychain master" "$(test -s /mnt2/Keychains/l8keychain.master && echo present || echo MISSING)"
 note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_pairing_key.der ] && echo generated || echo pending' | tr -d '\r')"
 
 # The os_log reader. Its state is the file's own hash, because the binary is
