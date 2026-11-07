@@ -1911,7 +1911,19 @@ verify_userland_patch ctkd \
     /mnt1/System/Library/Frameworks/CryptoTokenKit.framework/ctkd
 verify_userland_patch lockdownd /mnt1/usr/libexec/lockdownd
 verify_userland_patch remotepairingdeviced /mnt1/usr/libexec/remotepairingdeviced
-verify_userland_patch wifid /mnt1/usr/sbin/wifid
+if must_dev "test -f /mnt1/usr/lib/.liter8-keychain && ! test -f /mnt1/usr/lib/l8wifi.dylib; echo \$?" >/dev/null 2>&1 || false; then
+    :
+fi
+# The keychain path retires the l8wifi fallback (the wifi step handles this);
+# the verify then expects the pieces absent instead of failing on them.
+W_RETIRED=$(must_dev "if test -f /mnt1/usr/lib/.liter8-keychain && ! test -f /mnt1/usr/lib/l8wifi.dylib; then echo yes; else echo no; fi" "could not query the keychain/wifi state")
+if [ "$W_RETIRED" = "yes" ]; then
+    note "AirPort credential fallback" "retired - keychain owns credentials"
+    note "AirPort credential marker" "retired"
+else
+    verify_userland_patch wifid /mnt1/usr/sbin/wifid
+    note "AirPort credential marker" "$(required_marker /mnt1/usr/lib/.liter8-wifi-credentials)"
+fi
 verify_userland_patch CommCenter \
     /mnt1/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter
 
