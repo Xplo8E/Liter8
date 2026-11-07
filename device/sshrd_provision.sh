@@ -782,9 +782,9 @@ chmod 0755 '$S_STAGED'
 mv -f '$S_STAGED' '$S_DEVICE'
 echo DONE_OK
 " "could not activate patched securityd"
-    sh_dev "/bin/cat '$S_DEVICE'" > "$WORK/securityd.readback" \
+    sh_dev "/bin/cat '$S_DEVICE'" > "$S_DIR/securityd.readback" \
         || die "could not read back securityd"
-    S_GOT=$(shasum -a 256 "$WORK/securityd.readback" | awk '{print $1}')
+    S_GOT=$(shasum -a 256 "$S_DIR/securityd.readback" | awk '{print $1}')
     [ "$S_GOT" = "$S_WANT" ] || die "securityd readback hash mismatch"
     ok "securityd patched, deployed and read back ($S_WANT)"
 }
