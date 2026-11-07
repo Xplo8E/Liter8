@@ -47,11 +47,14 @@ CFMutableDataRef destination, use_backup flag, CFErrorRef out).
 
 ## 3. The keychain milestone (l8keychain v2)
 
-**Design.** A dyld interposer loaded into securityd intercepts five
-`aks_*` client functions (create/unwrap/save/configuration/unload) and
-implements software keybag semantics: item class keys are random per bag,
-wrapped with keys derived from a persisted master key
-(PBKDF2-HMAC-SHA256 + AES-256-CTR + HMAC-SHA256), the same
+**Design.** A dyld interposer loaded into securityd intercepts two
+`aks_*` client functions (`aks_wrap_key`/`aks_unwrap_key` — the boundary
+where item class keys meet the keybag) and implements software keybag
+semantics for the served classes: item bytes are sealed as
+`L8KC|ver|class|nonce|ct|HMAC-SHA256` blobs with per-class keys derived
+from a persisted 32-byte master key (HMAC-SHA256 over the master and the
+class label; blobs carry AES-256-CTR ciphertext and an HMAC-SHA256 tag),
+the same
 explicit "protects nothing against the device operator" stance as the
 Wi-Fi credential fallback that preceded it. Marker-gated: delete one file
 and the shim is fully inert.

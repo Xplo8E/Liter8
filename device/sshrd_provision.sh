@@ -500,6 +500,22 @@ echo DONE_OK
     ok "l8wifi.dylib deployed and read back ($W_WANT)"
 }
 
+retire_wifi_library() {
+    # Remove a previously deployed l8wifi fallback (dylib, marker, patched
+    # wifid restored from .orig if present) so AirPort SecItem writes reach
+    # securityd and the keychain path owns them.
+    must_dev "
+rm -f /mnt1/usr/lib/l8wifi.dylib /mnt1/usr/lib/.liter8-wifi-credentials
+if [ -f /mnt1/usr/sbin/wifid.orig ]; then
+  cp /mnt1/usr/sbin/wifid.orig /mnt1/usr/sbin/wifid
+  chmod 0755 /mnt1/usr/sbin/wifid
+fi
+ls -la /mnt1/usr/lib/l8wifi.dylib 2>/dev/null || echo L8WIFI-GONE
+echo DONE_OK
+" "could not retire the l8wifi fallback"
+    ok "l8wifi fallback retired (keychain owns AirPort credentials)"
+}
+
 # The shim is inert without this marker, so a device whose Wi-Fi misbehaves is
 # recovered by deleting one file from SSHRD rather than by restoring a
 # re-signed binary. It sits beside the dylib on the System volume.
@@ -674,10 +690,19 @@ fi
 # and the same one the pairing fallback already makes for the lockdownd RSA
 # key.
 if wants wifi && [ "$CHECK_ONLY" = 0 ]; then
-    say "AirPort credential fallback"
-    deploy_wifi_library
-    deploy_userland_daemon wifid
-    enable_wifi_credentials
+    if wants keychain; then
+        # The keychain path supersedes the l8wifi side store: wifid's hooks
+        # would keep AirPort SecItem writes out of securityd, so the real
+        # keychain never sees them. Retire the fallback instead of enabling
+        # both (the PR body: "l8wifi is hereby retired").
+        say "AirPort credential fallback (retired: superseded by the keychain)"
+        retire_wifi_library
+    else
+        say "AirPort credential fallback"
+        deploy_wifi_library
+        deploy_userland_daemon wifid
+        enable_wifi_credentials
+    fi
 fi
 
 # ---------------------------------------------------------------- keychain
@@ -1901,6 +1926,10 @@ note "FDR sik bypass marker" "$(required_marker /mnt1/usr/lib/.liter8-fdr-sik-by
 note "pairing fallback marker" "$(required_marker /mnt2/root/Library/Lockdown/.liter8-pairing-fallback)"
 note "RemoteXPC fallback marker" "$(required_marker /mnt1/usr/lib/.liter8-remotepairing-fallback)"
 note "AirPort credential marker" "$(required_marker /mnt1/usr/lib/.liter8-wifi-credentials)"
+note "l8keychain dylib" "$(test -f /mnt1/usr/lib/l8keychain.dylib && echo present || echo MISSING)"
+note "l8keychain enable marker" "$(required_marker /mnt1/usr/lib/.liter8-keychain)"
+note "securityd weak load" "$(must_dev "lipo -thin arm64 -output /dev/null /mnt1/usr/libexec/securityd 2>/dev/null; strings /mnt1/usr/libexec/securityd | grep -q 'l8keychain.dylib' && echo present || echo MISSING" 2>/dev/null || echo CHECK-FAILED)"
+note "l8keychain master" "$(test -s /mnt2/Keychains/l8keychain.master && echo present || echo MISSING)"
 note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_pairing_key.der ] && echo generated || echo pending' | tr -d '\r')"
 
 # The os_log reader. Its state is the file's own hash, because the binary is
