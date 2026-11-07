@@ -409,6 +409,18 @@ static kern_return_t l8_aks_wrap_key(const void *source, int source_len,
     }
 
     size_t blob_len = blob_length_for((size_t)source_len);
+    /* Capacity gate before the final memcpy: the L8KC envelope is
+     * source_len + 56 bytes and the request gate only checked dest_len for
+     * non-NULL. A caller that sizes its buffer for the raw source would be
+     * overrun here. Pass through so the write fails honestly instead of
+     * corrupting the caller. */
+    if (*dest_len < (int)blob_len) {
+        syslog(LOG_ERR,
+               "l8keychain: wrap destination too small for class %d (%d < %zu)",
+               keyclass, *dest_len, blob_len);
+        return aks_wrap_key(source, source_len, keyclass, keybag, out_buf,
+                            dest_len, actual_class);
+    }
     uint8_t *blob = malloc(blob_len);
     if (blob == NULL)
         return aks_wrap_key(source, source_len, keyclass, keybag, out_buf,

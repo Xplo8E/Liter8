@@ -108,6 +108,15 @@ int main(void) {
     check("wrap carries L8KC magic", out_len > 24 && memcmp(out, "L8KC", 4) == 0);
     check("wrap class byte", out[5] == 6);
 
+    /* Capacity gate: a destination smaller than the L8KC envelope
+     * (source_len + 56) must pass through rather than overrun the caller's
+     * buffer - the request gate only checks dest_len for non-NULL. */
+    probe_calls = 0;
+    int small_len = 8;
+    rc = l8_aks_wrap_key(secret, 32, 6, 0, out, &small_len, &actual_class);
+    check("undersized wrap destination passes through",
+          probe_calls == 1 && (unsigned)rc == 0xe00002f0u && small_len == 8);
+
     unsigned char back[256];
     int back_len = (int)sizeof(back);
     rc = l8_aks_unwrap_key(out, out_len, 6, 0, back, &back_len);

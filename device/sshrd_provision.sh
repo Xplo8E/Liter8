@@ -709,27 +709,38 @@ echo DONE_OK
 }
 
 create_keychain_master() {
-    K_MASTER=/mnt2/var/Keychains/l8keychain.master
+    # /private/var on the device is the Data-volume ROOT (= /mnt2), so the
+    # shim's /private/var/Keychains/... is /mnt2/Keychains/... - the previous
+    # /mnt2/var/Keychains path was a double-var and the shim never saw it.
+    K_MASTER=/mnt2/Keychains/l8keychain.master
     must_dev "
 if [ ! -s '$K_MASTER' ]; then
-  mkdir -p /mnt2/var/Keychains
+  mkdir -p /mnt2/Keychains
   dd if=/dev/urandom of='$K_MASTER.new' bs=32 count=1 2>/dev/null
   chmod 0600 '$K_MASTER.new'
   chown 0:0 '$K_MASTER.new'
   mv -f '$K_MASTER.new' '$K_MASTER'
 fi
+wc -c < '$K_MASTER'
 ls -la '$K_MASTER'
 echo DONE_OK
 " "could not create the l8keychain master key"
-    ok "l8keychain master key present (32 bytes, 0600)"
+    ok "l8keychain master key present at the shim's path (32 bytes, 0600)"
 }
 
-if wants keychain && [ "$CHECK_ONLY" = 0 ]; then
-    say "software system keychain"
-    deploy_keychain_library
-    patch_securityd_for_keychain
-    create_keychain_master
-fi
+create_keychain_marker() {
+    # The shim's shim_enabled() requires one of these markers; without it the
+    # weak-loaded interposer stays inert on a fresh device.
+    K_MARKER=/mnt1/usr/lib/.liter8-keychain
+    must_dev "
+touch '$K_MARKER'
+chown 0:0 '$K_MARKER'
+chmod 0600 '$K_MARKER'
+ls -la '$K_MARKER'
+echo DONE_OK
+" "could not create the l8keychain enable marker"
+    ok "l8keychain enable marker present (root 0600)"
+}
 
 # securityd is patched with LC_LOAD_WEAK_DYLIB for /usr/lib/l8keychain.dylib
 # (the same structural edit launchdhook/patch_launchd.py applies to the other
@@ -777,6 +788,13 @@ echo DONE_OK
     [ "$S_GOT" = "$S_WANT" ] || die "securityd readback hash mismatch"
     ok "securityd patched, deployed and read back ($S_WANT)"
 }
+if wants keychain && [ "$CHECK_ONLY" = 0 ]; then
+    say "software system keychain"
+    deploy_keychain_library
+    patch_securityd_for_keychain
+    create_keychain_master
+    create_keychain_marker
+fi
 
 # -------------------------------------------------------------- cellular
 # Baseband calibration is sealed to an AP identity key this device cannot
