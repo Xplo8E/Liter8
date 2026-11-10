@@ -479,8 +479,8 @@ final class FirmwareProfileTests: XCTestCase {
         XCTAssertEqual(claiming.map(\.id), [profile.id])
     }
 
-    /// The three 27.3 beta 1 device entries must stay experimental and keep
-    /// their own measured oracles.
+    /// The 27.3 beta 1 device entries: n104 reviewed after its own device
+    /// run, the Pro boards still experimental, all with measured oracles.
     ///
     /// Measured, not carried: the daemon count moved (737, against 732 on
     /// 24B119), the Setup count held at 64, `/sbin/launchd` is byte-identical
@@ -490,11 +490,11 @@ final class FirmwareProfileTests: XCTestCase {
     /// rather than one entry copied and edited. The digests are pinned
     /// verbatim so a re-measurement that drifts fails loudly here instead of
     /// failing at provision time on the device.
-    func testTwoSevenThreeDeviceEntriesAreExperimentalAndMeasured() throws {
+    func testTwoSevenThreeDeviceEntriesAreMeasuredAndReviewedOnN104() throws {
         let n104 = try XCTUnwrap(
             DeviceWorkflowRegistry.profiles.first { $0.id == "iphone12,1-n104ap-24C5037i" }
         )
-        XCTAssertEqual(n104.validationState, .experimental)
+        XCTAssertEqual(n104.validationState, .reviewed)
         XCTAssertEqual(n104.productVersion, "27.3")
         XCTAssertEqual(n104.build, "24C5037i")
         XCTAssertEqual(n104.launchdSHA256,

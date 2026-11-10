@@ -698,17 +698,19 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: []
             )
         ),
-        // 27.3 beta 1, resolver-verified and measured, with no device run on
-        // any board. Everything below was exercised on the host only.
+        // 27.3 beta 1, resolver-verified, measured, and device-validated on an
+        // iPhone 11 on 2026-11-09: erase restore, SSHRD provisioning, normal
+        // boot, repeat boot, Procursus finalization and setup-debugger all
+        // passed. The Pro boards below have had no device run.
         //
-        // What was exercised: `fw prepare` on both shipped IPSWs, `survey`
-        // (0 failed) on both extracted trees, `acm-probe` of
-        // ios273b1-24C5037i-acm-v1 against both kernelcaches (24/26 exact on
-        // each, only the two scored entries ambiguous), `devicetree` for both
-        // plans on all three boards (the trees are the same sizes as
-        // 24B119's, 234920/237068/240096 bytes, and take the same +44/-36
-        // edits), `asr` (1) and `restored-fdr` (1) against this build's own
-        // restore ramdisk, and `coreauthd` (1), `ctkd` (2),
+        // What was exercised on the host, before the device run: `fw prepare`
+        // on both shipped IPSWs, `survey` (0 failed) on both extracted trees,
+        // `acm-probe` of ios273b1-24C5037i-acm-v1 against both kernelcaches
+        // (24/26 exact on each, only the two scored entries ambiguous),
+        // `devicetree` for both plans on all three boards (the trees are the
+        // same sizes as 24B119's, 234920/237068/240096 bytes, and take the
+        // same +44/-36 edits), `asr` (1) and `restored-fdr` (1) against this
+        // build's own restore ramdisk, and `coreauthd` (1), `ctkd` (2),
         // `mobileactivationd` (5) and `commcenter` (3) against each board's
         // mounted root filesystem. Every rootfs userland record lands on the
         // same offset in both volumes, because the executables are
@@ -726,18 +728,32 @@ public enum DeviceWorkflowRegistry {
         //
         // The OS volumes are named RaveCSeed24C5037i.N104DeveloperOS and
         // RaveCSeed24C5037i.D421D431DeveloperOS. Prior builds shipped
-        // plain `...N104OS`; this seed's OS volume is a Developer image.
-        // Whether that is a beta-phase naming artifact or changes restore
-        // behaviour is unknown until a device run.
+        // plain `...N104OS`. The device run answered the open question: the
+        // Developer image name is cosmetic. The restore, both boots and
+        // provisioning behaved exactly as on prior builds' plain N104OS
+        // volumes.
         //
-        // Not exercised, and deliberately not claimed: every device action.
-        // No restore, no SSHRD, no boot of any kind has happened on this
-        // build. `skipDisplayInitialization` is carried for n104 because it
-        // is that board's display behaviour on all five earlier device-run
-        // builds, not because this build has shown anything on screen; tfp0
-        // stays off for the same reason the Pro entries keep it off - the
-        // kernel plan resolves (boot-tfp0, 140 records) but the libkrw
-        // runtime evidence is per-build and this build has none.
+        // Repeat boot is recorded separately because a first boot that works
+        // and a second that does not is a failure mode this device has
+        // produced before. The evidence is /var/mobile/jbboot.log on the
+        // Data volume the erase restore wiped: it carries two
+        // `=== jbboot start ===` blocks, and the second adds injection
+        // auto-enable and a SpringBoard restart so its tweaks load. The
+        // booted kernel reports xnu-13432.60.57~17/PATCHED_ARM64_T8030,
+        // which is both this profile's fingerprint and proof the kernel
+        // identity records applied on this build.
+        //
+        // `finalize --check` reported complete on both boots: root SSH,
+        // per-device Dropbear host keys, bootstrap shells, ElleKit 1.2, the
+        // re-sign hook, injection auto-enable, the one-time System
+        // application registration, persona 99, the icon read token and a
+        // running PosterBoard repair watcher. First-boot load average ran
+        // 283-338 in the first minutes - the same boot impulse earlier
+        // builds showed - and settled to 2.5 after 51 minutes of uptime.
+        //
+        // tfp0 stays off: the kernel plan resolves (boot-tfp0, 140 records)
+        // but no libkrw runtime evidence exists on this build yet, and
+        // setup-debugger's debugserver is not that evidence.
         DeviceWorkflowProfile(
             id: "iphone12,1-n104ap-24C5037i",
             productVersion: "27.3",
@@ -747,7 +763,7 @@ public enum DeviceWorkflowRegistry {
             chipID: 0x8030,
             boardID: 0x04,
             extractedDirectoryName: "iPhone12,1_27.3_24C5037i_Restore",
-            validationState: .experimental,
+            validationState: .reviewed,
             launchdSHA256: "4e338d7aef1a1f77572dec5ef14eb64987080b1d22f5e0a580536cfd645bd078",
             launchdCacheSHA256: "0396c1683b660728c24b16ab599989d9a87b1ac4d12cd9273dfe1efcc7ac9e75",
             launchdCacheDaemonCount: 737,
