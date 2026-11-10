@@ -133,6 +133,7 @@ final class FirmwareProfileTests: XCTestCase {
             "iphone12,1-n104ap-24B5089g",
             "iphone12,1-n104ap-24B5099f",
             "iphone12,1-n104ap-24B5110a",
+            "iphone12,1-n104ap-24C5037i",
         ])
     }
 
@@ -507,7 +508,10 @@ final class FirmwareProfileTests: XCTestCase {
         // stays off until this build has runtime evidence of its own.
         XCTAssertEqual(n104.bootPlan.normalIBSSAdditionalPlans, [.skipDisplayInitialization])
         XCTAssertEqual(n104.bootPlan.restoreIBSSAdditionalPlans, [.skipDisplayInitialization])
-        XCTAssertFalse(n104.bootPlan.supportsTFP0KernelTaskPort)
+        // On with runtime evidence: kernel task port, live slide via the
+        // cave, kernel-map write/read round trip, and a patched byte read
+        // back at slide+unslid. See docs/runs/IOS_273_24C5037i_TFP0.md.
+        XCTAssertTrue(n104.bootPlan.supportsTFP0KernelTaskPort)
 
         let pro = DeviceWorkflowRegistry.profiles.filter {
             $0.build == "24C5037i" && $0.deviceClass.hasPrefix("d4")

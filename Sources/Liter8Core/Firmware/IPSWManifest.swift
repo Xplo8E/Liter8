@@ -751,9 +751,17 @@ public enum DeviceWorkflowRegistry {
         // 283-338 in the first minutes - the same boot impulse earlier
         // builds showed - and settled to 2.5 after 51 minutes of uptime.
         //
-        // tfp0 stays off: the kernel plan resolves (boot-tfp0, 140 records)
-        // but no libkrw runtime evidence exists on this build yet, and
-        // setup-debugger's debugserver is not that evidence.
+        // tfp0 has runtime evidence on this build (2026-11-10, two boots of
+        // the same artifact set): task_for_pid(0) returns a usable kernel
+        // task port, the slide cave reports the live slide to the kernel task
+        // alone while self and launchd keep their real dyld info, a kernel-map
+        // scratch allocation round-trips write and read exactly, and the
+        // boot-jit exception-port byte reads back patched at slide+unslid in
+        // __DATA_CONST. Slides 0x45418000 and 0x44174000 across the two boots
+        // show the shim reads the live global. One 27.3-specific finding,
+        // recorded in docs/runs/IOS_273_24C5037i_TFP0.md: mach_vm_read over
+        // execute-only kernel text freezes the machine - only data-region
+        // readback is safe, unlike 27.2.
         DeviceWorkflowProfile(
             id: "iphone12,1-n104ap-24C5037i",
             productVersion: "27.3",
@@ -771,7 +779,7 @@ public enum DeviceWorkflowRegistry {
             bootPlan: DeviceBootPlan(
                 normalIBSSAdditionalPlans: [.skipDisplayInitialization],
                 restoreIBSSAdditionalPlans: [.skipDisplayInitialization],
-                supportsTFP0KernelTaskPort: false
+                supportsTFP0KernelTaskPort: true
             )
         ),
         DeviceWorkflowProfile(
