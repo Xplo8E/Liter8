@@ -53,3 +53,7 @@ device/personafix/l8persona.dylib
 device/payload/
 .run-ios272b4/
 .ios272r/
+
+# 27.3 beta 1 work dirs
+.ios273/
+.ios273-pro/

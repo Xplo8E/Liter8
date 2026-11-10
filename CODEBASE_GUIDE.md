@@ -58,8 +58,8 @@ Swift decides, Python plumbs. Swift picks the firmware profile, parses the binar
 
 ## Supported builds
 
-Fourteen `DeviceWorkflowProfile` entries. Eight are iPhone 11 `n104ap`, and all
-eight are `.reviewed`:
+Seventeen `DeviceWorkflowProfile` entries. Eight are iPhone 11 `n104ap`, and
+seven of those eight are `.reviewed`:
 
 | Build | Version | State |
 | --- | --- | --- |
@@ -72,12 +72,16 @@ eight are `.reviewed`:
 | `24B5110a` | 27.2 beta 4 | reviewed |
 | `24B119` | 27.2 | reviewed |
 
-The remaining six are `.experimental` entries for `d421ap` and `d431ap` on
-`24A437`, `24A446` and `24B119`, which have no device run on those boards.
+The eighth, `24C5037i` (27.3 beta 1), is `.experimental`: oracles measured, no
+device run yet.
+
+The remaining nine are `.experimental` entries for `d421ap` and `d431ap` on
+`24A437`, `24A446`, `24B119` and `24C5037i`, which have no device run on those
+boards.
 
 `supports()` requires an exact build match, so anything else fails at `fw prepare`.
 
-Resolver profiles are a separate list and do not line up one to one. `ios27-24A435-n104ap` covers `24A435`, `24A437` and `24A446` because the kernels share an XNU fingerprint, and `ios272-24B119-n104ap` covers all three 24B119 boards for the same reason: `kernelcache.release.iphone12` and `kernelcache.release.iphone12b` are different artifacts that embed the same XNU string, so they cannot be given separate profiles without making `detect` ambiguous. `ios27-beta2-24A5370h-d421ap` exists only as a credential-manager signature reference for `d421ap`/`d431ap`, with no workflow behind it. A resolver profile existing says nothing about whether the device workflow is supported.
+Resolver profiles are a separate list and do not line up one to one. `ios27-24A435-n104ap` covers `24A435`, `24A437` and `24A446` because the kernels share an XNU fingerprint, and `ios272-24B119-n104ap` covers all three 24B119 boards for the same reason: `kernelcache.release.iphone12` and `kernelcache.release.iphone12b` are different artifacts that embed the same XNU string, so they cannot be given separate profiles without making `detect` ambiguous. `ios273b1-24C5037i-n104ap` is the same situation again for 27.3 beta 1: both kernelcaches were measured (every applicable plan resolves on each), the full userland set resolves against each board's own ramdisk and root filesystem, and experimental device workflow entries exist behind `--experimental`, but no device has run the build. `ios27-beta2-24A5370h-d421ap` exists only as a credential-manager signature reference for `d421ap`/`d431ap`, with no workflow behind it. A resolver profile existing says nothing about whether the device workflow is supported.
 
 `.experimental` means the build's exact-build data is recorded and every plan
 resolves, but no restore or boot has been run on that board. `fw prepare` and

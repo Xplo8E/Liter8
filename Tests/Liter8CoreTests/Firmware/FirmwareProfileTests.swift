@@ -108,7 +108,7 @@ final class FirmwareProfileTests: XCTestCase {
         XCTAssertFalse(release.covers(build: "24A5390f"))
     }
 
-    func testTFP0SupportCoversIPhone11From270Through272() {
+    func testTFP0SupportCoversIPhone11From270Through273() {
         let resolverBuilds = KernelResolverProfileRegistry.profiles
             .filter { $0.variants(for: KernelTFP0Resolver.variantKey) != nil }
             .flatMap(\.builds)
@@ -116,6 +116,7 @@ final class FirmwareProfileTests: XCTestCase {
         XCTAssertEqual(resolverBuilds, [
             "24A435", "24A437", "24A446",
             "24B119", "24B5084k", "24B5089g", "24B5099f", "24B5110a",
+            "24C5037i",
         ])
 
         let enabledProfiles = DeviceWorkflowRegistry.profiles
@@ -414,5 +415,134 @@ final class FirmwareProfileTests: XCTestCase {
 
         let claiming = KernelResolverProfileRegistry.profiles.filter { $0.covers(build: "24B119") }
         XCTAssertEqual(claiming.map(\.id), [profile.id])
+    }
+
+    /// 27.3 beta 1 must name its own ACM family, for the same reason every
+    /// 27.2 seed does: the shapes match the previous build and the raw words
+    /// differ in the masked fields, so a shared family would work today while
+    /// letting one build's addresses stand in for the other's.
+    func testTwoSevenThreeBetaOneNamesItsOwnACMFamily() throws {
+        let profile = try XCTUnwrap(
+            KernelResolverProfileRegistry.profiles.first { $0.covers(build: "24C5037i") },
+            "no kernel profile covers 27.3 beta 1"
+        )
+        let variants = try XCTUnwrap(
+            profile.variants(for: KernelCredentialManagerResolver.name)
+        )
+        let family = try XCTUnwrap(
+            KernelCredentialManagerSignatures.variant(named: variants.signature),
+            "24C5037i names an unregistered ACM family"
+        )
+        XCTAssertEqual(family.id, variants.signature)
+        XCTAssertEqual(variants.signature, "ios273b1-24C5037i-acm-v1")
+        XCTAssertEqual(variants.payload, "acm-return-success-v1")
+        XCTAssertEqual(variants.support, .supported)
+
+        // The scored pair and the method order are load-bearing: the scored
+        // entries are ranked inside the interval their neighbours establish,
+        // so a family that moved or rescored them would silently patch
+        // another function.
+        let reference = try XCTUnwrap(
+            KernelCredentialManagerSignatures.variant(named: "ios272-24B119-acm-v1")
+        )
+        XCTAssertEqual(family.functions.map(\.name), reference.functions.map(\.name))
+        XCTAssertEqual(
+            family.functions.filter(\.needsScoring).map(\.name),
+            ["updateAnalytics", "unlockItem"]
+        )
+        XCTAssertEqual(family.functions.map(\.needsScoring), reference.functions.map(\.needsScoring))
+        XCTAssertEqual(
+            family.functions.map { $0.pattern.values.count },
+            reference.functions.map { $0.pattern.values.count }
+        )
+    }
+
+    /// The 27.3 beta 1 kernel profile covers all three boards under one
+    /// fingerprint, measured from both shipped IPSWs.
+    ///
+    /// `kernelcache.release.iphone12b` (iPhone 11) and
+    /// `kernelcache.release.iphone12` (11 Pro / Pro Max) are different
+    /// artifacts embedding the same XNU string, so they cannot be separate
+    /// profiles without making `detect` ambiguous.
+    func testTwoSevenThreeBetaOneKernelProfileCoversAllThreeBoards() throws {
+        let profile = try XCTUnwrap(
+            KernelResolverProfileRegistry.profiles.first { $0.id == "ios273b1-24C5037i-n104ap" }
+        )
+        XCTAssertEqual(profile.boards.sorted(), ["d421ap", "d431ap", "n104ap"])
+        XCTAssertEqual(profile.builds, ["24C5037i"])
+        XCTAssertEqual(
+            profile.embeddedFingerprint,
+            "xnu-13432.60.57~17/RELEASE_ARM64_T8030"
+        )
+
+        let claiming = KernelResolverProfileRegistry.profiles.filter { $0.covers(build: "24C5037i") }
+        XCTAssertEqual(claiming.map(\.id), [profile.id])
+    }
+
+    /// The three 27.3 beta 1 device entries must stay experimental and keep
+    /// their own measured oracles.
+    ///
+    /// Measured, not carried: the daemon count moved (737, against 732 on
+    /// 24B119), the Setup count held at 64, `/sbin/launchd` is byte-identical
+    /// across the boards so all three share its digest, and the two service
+    /// caches differ from each other and from every other entry in the
+    /// registry - which is what shows the volumes were measured separately
+    /// rather than one entry copied and edited. The digests are pinned
+    /// verbatim so a re-measurement that drifts fails loudly here instead of
+    /// failing at provision time on the device.
+    func testTwoSevenThreeDeviceEntriesAreExperimentalAndMeasured() throws {
+        let n104 = try XCTUnwrap(
+            DeviceWorkflowRegistry.profiles.first { $0.id == "iphone12,1-n104ap-24C5037i" }
+        )
+        XCTAssertEqual(n104.validationState, .experimental)
+        XCTAssertEqual(n104.productVersion, "27.3")
+        XCTAssertEqual(n104.build, "24C5037i")
+        XCTAssertEqual(n104.launchdSHA256,
+                       "4e338d7aef1a1f77572dec5ef14eb64987080b1d22f5e0a580536cfd645bd078")
+        XCTAssertEqual(n104.launchdCacheSHA256,
+                       "0396c1683b660728c24b16ab599989d9a87b1ac4d12cd9273dfe1efcc7ac9e75")
+        XCTAssertEqual(n104.launchdCacheDaemonCount, 737)
+        XCTAssertEqual(n104.setupControllerMethodCount, 64)
+        // n104 display behaviour carried from five device-run builds; tfp0
+        // stays off until this build has runtime evidence of its own.
+        XCTAssertEqual(n104.bootPlan.normalIBSSAdditionalPlans, [.skipDisplayInitialization])
+        XCTAssertEqual(n104.bootPlan.restoreIBSSAdditionalPlans, [.skipDisplayInitialization])
+        XCTAssertFalse(n104.bootPlan.supportsTFP0KernelTaskPort)
+
+        let pro = DeviceWorkflowRegistry.profiles.filter {
+            $0.build == "24C5037i" && $0.deviceClass.hasPrefix("d4")
+        }
+        XCTAssertEqual(pro.map(\.id).sorted(), [
+            "iphone12,3-d421ap-24C5037i",
+            "iphone12,5-d431ap-24C5037i",
+        ])
+        for entry in pro {
+            XCTAssertEqual(entry.validationState, .experimental)
+            XCTAssertEqual(entry.launchdSHA256, n104.launchdSHA256)
+            XCTAssertEqual(entry.launchdCacheDaemonCount, n104.launchdCacheDaemonCount)
+            XCTAssertEqual(entry.setupControllerMethodCount, n104.setupControllerMethodCount)
+            XCTAssertNotEqual(entry.launchdCacheSHA256, n104.launchdCacheSHA256)
+            XCTAssertEqual(entry.bootPlan.normalIBSSAdditionalPlans, [])
+            XCTAssertEqual(entry.bootPlan.restoreIBSSAdditionalPlans, [])
+            XCTAssertFalse(entry.bootPlan.supportsTFP0KernelTaskPort)
+        }
+        XCTAssertEqual(
+            pro.map(\.launchdCacheSHA256),
+            ["369991684c9173cfd3be3b3c27aea2f0214a60cc038591b92cddca06e88802fe",
+             "369991684c9173cfd3be3b3c27aea2f0214a60cc038591b92cddca06e88802fe"]
+        )
+
+        // No service-cache digest may appear under two builds. Boards of one
+        // build family may share a digest - d421 and d431 ship one OS volume
+        // between them - but a digest that spans builds is the signature of
+        // an entry copied instead of measured.
+        let cachesPerBuild = Dictionary(grouping: DeviceWorkflowRegistry.profiles, by: \.build)
+            .mapValues { Set($0.map(\.launchdCacheSHA256)) }
+        let allCaches = Set(cachesPerBuild.values.flatMap { $0 })
+        XCTAssertEqual(
+            allCaches.count,
+            cachesPerBuild.values.flatMap { $0 }.count,
+            "a launchd.plist digest is shared across builds: \(cachesPerBuild)"
+        )
     }
 }

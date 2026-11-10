@@ -275,6 +275,48 @@ public enum KernelResolverProfileRegistry {
                 KernelTFP0Resolver.variantKey: tfp0Variant,
             ]
         ),
+        KernelResolverProfile(
+            // First 27.3 seed, sixth distinct 27.x XNU string, so a new
+            // profile. Both shipped IPSWs were measured, not assumed from the
+            // shared build ID: the iPhone 11 kernelcache
+            // (`kernelcache.release.iphone12b`, 69304320 bytes) and the 11
+            // Pro / Pro Max kernelcache (`kernelcache.release.iphone12`,
+            // 69369856 bytes) embed the same XNU string, so `detect` selects
+            // one profile for all three boards and they cannot be split into
+            // separate entries: two profiles sharing one fingerprint make
+            // `detect` return nil for both.
+            //
+            // Measured per kernelcache. On the Pro image every applicable
+            // plan resolves with the same record counts the iPhone 11
+            // kernelcache produces (credential-manager via acm-probe against
+            // ios273b1-24C5037i-acm-v1, sep 32, sandbox 46, restore 20,
+            // aks 22, diagnostic 42, valeria 15); the survey total differs by
+            // one record only because the Pro iBEC carries no
+            // pinot-panel-id, which skips ibec-ignore-pinot-failure.
+            //
+            // Validation state: static resolution against clean inputs only.
+            // No device run of any kind has happened on this build - no
+            // restore, no SSHRD, no boot. It resolves; nothing has booted it.
+            id: "ios273b1-24C5037i-n104ap",
+            productVersion: "27.3 beta 1",
+            builds: ["24C5037i"],
+            boards: ["n104ap", "d421ap", "d431ap"],
+            component: "kernelcache.release.iphone12b",
+            embeddedFingerprint: "xnu-13432.60.57~17/RELEASE_ARM64_T8030",
+            resolverVariants: [
+                // Shape-identical to 27.2 release: acm-probe of the 24B119
+                // family matches 24/26 exact with only the two scored entries
+                // ambiguous, and the positional rails hold at the same
+                // deltas. Recorded separately because the raw words differ in
+                // the masked fields. See
+                // KernelCredentialManagerSignatures.release24C5037iV1.
+                "kernel-credential-manager": ResolverVariantProfile(
+                    signature: "ios273b1-24C5037i-acm-v1",
+                    payload: "acm-return-success-v1"
+                ),
+                KernelTFP0Resolver.variantKey: tfp0Variant,
+            ]
+        ),
     ]
 
     /// Detect a profile using evidence embedded in the artifact itself.
