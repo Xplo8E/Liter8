@@ -40,6 +40,7 @@ device/remotexpcfix/l8remotepairing.dylib
 # Built by device/fdrfix/build.sh, reproduced from source each run.
 device/fdrfix/l8fdr.dylib
 device/keychainprobe/l8keychain.dylib
+device/acmucfix/l8acmuc.dylib
 device/fdrfix/l8radio
 # Built by device/wififix/build.sh, reproduced from source each run.
 device/wififix/l8wifi.dylib
