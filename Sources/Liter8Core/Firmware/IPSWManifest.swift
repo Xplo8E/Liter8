@@ -698,6 +698,128 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: []
             )
         ),
+        // 27.3 beta 1, resolver-verified, measured, and device-validated on an
+        // iPhone 11 on 2026-11-09: erase restore, SSHRD provisioning, normal
+        // boot, repeat boot, Procursus finalization and setup-debugger all
+        // passed. The Pro boards below have had no device run.
+        //
+        // What was exercised on the host, before the device run: `fw prepare`
+        // on both shipped IPSWs, `survey` (0 failed) on both extracted trees,
+        // `acm-probe` of ios273b1-24C5037i-acm-v1 against both kernelcaches
+        // (24/26 exact on each, only the two scored entries ambiguous),
+        // `devicetree` for both plans on all three boards (the trees are the
+        // same sizes as 24B119's, 234920/237068/240096 bytes, and take the
+        // same +44/-36 edits), `asr` (1) and `restored-fdr` (1) against this
+        // build's own restore ramdisk, and `coreauthd` (1), `ctkd` (2),
+        // `mobileactivationd` (5) and `commcenter` (3) against each board's
+        // mounted root filesystem. Every rootfs userland record lands on the
+        // same offset in both volumes, because the executables are
+        // byte-identical across the boards - the volumes are nevertheless
+        // different images, which the two differing `launchdCacheSHA256`
+        // values record.
+        //
+        // The four oracles were measured with commands validated first
+        // against 24B119, where they reproduced that build's recorded
+        // launchd digest, cache digest, 732-daemon count and 64 Setup
+        // methods exactly. On this build they read 737 daemons (+5 over
+        // 24B119, the first movement of that count since beta 1 of 27.2 hit
+        // 733) and 64 Setup methods, unchanged. Both digests differ from
+        // every other entry.
+        //
+        // The OS volumes are named RaveCSeed24C5037i.N104DeveloperOS and
+        // RaveCSeed24C5037i.D421D431DeveloperOS. Prior builds shipped
+        // plain `...N104OS`. The device run answered the open question: the
+        // Developer image name is cosmetic. The restore, both boots and
+        // provisioning behaved exactly as on prior builds' plain N104OS
+        // volumes.
+        //
+        // Repeat boot is recorded separately because a first boot that works
+        // and a second that does not is a failure mode this device has
+        // produced before. The evidence is /var/mobile/jbboot.log on the
+        // Data volume the erase restore wiped: it carries two
+        // `=== jbboot start ===` blocks, and the second adds injection
+        // auto-enable and a SpringBoard restart so its tweaks load. The
+        // booted kernel reports xnu-13432.60.57~17/PATCHED_ARM64_T8030,
+        // which is both this profile's fingerprint and proof the kernel
+        // identity records applied on this build.
+        //
+        // `finalize --check` reported complete on both boots: root SSH,
+        // per-device Dropbear host keys, bootstrap shells, ElleKit 1.2, the
+        // re-sign hook, injection auto-enable, the one-time System
+        // application registration, persona 99, the icon read token and a
+        // running PosterBoard repair watcher. First-boot load average ran
+        // 283-338 in the first minutes - the same boot impulse earlier
+        // builds showed - and settled to 2.5 after 51 minutes of uptime.
+        //
+        // tfp0 has runtime evidence on this build (2026-11-10, two boots of
+        // the same artifact set): task_for_pid(0) returns a usable kernel
+        // task port, the slide cave reports the live slide to the kernel task
+        // alone while self and launchd keep their real dyld info, a kernel-map
+        // scratch allocation round-trips write and read exactly, and the
+        // boot-jit exception-port byte reads back patched at slide+unslid in
+        // __DATA_CONST. Slides 0x45418000 and 0x44174000 across the two boots
+        // show the shim reads the live global. One 27.3-specific finding,
+        // recorded in docs/runs/IOS_273_24C5037i_TFP0.md: mach_vm_read over
+        // execute-only kernel text freezes the machine - only data-region
+        // readback is safe, unlike 27.2.
+        DeviceWorkflowProfile(
+            id: "iphone12,1-n104ap-24C5037i",
+            productVersion: "27.3",
+            build: "24C5037i",
+            productType: "iPhone12,1",
+            deviceClass: "n104ap",
+            chipID: 0x8030,
+            boardID: 0x04,
+            extractedDirectoryName: "iPhone12,1_27.3_24C5037i_Restore",
+            validationState: .reviewed,
+            launchdSHA256: "4e338d7aef1a1f77572dec5ef14eb64987080b1d22f5e0a580536cfd645bd078",
+            launchdCacheSHA256: "0396c1683b660728c24b16ab599989d9a87b1ac4d12cd9273dfe1efcc7ac9e75",
+            launchdCacheDaemonCount: 737,
+            setupControllerMethodCount: 64,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [.skipDisplayInitialization],
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization],
+                supportsTFP0KernelTaskPort: true
+            )
+        ),
+        DeviceWorkflowProfile(
+            id: "iphone12,3-d421ap-24C5037i",
+            productVersion: "27.3",
+            build: "24C5037i",
+            productType: "iPhone12,3",
+            deviceClass: "d421ap",
+            chipID: 0x8030,
+            boardID: 0x06,
+            extractedDirectoryName: "iPhone12,3,iPhone12,5_27.3_24C5037i_Restore",
+            validationState: .experimental,
+            launchdSHA256: "4e338d7aef1a1f77572dec5ef14eb64987080b1d22f5e0a580536cfd645bd078",
+            launchdCacheSHA256: "369991684c9173cfd3be3b3c27aea2f0214a60cc038591b92cddca06e88802fe",
+            launchdCacheDaemonCount: 737,
+            setupControllerMethodCount: 64,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
+        DeviceWorkflowProfile(
+            id: "iphone12,5-d431ap-24C5037i",
+            productVersion: "27.3",
+            build: "24C5037i",
+            productType: "iPhone12,5",
+            deviceClass: "d431ap",
+            chipID: 0x8030,
+            boardID: 0x02,
+            extractedDirectoryName: "iPhone12,3,iPhone12,5_27.3_24C5037i_Restore",
+            validationState: .experimental,
+            launchdSHA256: "4e338d7aef1a1f77572dec5ef14eb64987080b1d22f5e0a580536cfd645bd078",
+            launchdCacheSHA256: "369991684c9173cfd3be3b3c27aea2f0214a60cc038591b92cddca06e88802fe",
+            launchdCacheDaemonCount: 737,
+            setupControllerMethodCount: 64,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
     ]
 
     /// Every profile this IPSW could be restored with.
