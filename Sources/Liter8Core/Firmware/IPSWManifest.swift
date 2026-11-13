@@ -820,6 +820,150 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: []
             )
         ),
+        // iOS 27.2.1, resolver-verified and measured, with no device run yet.
+        // It is 24B119's point release and shares that build's kernel profile
+        // (`ios272-24B119-n104ap` now lists both build IDs) - see the
+        // measurement record there. All four oracles below were measured from
+        // this build's own decrypted root filesystem (RaveB24B156.N104OS)
+        // with `survey --guards`, whose script is unchanged since it was
+        // validated against 24B119's recorded values.
+        //
+        // Measured, not carried: `launchdSHA256` reproduces 24B119's recorded
+        // value exactly, which is both the statement that /sbin/launchd is
+        // byte-identical across the point release and a live check that the
+        // measurement method still returns a known answer. The service-cache
+        // digest is new against every other entry in the registry, so the
+        // volume is genuinely this build's own image. The daemon count of 732
+        // and Setup count of 64 happen to equal 24B119's; both digests above
+        // them differ, so the counts were read, not copied.
+        //
+        // What was exercised on the host: `fw prepare`, `survey` (29 plans
+        // resolved, 0 failed, 912 records), `acm-probe` of
+        // ios272-24B119-acm-v1 against this kernelcache (24/26 exact, only
+        // the two scored entries ambiguous - the same report the family gives
+        // on 24B119 itself), every kernel, iBoot, TXM and devicetree plan
+        // resolved on both 24B119's and this build's artifacts with
+        // record-for-record identical output (JSON records for the kernel,
+        // iBoot and TXM plans, identical text for the devicetree plans, whose
+        // resolver prints no JSON), `restored-fdr` (1) and `asr` (1)
+        // against this build's own restore ramdisk, and `coreauthd` (1),
+        // `ctkd` (2), `mobileactivationd` (5) and `commcenter` (3) against
+        // the mounted root filesystem. `fw make-cfw` verified six restore
+        // artifacts for this profile. Resolved only: everything past that -
+        // no APTicket, no restore, no SSHRD, no provisioning, no boot. The
+        // device run is pending, so this entry stays `.experimental` until
+        // that run says otherwise, and SEP, cellular data, Apple services
+        // and MobileBackup2 remain the project-wide gaps they are on 24B119.
+        //
+        // The boot plan is n104's own display behaviour, carried from six
+        // device-run builds spanning this display hardware, and tfp0 is on
+        // by kernel identity: this kernelcache is byte-identical to 24B119's
+        // apart from UUID/version metadata, and 24B119 carries the two-boot
+        // tfp0 runtime evidence recorded in docs/runs. This build's own
+        // runtime evidence comes with the device run.
+        DeviceWorkflowProfile(
+            id: "iphone12,1-n104ap-24B156",
+            productVersion: "27.2.1",
+            build: "24B156",
+            productType: "iPhone12,1",
+            deviceClass: "n104ap",
+            chipID: 0x8030,
+            boardID: 0x04,
+            extractedDirectoryName: "iPhone12,1_27.2.1_24B156_Restore",
+            validationState: .experimental,
+            launchdSHA256: "0776cff26027264644dbf7a36049e8bc9c10fa296a787d1c62f174ccccaf40d3",
+            launchdCacheSHA256: "a07c37e3ffa51167cc43c1212008a25cb650c964bafaf281a298e5c01d9f597d",
+            launchdCacheDaemonCount: 732,
+            setupControllerMethodCount: 64,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [.skipDisplayInitialization],
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization],
+                supportsTFP0KernelTaskPort: true
+            )
+        ),
+        // iPhone 11 Pro and Pro Max on 27.2.1, resolver-verified, measured,
+        // and with no device run on either board. Same build, same
+        // relationship to 24B119 as the n104 entry above: the Pro kernelcache
+        // (`kernelcache.release.iphone12`, 67862528 bytes - the size 24B119's
+        // Pro image ships) embeds the same XNU string, so one kernel profile
+        // and the ios272-24B119-acm-v1 family cover it; `acm-probe` against
+        // this cache reports the same 24/26 exact with only the two scored
+        // entries ambiguous.
+        //
+        // What was exercised, all on the host: `fw prepare` on the
+        // iPhone12,3/iPhone12,5 24B156 IPSW, `survey` (28 resolved, 0 failed,
+        // 911 records - one fewer plan than n104 only because these boards'
+        // iBEC carries no pinot-panel-id, which skips
+        // ibec-ignore-pinot-failure), every iBoot plan against each board's
+        // own iBSS and iBEC, `devicetree` for both plans on both boards (the
+        // trees are the same sizes 24B119's ship, 237068 and 240096 bytes,
+        // and take the same +44/-36 edits), `restored-fdr` (1) and `asr` (1)
+        // against the restore ramdisk, which is byte-identical across both
+        // shipped IPSWs, and `coreauthd` (1), `ctkd` (2), `mobileactivationd`
+        // (5) and `commcenter` (3) against this IPSW's own mounted root
+        // filesystem. `fw make-cfw` for each board, each reporting six
+        // verified restore artifacts.
+        //
+        // The guards come from this IPSW's own root filesystem
+        // (RaveB24B156.D421D431OS). One rootfs serves both boards, so the
+        // two entries share all four values by construction and the IPSW is
+        // what makes that true. `launchdSHA256` equals the n104 entry's
+        // because /sbin/launchd is byte-identical across the boards and the
+        // point release; the daemon count of 732 and Setup count of 64 are
+        // read values, and `launchdCacheSHA256` differs from n104's, which is
+        // what proves this is a different volume image measured on its own.
+        //
+        // Empty boot plans follow every prior d421/d431 entry:
+        // skipDisplayInitialization is n104's measured display behaviour and
+        // tfp0's runtime evidence is n104-only, and neither may leak onto a
+        // board that has never booted. `preservesIM4PCompression` stays at
+        // its uncompressed default on the shared-T8030 inference recorded on
+        // the 24B119 Pro entries. What is not claimed: everything past
+        // make-cfw - no APTicket, no restore, no SSHRD, no provisioning, no
+        // boot. SEP, cellular data, Apple services and MobileBackup2 remain
+        // the project-wide gaps they are on n104.
+        DeviceWorkflowProfile(
+            id: "iphone12,3-d421ap-24B156",
+            productVersion: "27.2.1",
+            build: "24B156",
+            productType: "iPhone12,3",
+            deviceClass: "d421ap",
+            chipID: 0x8030,
+            boardID: 0x06,
+            extractedDirectoryName: "iPhone12,3,iPhone12,5_27.2.1_24B156_Restore",
+            validationState: .experimental,
+            launchdSHA256: "0776cff26027264644dbf7a36049e8bc9c10fa296a787d1c62f174ccccaf40d3",
+            launchdCacheSHA256: "6f354c7a3e47c45ac08b59c38b97193d1a261e05944f9bfa4ca406663dc7a0cf",
+            launchdCacheDaemonCount: 732,
+            setupControllerMethodCount: 64,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
+        // Same IPSW as the d421 entry above, so the guards are shared: one
+        // root filesystem for both boards. They are copied, not measured
+        // here, and the cache hash fails closed if that ever stops being
+        // true.
+        DeviceWorkflowProfile(
+            id: "iphone12,5-d431ap-24B156",
+            productVersion: "27.2.1",
+            build: "24B156",
+            productType: "iPhone12,5",
+            deviceClass: "d431ap",
+            chipID: 0x8030,
+            boardID: 0x02,
+            extractedDirectoryName: "iPhone12,3,iPhone12,5_27.2.1_24B156_Restore",
+            validationState: .experimental,
+            launchdSHA256: "0776cff26027264644dbf7a36049e8bc9c10fa296a787d1c62f174ccccaf40d3",
+            launchdCacheSHA256: "6f354c7a3e47c45ac08b59c38b97193d1a261e05944f9bfa4ca406663dc7a0cf",
+            launchdCacheDaemonCount: 732,
+            setupControllerMethodCount: 64,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
     ]
 
     /// Every profile this IPSW could be restored with.

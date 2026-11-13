@@ -44,6 +44,7 @@ PRs welcome on any of these, especially SEP. The Pro and Pro Max are open too, i
 | iOS 27.2 beta 3 | `24B5099f` | run       | -            | -            |
 | iOS 27.2 beta 4 | `24B5110a` | run       | -            | -            |
 | iOS 27.2        | `24B119`   | run       | experimental | experimental |
+| iOS 27.2.1      | `24B156`   | experimental | experimental | experimental |
 | iOS 27.3 beta 1 | `24C5037i` | run       | experimental | experimental |
 
 "Run" means i did an erase restore, booted it normally, then rebooted and it came back up. "Experimental" means unverified. It resolves and you can use it with `--experimental`, but nobody has confirmed it on that phone. If you own one and are willing to try, share what happens and i'll change the tag.
@@ -145,7 +146,8 @@ Take the SIM out before going through Setup on a fresh restore. Cellular data do
 
 `fw get-boot` builds TXM with its code-signing policy flags turned on (any signature, unrestricted local signing, relaxed profile trust, CS enforcement disabled, unrestricted task_for_pid) plus the patches C function hooks need. CoreTrust stays enforced. The boot manifest records it as `txmPlan: boot-permissive`.
 
-On iPhone 11 (`iPhone12,1` / `n104ap`) from iOS 27.0 through iOS 27.3 beta 1, use
+On iPhone 11 (`iPhone12,1` / `n104ap`) from iOS 27.0 through iOS 27.3 beta 1
+(27.2.1 included), use
 `fw get-boot --tfp0` to add the tfp0 kernel patches used by `libkrw0-tfp0`. It
 is off by default. The slide is handed out only when the kernel task is the one
 being asked about, so every other process keeps its real `TASK_DYLD_INFO` and
