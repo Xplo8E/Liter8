@@ -561,18 +561,7 @@ final class FirmwareProfileTests: XCTestCase {
 
     /// The 27.2.1 (24B156) entries: measured, still experimental, sharing
     /// 24B119's kernel profile and ACM family the way 24A446 shares 24A435's.
-    ///
-    /// 24B156 is 24B119's point release. Its kernelcache embeds the same XNU
-    /// string and is byte-identical to 24B119's apart from 1871 bytes in 155
-    /// UUID/version-metadata runs, and all fifteen kernel plans resolve to
-    /// record-for-record identical JSON on both caches, so one profile and
-    /// one ACM family cover both build IDs. The device entries were measured
-    /// from this build's own root filesystem: `launchdSHA256` reproduces
-    /// 24B119's recorded digest (byte-identical /sbin/launchd, and a live
-    /// check that the measurement method still returns a known answer), the
-    /// service-cache digest is new against every other registry entry, and
-    /// the counts that equal 24B119's were read from an image the differing
-    /// digests prove is not 24B119's.
+    /// launchd equal (byte-identical file), service cache different.
     func testTwoSevenTwoPointOneEntriesAreExperimentalAndMeasured() throws {
         // Kernel profile: same profile and family as 24B119, no new entry.
         let kernel = try XCTUnwrap(

@@ -244,19 +244,10 @@ public enum KernelResolverProfileRegistry {
             // suffix (~28 against ~13), but `detect` matches the whole string,
             // so that is a different fingerprint and needs its own entry.
             //
-            // 24B156 (27.2.1) is this build's point release, and the
-            // 24A446 relationship measured again: the kernelcache embeds the
-            // same XNU string and is byte-identical to 24B119's apart from
-            // 1871 bytes in 155 runs, every one of them an LC_UUID, a
-            // hex-UUID string or a kext version/prelink-info string, with no
-            // differing byte inside any executable region or record site. All
-            // fifteen kernel plans resolve to record-for-record identical JSON
-            // (same ids, offsets, original and replacement bytes) on both
-            // caches, and acm-probe of ios272-24B119-acm-v1 against the
-            // 24B156 cache reports the same 24/26 exact with only the two
-            // scored entries ambiguous that the family reports on 24B119
-            // itself. One ACM family, in `builds` together, exactly like
-            // 24A435/24A437/24A446.
+            // 24B156 (27.2.1) is this build's point release and the 24A446
+            // relationship again: byte-identical kernelcache apart from
+            // UUID/version metadata, identical records on both caches.
+            // One ACM family, in `builds` together, like 24A435/24A437/24A446.
             id: "ios272-24B119-n104ap",
             productVersion: "27.2, 27.2.1",
             builds: ["24B119", "24B156"],
