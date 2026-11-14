@@ -759,6 +759,13 @@ case "$1" in -rw-------*) ;; *) echo "MISMATCH (mode $1, must be -rw-------; fw 
 echo OK' | tr -d '\r'
 }
 
+# The SSH ramdisk has no chown on PATH (/usr/bin:/bin:/tmp/bin:...:/binpack/bin)
+# but does carry /usr/sbin/chown. A bare `chown` failed silently while the
+# device script still printed DONE_OK, which is how a root-owned master and a
+# never-checked marker owner shipped. Every chown below names this path and
+# aborts the device script if it fails.
+RAMDISK_CHOWN=/usr/sbin/chown
+
 create_keychain_master() {
     # /private/var on the device is the Data-volume ROOT (= /mnt2), so the
     # shim's /private/var/Keychains/... is /mnt2/Keychains/... - the previous
@@ -770,21 +777,33 @@ create_keychain_master() {
     # repaired, so the items it already wraps stay readable. A master of the
     # wrong size is not regenerated here: keychain_master_state fails it, and
     # replacing it silently would orphan whatever it wraps.
+    #
+    # Ownership copies stock: keychain-2.db and its directory are
+    # _securityd:wheel, and a freshly restored 24B156 already carries the
+    # directory as 64:0 0755. It is only created and owned here when it does
+    # not exist yet. A root-owned one, which a bare mkdir would leave, would
+    # stop securityd creating keychain-2.db at all; an existing one is left
+    # exactly as the restore made it.
     must_dev "
-if [ ! -s '$K_MASTER' ]; then
-  mkdir -p /mnt2/Keychains
-  dd if=/dev/urandom of='$K_MASTER.new' bs=32 count=1 2>/dev/null
-  chmod 0600 '$K_MASTER.new'
-  chown $K_UID:$K_UID '$K_MASTER.new'
-  mv -f '$K_MASTER.new' '$K_MASTER'
+[ -x $RAMDISK_CHOWN ] || { echo 'no $RAMDISK_CHOWN on this ramdisk'; exit 1; }
+if [ ! -d /mnt2/Keychains ]; then
+  mkdir /mnt2/Keychains || exit 1
+  $RAMDISK_CHOWN $K_UID:0 /mnt2/Keychains || exit 1
+  chmod 0755 /mnt2/Keychains || exit 1
 fi
-chown $K_UID:$K_UID '$K_MASTER'
-chmod 0600 '$K_MASTER'
+if [ ! -s '$K_MASTER' ]; then
+  dd if=/dev/urandom of='$K_MASTER.new' bs=32 count=1 2>/dev/null || exit 1
+  chmod 0600 '$K_MASTER.new' || exit 1
+  $RAMDISK_CHOWN $K_UID:0 '$K_MASTER.new' || exit 1
+  mv -f '$K_MASTER.new' '$K_MASTER' || exit 1
+fi
+$RAMDISK_CHOWN $K_UID:0 '$K_MASTER' || exit 1
+chmod 0600 '$K_MASTER' || exit 1
 echo DONE_OK
 " "could not create the l8keychain master key"
     K_STATE=$(keychain_master_state "$K_UID")
     [ "$K_STATE" = OK ] || die "l8keychain master key is not usable by securityd: $K_STATE"
-    ok "l8keychain master key owned by _securityd (uid $K_UID), 0600, 32 bytes"
+    ok "l8keychain master key owned by _securityd:wheel (uid $K_UID), 0600, 32 bytes"
 }
 
 create_keychain_marker() {
@@ -792,9 +811,9 @@ create_keychain_marker() {
     # weak-loaded interposer stays inert on a fresh device.
     K_MARKER=/mnt1/usr/lib/.liter8-keychain
     must_dev "
-touch '$K_MARKER'
-chown 0:0 '$K_MARKER'
-chmod 0600 '$K_MARKER'
+touch '$K_MARKER' || exit 1
+$RAMDISK_CHOWN 0:0 '$K_MARKER' || exit 1
+chmod 0600 '$K_MARKER' || exit 1
 ls -la '$K_MARKER'
 echo DONE_OK
 " "could not create the l8keychain enable marker"

@@ -1274,6 +1274,18 @@ class ContextTests(unittest.TestCase):
         provisioner = (DEVICE / "sshrd_provision.sh").read_text()
         self.assertNotIn("chown 0:0 '$K_MASTER", provisioner)
         self.assertIn('keychain_master_state "$SECD_UID"', provisioner)
+        # Stock ownership is _securityd:wheel; a directory provisioning has to
+        # create gets the measured 24B156 stock 0755 instead of a root owner.
+        # The ramdisk has no chown on PATH, so a bare `chown` would silently do
+        # nothing: every owner change names /usr/sbin/chown and must abort on
+        # failure.
+        self.assertIn("RAMDISK_CHOWN=/usr/sbin/chown", provisioner)
+        self.assertIn("$RAMDISK_CHOWN $K_UID:0 '$K_MASTER' || exit 1", provisioner)
+        self.assertIn("$RAMDISK_CHOWN $K_UID:0 /mnt2/Keychains || exit 1", provisioner)
+        self.assertIn("$RAMDISK_CHOWN 0:0 '$K_MARKER' || exit 1", provisioner)
+        self.assertIn("chmod 0755 /mnt2/Keychains", provisioner)
+        self.assertNotIn("mkdir -p /mnt2/Keychains", provisioner)
+        self.assertNotRegex(provisioner, r"(?m)^\s*chown ", "a bare chown silently fails on the ramdisk")
         bodies = []
         for name in ("securityd_uid", "keychain_master_state"):
             match = re.search(rf"^{name}\(\) {{\n.*?^}}\n", provisioner, re.M | re.S)

@@ -814,7 +814,11 @@ root-owned 0600 master cannot even be opened by it. Every wrap then falls back
 to the real AKS path, and securityd deletes those items as corrupt on the first
 read after a reboot. A fresh 24B156 install hit exactly this (the Wi-Fi
 password was lost on every reboot) until provisioning created the master owned
-by `_securityd`, with the uid read from the target's own `passwd`.
+by `_securityd`, with the uid read from the target's own `passwd`. The group is
+wheel, matching stock `_securityd:wheel` ownership of `keychain-2.db`; a freshly
+restored 24B156 already carries `/private/var/Keychains` as 64:0 0755. The SSH
+ramdisk has no `chown` on PATH, so provisioning calls `/usr/sbin/chown` by path:
+a bare `chown` failed silently, which is how the root-owned master shipped.
 
 **Non-goals honored:** nothing else changed - mkbprobe answers identically
 to baseline (E06 shim untouched), Settings/apps unaffected, the interposer
