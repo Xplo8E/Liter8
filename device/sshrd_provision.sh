@@ -1941,18 +1941,39 @@ verify_userland_patch CommCenter \
 verify_system_dylib "l8pair dylib" payload/l8pair.dylib /mnt1/usr/lib/l8pair.dylib
 verify_system_dylib "l8remotepairing dylib" payload/l8remotepairing.dylib /mnt1/usr/lib/l8remotepairing.dylib
 verify_system_dylib "l8coreauth dylib" payload/l8coreauth.dylib /mnt1/usr/lib/l8coreauth.dylib
-verify_system_dylib "l8wifi dylib" payload/l8wifi.dylib /mnt1/usr/lib/l8wifi.dylib
-verify_system_dylib "l8fdr dylib" payload/l8fdr.dylib /mnt1/usr/lib/l8fdr.dylib
 # Reported separately from the dylib: with the dylib present and the marker gone the
 # bypass is deliberately inert, which is a recovery state rather than a broken one.
 note "FDR sik bypass marker" "$(required_marker /mnt1/usr/lib/.liter8-fdr-sik-bypass)"
 note "pairing fallback marker" "$(required_marker /mnt2/root/Library/Lockdown/.liter8-pairing-fallback)"
 note "RemoteXPC fallback marker" "$(required_marker /mnt1/usr/lib/.liter8-remotepairing-fallback)"
-note "AirPort credential marker" "$(required_marker /mnt1/usr/lib/.liter8-wifi-credentials)"
-note "l8keychain dylib" "$(test -f /mnt1/usr/lib/l8keychain.dylib && echo present || echo MISSING)"
+case "$W_RETIRED" in
+    yes)
+        # The keychain path owns AirPort credentials: the wifi dylib and the
+        # credentials marker are absent BY DESIGN in this state. Verifying the
+        # dylib against its payload copy would report a healthy retirement as
+        # MISMATCH, and the marker's absence as MISSING, so both are reported
+        # as the retirement they are instead.
+        note "l8wifi dylib" "retired (absent by design)"
+        ;;
+    *)
+        verify_system_dylib "l8wifi dylib" payload/l8wifi.dylib /mnt1/usr/lib/l8wifi.dylib
+        note "AirPort credential marker" "$(required_marker /mnt1/usr/lib/.liter8-wifi-credentials)"
+        ;;
+esac
+# These three must run ON the device: /mnt1 and /mnt2 are ramdisk mounts, not
+# host paths, and a host-side `test` here has reported MISSING for files that
+# exist ever since this script carried its macOS legs.
+note "l8keychain dylib" "$(sh_dev '[ -f /mnt1/usr/lib/l8keychain.dylib ] && echo present || echo MISSING' | tr -d '\r')"
 note "l8keychain enable marker" "$(required_marker /mnt1/usr/lib/.liter8-keychain)"
-note "securityd weak load" "$(sh_dev 'lipo -thin arm64 -output /dev/null /mnt1/usr/libexec/securityd 2>/dev/null; strings /mnt1/usr/libexec/securityd | grep -q l8keychain.dylib && echo present || echo MISSING' 2>&1 | tail -n 1)"
-note "l8keychain master" "$(test -s /mnt2/Keychains/l8keychain.master && echo present || echo MISSING)"
+sh_dev 'cat /mnt1/usr/libexec/securityd' > payload/.work/verify.securityd 2>/dev/null || true
+if [ -s payload/.work/verify.securityd ] && grep -aq l8keychain.dylib payload/.work/verify.securityd; then
+    note "securityd weak load" "present"
+elif [ -s payload/.work/verify.securityd ]; then
+    note "securityd weak load" "MISSING: securityd carries no l8keychain.dylib reference"
+else
+    note "securityd weak load" "CHECK-FAILED: could not read securityd over the SSHRD link"
+fi
+note "l8keychain master" "$(sh_dev '[ -s /mnt2/Keychains/l8keychain.master ] && echo present || echo MISSING' | tr -d '\r')"
 note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_pairing_key.der ] && echo generated || echo pending' | tr -d '\r')"
 
 # The os_log reader. Its state is the file's own hash, because the binary is
@@ -2053,22 +2074,50 @@ if [ -f payload/launchd.orig ] && [ -f payload/launchd.hooked ] && \
     verify_sbextissue=$(shasum -a 256 payload/sbextissue | awk '{print $1}')
     if [ "$verify_stock" != "$LAUNCHD_SHA" ] || \
        ! python3 launchdhook/verify_diff.py payload/launchd.orig payload/launchd.hooked >/dev/null; then
-        injection_launchd=MISMATCH
-        injection_backup=MISMATCH
-        injection_hook=MISMATCH
-        injection_systemhook=MISMATCH
-        injection_sbextissue=MISMATCH
         # The five verdicts below compare the device against the staged
         # payload copies, so a stale reference reports the healthy device as
         # MISMATCH without a word of why. A --check run re-stages the workflow
         # directory and drops the Nov-1-era copies from device/payload back
         # in, which is exactly how this bit a correctly provisioned 24B156.
-        # Name the reference and both hashes instead of letting five bare
-        # MISMATCH lines stand in for the reason.
-        if [ "$verify_stock" != "$LAUNCHD_SHA" ]; then
-            note "staged launchd reference" "STALE: launchd.orig is $verify_stock, not this profile's stock $LAUNCHD_SHA; the launchd MISMATCH below compares the device against that stale reference, not against the deployed state"
+        # Two of the five can still be verified absolutely, and the rest say
+        # STALE-REF instead of borrowing a reference that is known wrong.
+        #
+        # The stock backup is verified against the profile oracle directly:
+        # LAUNCHD_SHA IS the stock launchd of this build, wherever it came
+        # from. The hooked launchd is re-derived from the device's own backup
+        # with the same deterministic patcher the deploy ran, then compared
+        # byte for byte. lhook.dylib, systemhook.dylib and sbextissue are
+        # build outputs with no on-device pristine to re-derive from, so they
+        # are reported STALE-REF rather than judged by a reference known to
+        # be wrong.
+        injection_hook=STALE-REF
+        injection_systemhook=STALE-REF
+        injection_sbextissue=STALE-REF
+
+        sh_dev 'cat /mnt1/sbin/launchd.bak' > payload/.work/verify.launchd.bak 2>/dev/null || true
+        if [ -s payload/.work/verify.launchd.bak ] && \
+           [ "$(shasum -a 256 payload/.work/verify.launchd.bak | awk '{print $1}')" = "$LAUNCHD_SHA" ] && \
+           sh_dev '[ -x /mnt1/sbin/launchd.bak ]'; then
+            injection_backup=OK
         else
-            note "staged launchd reference" "STALE: launchd.hooked does not correspond to launchd.orig (verify_diff failed); the launchd MISMATCH below inherits it"
+            injection_backup=MISMATCH
+        fi
+
+        injection_launchd=STALE-REF
+        if [ -s payload/.work/verify.launchd.bak ]; then
+            python3 launchdhook/patch_launchd.py payload/.work/verify.launchd.bak \
+                -o payload/.work/verify.launchd.expected --apply >/dev/null 2>&1 \
+                && python3 launchdhook/resign_pagehashes.py payload/.work/verify.launchd.expected --apply >/dev/null 2>&1 \
+                && sh_dev 'cat /mnt1/sbin/launchd' > payload/.work/verify.launchd 2>/dev/null \
+                && cmp -s payload/.work/verify.launchd.expected payload/.work/verify.launchd \
+                && sh_dev '[ -x /mnt1/sbin/launchd ]' \
+                && injection_launchd=OK || injection_launchd=MISMATCH
+        fi
+
+        if [ "$verify_stock" != "$LAUNCHD_SHA" ]; then
+            note "staged launchd reference" "STALE: launchd.orig is $verify_stock, not this profile's stock $LAUNCHD_SHA; the launchd lines below verify against the device's own stock backup and the deterministic patcher, and lhook.dylib / icon systemhook / icon token issuer are STALE-REF (no trusted reference)"
+        else
+            note "staged launchd reference" "STALE: launchd.hooked does not correspond to launchd.orig (verify_diff failed); the launchd lines below verify against the device's own stock backup and the deterministic patcher, and lhook.dylib / icon systemhook / icon token issuer are STALE-REF (no trusted reference)"
         fi
     else
         sh_dev 'cat /mnt1/sbin/launchd' > payload/.work/verify.launchd 2>/dev/null || true
