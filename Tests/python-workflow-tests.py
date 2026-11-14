@@ -1264,6 +1264,76 @@ class ContextTests(unittest.TestCase):
         self.assertIn("method_setImplementation", coreauth_source)
         self.assertIn('"coreauthd": ("/usr/lib/l8coreauth.dylib"', fixups)
 
+    def test_keychain_master_is_owned_by_the_securityd_account(self):
+        """A root-owned master is unreadable to securityd, which runs as _securityd.
+
+        Runs the provisioner's own securityd_uid and keychain_master_state
+        against a scratch tree, with sh_dev stubbed to run there locally, so
+        the verdicts are the ones the device check would print.
+        """
+        provisioner = (DEVICE / "sshrd_provision.sh").read_text()
+        self.assertNotIn("chown 0:0 '$K_MASTER", provisioner)
+        self.assertIn('keychain_master_state "$SECD_UID"', provisioner)
+        # Stock ownership is _securityd:wheel; a directory provisioning has to
+        # create gets the measured 24B156 stock 0755 instead of a root owner.
+        # The ramdisk has no chown on PATH, so a bare `chown` would silently do
+        # nothing: every owner change names /usr/sbin/chown and must abort on
+        # failure.
+        self.assertIn("RAMDISK_CHOWN=/usr/sbin/chown", provisioner)
+        self.assertIn("$RAMDISK_CHOWN $K_UID:0 '$K_MASTER' || exit 1", provisioner)
+        self.assertIn("$RAMDISK_CHOWN $K_UID:0 /mnt2/Keychains || exit 1", provisioner)
+        self.assertIn("$RAMDISK_CHOWN 0:0 '$K_MARKER' || exit 1", provisioner)
+        self.assertIn("chmod 0755 /mnt2/Keychains", provisioner)
+        self.assertNotIn("mkdir -p /mnt2/Keychains", provisioner)
+        self.assertNotRegex(provisioner, r"(?m)^\s*chown ", "a bare chown silently fails on the ramdisk")
+        bodies = []
+        for name in ("securityd_uid", "keychain_master_state"):
+            match = re.search(rf"^{name}\(\) {{\n.*?^}}\n", provisioner, re.M | re.S)
+            self.assertIsNotNone(match, f"{name}() is no longer defined in sshrd_provision.sh")
+            bodies.append(match.group(0))
+        helpers = "\n".join(bodies)
+        uid = os.getuid()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "mnt1/private/etc").mkdir(parents=True)
+            (root / "mnt1/private/etc/passwd").write_text(
+                "root:*:0:0:System Administrator:/var/root:/bin/sh\n"
+                f"_securityd:*:{uid}:{uid}:securityd:/var/empty:/usr/bin/false\n"
+            )
+            (root / "mnt2/Keychains").mkdir(parents=True)
+            master = root / "mnt2/Keychains/l8keychain.master"
+            stub = (
+                'sh_dev() { sh -c "$(printf %s "$1" | '
+                f'sed -e "s#/mnt1#{root}/mnt1#g" -e "s#/mnt2#{root}/mnt2#g")"; }}\n'
+            )
+
+            def state(expected_uid):
+                """Return '<parsed securityd uid>|<master verdict for expected_uid>'."""
+                script = (stub + helpers +
+                          f'printf "%s|%s" "$(securityd_uid)" "$(keychain_master_state {expected_uid})"\n')
+                return subprocess.run(["sh", "-c", script], capture_output=True,
+                                      text=True, check=True).stdout
+
+            self.assertEqual(state(uid), f"{uid}|MISSING")
+            master.write_bytes(b"k" * 32)
+            master.chmod(0o600)
+            self.assertEqual(state(uid), f"{uid}|OK")
+            # Owned by an account other than securityd's: the 24B156 failure.
+            self.assertIn("MISMATCH (owner uid", state(uid + 1))
+            master.chmod(0o640)
+            self.assertIn("MISMATCH (mode", state(uid))
+            master.chmod(0o600)
+            master.write_bytes(b"k" * 31)
+            self.assertIn("MISMATCH (size 31", state(uid))
+            # A symlink is not a missing master: the shim refuses it with
+            # O_NOFOLLOW, so it has to be reported as the fault it is.
+            real = root / "mnt2/Keychains/real.master"
+            real.write_bytes(b"k" * 32)
+            real.chmod(0o600)
+            master.unlink()
+            master.symlink_to(real)
+            self.assertIn("MISMATCH (symlink", state(uid))
+
     def test_airport_credential_shim_is_narrow_and_marker_gated(self):
         source = (DEVICE / "wififix/l8wifi.c").read_text()
         builder = (DEVICE / "wififix/build.sh").read_text()
