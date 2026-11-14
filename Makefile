@@ -21,13 +21,14 @@ setup:
 test:
 	# Keep the normal edit/test loop responsive. Real-kernel fixture scans and
 	# the deliberately duplicated production-wiring check have separate tiers.
-	$(SWIFT) test --skip KernelFixtureTests --skip KernelEndToEndTests --skip ReleaseFixtureTests
+	$(SWIFT) test --skip KernelFixtureTests --skip KernelEndToEndTests --skip ReleaseFixtureTests --skip IPad8FixtureTests
 
 test-fixtures:
 	# Resolve each beta-4 and 24A435 component once per process. The tests still
 	# verify exact offsets, preimages, replacements and complete output hashes.
 	$(SWIFT) test -c release --filter KernelFixtureTests
 	$(SWIFT) test -c release --filter ReleaseFixtureTests
+	$(SWIFT) test -c release --filter IPad8FixtureTests
 	python3 Tests/apply-records-fixture-tests.py
 
 test-full:
