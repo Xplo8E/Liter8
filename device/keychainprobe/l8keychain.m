@@ -43,7 +43,8 @@
  *     24+n    32    HMAC-SHA256 (mac key) over bytes [0, 24+n)
  *
  * Keys derive from one 32-byte master (HMAC-SHA256) persisted 0600 at
- * /private/var/root/Library/l8keychain.master, minted on first use. Like the
+ * L8KEYCHAIN_MASTER_PATH, minted on first use if provisioning has not already
+ * created it. Like the
  * Wi-Fi credential store and the pairing fallback, this protects nothing
  * against the operator of the device: it is an explicit security tradeoff of
  * the experimental SEP-less system, it is gated by an operator-created
@@ -127,8 +128,11 @@
 #define L8KEYCHAIN_TARGET_PROGRAM "securityd"
 #endif
 
-/* The master key must be ours alone: owned by root — what securityd runs
- * as — or by this process, and never group or other accessible. */
+/* The master key must be ours alone: owned by root or by this process, and
+ * never group or other accessible. securityd runs as _securityd (uid 64,
+ * measured on 24B156), not root, so in practice the master must be owned by that account:
+ * a root-owned 0600 master cannot even be opened, and every wrap then falls
+ * back to the real AKS path. sshrd_provision.sh creates it with that owner. */
 #ifndef L8KEYCHAIN_MARKER_UID
 #define L8KEYCHAIN_MARKER_UID 0
 #endif

@@ -809,6 +809,13 @@ pre-creates the master (32 B, 0600, device /dev/urandom via sshrd) so the
 sandboxed mint path is never load-bearing; the shim also accepts a
 securityd-euid-owned file, which is what the deployed device ended up with.
 
+The owner matters: securityd runs as `_securityd` (uid 64 on 24B156), so a
+root-owned 0600 master cannot even be opened by it. Every wrap then falls back
+to the real AKS path, and securityd deletes those items as corrupt on the first
+read after a reboot. A fresh 24B156 install hit exactly this (the Wi-Fi
+password was lost on every reboot) until provisioning created the master owned
+by `_securityd`, with the uid read from the target's own `passwd`.
+
 **Non-goals honored:** nothing else changed - mkbprobe answers identically
 to baseline (E06 shim untouched), Settings/apps unaffected, the interposer
 only enters its software path for keyclasses {6, 39} on keybag 0 with a

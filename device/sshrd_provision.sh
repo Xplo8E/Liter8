@@ -733,24 +733,58 @@ echo DONE_OK
     ok "l8keychain.dylib deployed and read back ($K_WANT)"
 }
 
+# securityd runs as _securityd, not root, and the shim inside it trusts only a
+# master owned by root or by its own euid with no group or other bits. A root
+# owned 0600 master is therefore unreadable to it: every wrap falls back to the
+# real AKS path, and securityd deletes those items as corrupt on the first read
+# after a reboot. That is how a fresh 24B156 install lost its Wi-Fi password.
+# The uid is read from the target's own passwd rather than written down, so a
+# firmware that renumbers the account is still handled.
+securityd_uid() {
+    sh_dev 'cat /mnt1/private/etc/passwd' 2>/dev/null | tr -d '\r' \
+        | sed -n 's/^_securityd:[^:]*:\([0-9][0-9]*\):.*/\1/p' | head -n 1
+}
+
+# The master as the shim's load_master_locked() would judge it, with one
+# stricter rule: provisioning writes exactly -rw-------, so that is what is
+# required. $1 is the securityd uid.
+keychain_master_state() {
+    sh_dev "M=/mnt2/Keychains/l8keychain.master U='$1'"'
+if [ -L "$M" ]; then echo "MISMATCH (symlink: the shim opens the master with O_NOFOLLOW, so securityd cannot use it)"; exit 0; fi
+if [ ! -f "$M" ]; then echo MISSING; exit 0; fi
+set -- $(ls -ln "$M")
+case "$1" in -rw-------*) ;; *) echo "MISMATCH (mode $1, must be -rw-------; fw provision repairs this)"; exit 0 ;; esac
+[ "$3" = "$U" ] || { echo "MISMATCH (owner uid $3, but securityd runs as uid $U and cannot read it; fw provision repairs this)"; exit 0; }
+[ "$5" = 32 ] || { echo "MISMATCH (size $5, must be 32; not repaired automatically, since replacing it orphans what it wraps)"; exit 0; }
+echo OK' | tr -d '\r'
+}
+
 create_keychain_master() {
     # /private/var on the device is the Data-volume ROOT (= /mnt2), so the
     # shim's /private/var/Keychains/... is /mnt2/Keychains/... - the previous
     # /mnt2/var/Keychains path was a double-var and the shim never saw it.
     K_MASTER=/mnt2/Keychains/l8keychain.master
+    K_UID=$(securityd_uid)
+    [ -n "$K_UID" ] || die "could not read the _securityd uid from /mnt1/private/etc/passwd"
+    # An existing master keeps its bytes and only has its owner and mode
+    # repaired, so the items it already wraps stay readable. A master of the
+    # wrong size is not regenerated here: keychain_master_state fails it, and
+    # replacing it silently would orphan whatever it wraps.
     must_dev "
 if [ ! -s '$K_MASTER' ]; then
   mkdir -p /mnt2/Keychains
   dd if=/dev/urandom of='$K_MASTER.new' bs=32 count=1 2>/dev/null
   chmod 0600 '$K_MASTER.new'
-  chown 0:0 '$K_MASTER.new'
+  chown $K_UID:$K_UID '$K_MASTER.new'
   mv -f '$K_MASTER.new' '$K_MASTER'
 fi
-wc -c < '$K_MASTER'
-ls -la '$K_MASTER'
+chown $K_UID:$K_UID '$K_MASTER'
+chmod 0600 '$K_MASTER'
 echo DONE_OK
 " "could not create the l8keychain master key"
-    ok "l8keychain master key present at the shim's path (32 bytes, 0600)"
+    K_STATE=$(keychain_master_state "$K_UID")
+    [ "$K_STATE" = OK ] || die "l8keychain master key is not usable by securityd: $K_STATE"
+    ok "l8keychain master key owned by _securityd (uid $K_UID), 0600, 32 bytes"
 }
 
 create_keychain_marker() {
@@ -2004,7 +2038,14 @@ case "$SEC_STATE" in
     present|MISSING:*|CHECK-FAILED:*) note "securityd weak load" "$SEC_STATE" ;;
     *) note "securityd weak load" "CHECK-FAILED: unexpected checker output: $(printf '%s' "$SEC_STATE" | tail -1)" ;;
 esac
-note "l8keychain master" "$(sh_dev '[ -s /mnt2/Keychains/l8keychain.master ] && echo present || echo MISSING' | tr -d '\r')"
+# Present is not enough: a master securityd cannot read leaves the keychain
+# unable to keep anything across a reboot, so the owner is checked too.
+SECD_UID=$(securityd_uid)
+if [ -n "$SECD_UID" ]; then
+    note "l8keychain master" "$(keychain_master_state "$SECD_UID")"
+else
+    note "l8keychain master" "CHECK-FAILED: could not read the _securityd uid from the target's passwd"
+fi
 note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_pairing_key.der ] && echo generated || echo pending' | tr -d '\r')"
 
 # The os_log reader. Its state is the file's own hash, because the binary is
