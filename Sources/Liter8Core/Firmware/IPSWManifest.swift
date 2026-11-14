@@ -820,6 +820,76 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: []
             )
         ),
+        // iOS 27.2.1, device-validated on an iPhone 11 (2026-11-14): erase
+        // restore, SSHRD provisioning, normal boot, repeat boot, finalize and
+        // setup-debugger all passed, 268 apps registered and visible on both
+        // boots. A 24B119 point release sharing its kernel profile and tfp0
+        // evidence; the launchd digest reproduces 24B119's, the cache digest
+        // is new.
+        DeviceWorkflowProfile(
+            id: "iphone12,1-n104ap-24B156",
+            productVersion: "27.2.1",
+            build: "24B156",
+            productType: "iPhone12,1",
+            deviceClass: "n104ap",
+            chipID: 0x8030,
+            boardID: 0x04,
+            extractedDirectoryName: "iPhone12,1_27.2.1_24B156_Restore",
+            validationState: .reviewed,
+            launchdSHA256: "0776cff26027264644dbf7a36049e8bc9c10fa296a787d1c62f174ccccaf40d3",
+            launchdCacheSHA256: "a07c37e3ffa51167cc43c1212008a25cb650c964bafaf281a298e5c01d9f597d",
+            launchdCacheDaemonCount: 732,
+            setupControllerMethodCount: 64,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [.skipDisplayInitialization],
+                restoreIBSSAdditionalPlans: [.skipDisplayInitialization],
+                supportsTFP0KernelTaskPort: true
+            )
+        ),
+        // iPhone 11 Pro on 27.2.1, measured, no device run. One rootfs serves
+        // both boards, so these guards are shared with the d431 entry below;
+        // the cache digest differs from n104's.
+        DeviceWorkflowProfile(
+            id: "iphone12,3-d421ap-24B156",
+            productVersion: "27.2.1",
+            build: "24B156",
+            productType: "iPhone12,3",
+            deviceClass: "d421ap",
+            chipID: 0x8030,
+            boardID: 0x06,
+            extractedDirectoryName: "iPhone12,3,iPhone12,5_27.2.1_24B156_Restore",
+            validationState: .experimental,
+            launchdSHA256: "0776cff26027264644dbf7a36049e8bc9c10fa296a787d1c62f174ccccaf40d3",
+            launchdCacheSHA256: "6f354c7a3e47c45ac08b59c38b97193d1a261e05944f9bfa4ca406663dc7a0cf",
+            launchdCacheDaemonCount: 732,
+            setupControllerMethodCount: 64,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
+        // Same IPSW as the d421 entry above: one rootfs serves both boards,
+        // so the guards are copied, not measured here, and the cache hash
+        // fails closed if that ever stops being true.
+        DeviceWorkflowProfile(
+            id: "iphone12,5-d431ap-24B156",
+            productVersion: "27.2.1",
+            build: "24B156",
+            productType: "iPhone12,5",
+            deviceClass: "d431ap",
+            chipID: 0x8030,
+            boardID: 0x02,
+            extractedDirectoryName: "iPhone12,3,iPhone12,5_27.2.1_24B156_Restore",
+            validationState: .experimental,
+            launchdSHA256: "0776cff26027264644dbf7a36049e8bc9c10fa296a787d1c62f174ccccaf40d3",
+            launchdCacheSHA256: "6f354c7a3e47c45ac08b59c38b97193d1a261e05944f9bfa4ca406663dc7a0cf",
+            launchdCacheDaemonCount: 732,
+            setupControllerMethodCount: 64,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
     ]
 
     /// Every profile this IPSW could be restored with.

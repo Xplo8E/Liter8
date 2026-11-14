@@ -108,14 +108,14 @@ final class FirmwareProfileTests: XCTestCase {
         XCTAssertFalse(release.covers(build: "24A5390f"))
     }
 
-    func testTFP0SupportCoversIPhone11From270Through273() {
+    func testTFP0SupportCoversEveryIPhone11BuildFrom270On() {
         let resolverBuilds = KernelResolverProfileRegistry.profiles
             .filter { $0.variants(for: KernelTFP0Resolver.variantKey) != nil }
             .flatMap(\.builds)
             .sorted()
         XCTAssertEqual(resolverBuilds, [
             "24A435", "24A437", "24A446",
-            "24B119", "24B5084k", "24B5089g", "24B5099f", "24B5110a",
+            "24B119", "24B156", "24B5084k", "24B5089g", "24B5099f", "24B5110a",
             "24C5037i",
         ])
 
@@ -129,6 +129,7 @@ final class FirmwareProfileTests: XCTestCase {
             "iphone12,1-n104ap-24A435",
             "iphone12,1-n104ap-24A446",
             "iphone12,1-n104ap-24B119",
+            "iphone12,1-n104ap-24B156",
             "iphone12,1-n104ap-24B5084k",
             "iphone12,1-n104ap-24B5089g",
             "iphone12,1-n104ap-24B5099f",
@@ -412,10 +413,18 @@ final class FirmwareProfileTests: XCTestCase {
             KernelResolverProfileRegistry.profiles.first { $0.id == "ios272-24B119-n104ap" }
         )
         XCTAssertEqual(profile.boards.sorted(), ["d421ap", "d431ap", "n104ap"])
-        XCTAssertEqual(profile.builds, ["24B119"])
+        // 24B156 (27.2.1) is this build's point release: same XNU string,
+        // kernelcache byte-identical apart from UUID/version metadata, and
+        // every kernel plan resolving to identical records, so it joins the
+        // same profile's `builds` the way 24A446 joined 24A435's.
+        XCTAssertEqual(profile.builds, ["24B119", "24B156"])
 
         let claiming = KernelResolverProfileRegistry.profiles.filter { $0.covers(build: "24B119") }
         XCTAssertEqual(claiming.map(\.id), [profile.id])
+
+        let claimingPoint = KernelResolverProfileRegistry.profiles
+            .filter { $0.covers(build: "24B156") }
+        XCTAssertEqual(claimingPoint.map(\.id), [profile.id])
     }
 
     /// 27.3 beta 1 must name its own ACM family, for the same reason every
@@ -548,5 +557,54 @@ final class FirmwareProfileTests: XCTestCase {
             cachesPerBuild.values.flatMap { $0 }.count,
             "a launchd.plist digest is shared across builds: \(cachesPerBuild)"
         )
+    }
+
+    /// The 27.2.1 (24B156) entries: n104 reviewed after its full device run,
+    /// the Pro boards still experimental, all sharing 24B119's kernel profile
+    /// and ACM family the way 24A446 shares 24A435's. launchd equal
+    /// (byte-identical file), service cache different.
+    func testTwoSevenTwoPointOneEntriesAreMeasuredAndReviewedOnN104() throws {
+        // Kernel profile: same profile and family as 24B119, no new entry.
+        let kernel = try XCTUnwrap(
+            KernelResolverProfileRegistry.profiles.first { $0.covers(build: "24B156") }
+        )
+        XCTAssertEqual(kernel.id, "ios272-24B119-n104ap")
+        let variants = try XCTUnwrap(
+            kernel.variants(for: KernelCredentialManagerResolver.name)
+        )
+        XCTAssertEqual(variants.signature, "ios272-24B119-acm-v1")
+        XCTAssertEqual(variants.payload, "acm-return-success-v1")
+        XCTAssertEqual(variants.support, .supported)
+
+        let n104 = try XCTUnwrap(
+            DeviceWorkflowRegistry.profiles.first { $0.id == "iphone12,1-n104ap-24B156" }
+        )
+        // Reviewed after the full device run: erase restore, SSHRD
+        // provisioning, normal boot, repeat boot, finalize.
+        XCTAssertEqual(n104.validationState, .reviewed)
+        XCTAssertEqual(n104.productVersion, "27.2.1")
+        XCTAssertEqual(n104.build, "24B156")
+        XCTAssertEqual(n104.deviceClass, "n104ap")
+        XCTAssertEqual(n104.launchdSHA256,
+                       "0776cff26027264644dbf7a36049e8bc9c10fa296a787d1c62f174ccccaf40d3")
+        XCTAssertEqual(n104.launchdCacheSHA256,
+                       "a07c37e3ffa51167cc43c1212008a25cb650c964bafaf281a298e5c01d9f597d")
+        XCTAssertEqual(n104.launchdCacheDaemonCount, 732)
+        XCTAssertEqual(n104.setupControllerMethodCount, 64)
+        // n104 display behaviour carried from the device-run builds on this
+        // display hardware; tfp0 on by kernel identity to 24B119, whose
+        // two-boot runtime evidence is recorded in docs/runs.
+        XCTAssertEqual(n104.bootPlan.normalIBSSAdditionalPlans, [.skipDisplayInitialization])
+        XCTAssertEqual(n104.bootPlan.restoreIBSSAdditionalPlans, [.skipDisplayInitialization])
+        XCTAssertTrue(n104.bootPlan.supportsTFP0KernelTaskPort)
+
+        // The oracles relate to 24B119's exactly as a point release should:
+        // launchd equal (byte-identical file), service cache different
+        // (different volume image).
+        let previous = try XCTUnwrap(
+            DeviceWorkflowRegistry.profiles.first { $0.id == "iphone12,1-n104ap-24B119" }
+        )
+        XCTAssertEqual(n104.launchdSHA256, previous.launchdSHA256)
+        XCTAssertNotEqual(n104.launchdCacheSHA256, previous.launchdCacheSHA256)
     }
 }

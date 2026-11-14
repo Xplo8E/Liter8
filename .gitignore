@@ -57,3 +57,7 @@ device/payload/
 # 27.3 beta 1 work dirs
 .ios273/
 .ios273-pro/
+# 27.2.1 work dirs
+.ios2721/
+.ios2721-pro/
+.ios2721-pro-d431/

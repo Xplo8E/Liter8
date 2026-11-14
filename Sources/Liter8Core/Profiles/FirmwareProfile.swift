@@ -243,9 +243,14 @@ public enum KernelResolverProfileRegistry {
             // It shares beta 4's base version and differs only in the build
             // suffix (~28 against ~13), but `detect` matches the whole string,
             // so that is a different fingerprint and needs its own entry.
+            //
+            // 24B156 (27.2.1) is this build's point release and the 24A446
+            // relationship again: byte-identical kernelcache apart from
+            // UUID/version metadata, identical records on both caches.
+            // One ACM family, in `builds` together, like 24A435/24A437/24A446.
             id: "ios272-24B119-n104ap",
-            productVersion: "27.2",
-            builds: ["24B119"],
+            productVersion: "27.2, 27.2.1",
+            builds: ["24B119", "24B156"],
             // The 11 Pro and Pro Max ship a different kernelcache from the
             // iPhone 11 (`kernelcache.release.iphone12`, 67862528 bytes against
             // iphone12b's 67796992) but it embeds the same XNU string, so
