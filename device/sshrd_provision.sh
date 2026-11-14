@@ -26,7 +26,13 @@ cd "$BASE"
 # it is resolved once here rather than spelled out at each call site.
 TOOLS="$BASE/../tools"
 
-STEPS="mounts ticket setup userland pairing cellular screentime injection tweaks cache jbtools sileo resolv apps verify"
+# The unified-log reader. The staged runtime carries it beside the scripts,
+# as a symlink into the immutable resource directory. A run from the checkout
+# finds the committed copy one level up, beside the tools.
+OSLOG="$BASE/oslog"
+[ -f "$OSLOG" ] || OSLOG="$BASE/../payloads/oslog"
+
+STEPS="mounts ticket setup userland pairing wifi keychain cellular screentime injection tweaks cache jbtools logging sileo resolv apps verify"
 
 usage() {
     echo "steps: $STEPS"
@@ -35,6 +41,9 @@ usage() {
     echo "  setup    patch Setup.app to skip unavailable first-run panes"
     echo "  userland patch and re-sign the SEP/activation daemons"
     echo "  pairing  install lockdownd, coreauthd companion guard and RemoteXPC repair"
+    echo "  wifi     keep Wi-Fi network passwords across reboots without SEP"
+    echo "  keychain software system keychain: securityd wraps keychain items"
+    echo "           with software class keys (marker-gated; see E04 notes)"
     echo "  cellular unseal baseband calibration and stop CommCenter refusing a data context"
     echo "           (only on a profile with a baseband; Wi-Fi-only boards such as j171aap skip it)"
     echo "  screentime make Setup's unavailable ScreenTime requests fail fast"
@@ -42,6 +51,7 @@ usage() {
     echo "  tweaks   install the tweak loader and the TweakInject payloads"
     echo "  cache    deploy the launchd service cache (dropbear + jbboot + DDI watcher + watchdogd mitigation)"
     echo "  jbtools  install boot helpers and the iOS 27 uicache"
+    echo "  logging  install the os_log reader so the device's log can be read"
     echo "  sileo      install Sileo (from payload/, built by fetch_payloads.sh)"
     # TrollStore is not installed here. It goes on after first boot from a deb,
     # so it can be updated without another DFU trip. See COMMANDS.md.
@@ -173,7 +183,7 @@ must_dev() {
     _out=$(sh_dev "$1" 2>&1) || true
     if ! printf '%s' "$_out" | grep -q DONE_OK; then
         printf '%s\n' "$_out" | sed 's/^/        /'
-        die "${2:-device step failed}"
+        die "${2:-device step failed: $1}"
     fi
     printf '%s' "$_out" | grep -v DONE_OK | sed 's/^/        /' || true
 }
@@ -488,6 +498,94 @@ echo DONE_OK
     ok "l8coreauth.dylib deployed and read back ($C_WANT)"
 }
 
+deploy_wifi_library() {
+    W_LOCAL=payload/l8wifi.dylib
+    # Sealed System volume on purpose: see the comment in userland_fixups.py.
+    W_DEVICE=/mnt1/usr/lib/l8wifi.dylib
+    W_STAGED=$W_DEVICE.liter8-new
+    W_READBACK=payload/.work/userland/l8wifi.readback
+    mkdir -p payload/.work/userland
+
+    [ -f "$W_LOCAL" ] || die "missing $W_LOCAL; run fetch_payloads.sh wifi"
+    codesign -v "$W_LOCAL" || die "l8wifi.dylib has an invalid CodeDirectory"
+    W_WANT=$(shasum -a 256 "$W_LOCAL" | awk '{print $1}')
+    put "$W_LOCAL" "$W_STAGED"
+    must_dev "
+[ -f '$W_DEVICE' ] && [ ! -f '$W_DEVICE.orig' ] && cp '$W_DEVICE' '$W_DEVICE.orig'
+chmod 0755 '$W_STAGED'
+mv -f '$W_STAGED' '$W_DEVICE'
+echo DONE_OK
+" "could not activate l8wifi.dylib"
+    sh_dev "/bin/cat '$W_DEVICE'" > "$W_READBACK" \
+        || die "could not read back l8wifi.dylib"
+    W_GOT=$(shasum -a 256 "$W_READBACK" | awk '{print $1}')
+    [ "$W_GOT" = "$W_WANT" ] || die "l8wifi.dylib readback hash mismatch"
+    ok "l8wifi.dylib deployed and read back ($W_WANT)"
+}
+
+retire_wifi_library() {
+    # Remove a previously deployed l8wifi fallback (dylib, marker, patched
+    # wifid restored from .orig if present) so AirPort SecItem writes reach
+    # securityd and the keychain path owns them.
+    must_dev "
+rm -f /mnt1/usr/lib/l8wifi.dylib /mnt1/usr/lib/.liter8-wifi-credentials
+if [ -f /mnt1/usr/sbin/wifid.orig ]; then
+  cp /mnt1/usr/sbin/wifid.orig /mnt1/usr/sbin/wifid
+  chmod 0755 /mnt1/usr/sbin/wifid
+fi
+ls -la /mnt1/usr/lib/l8wifi.dylib 2>/dev/null || echo L8WIFI-GONE
+echo DONE_OK
+" "could not retire the l8wifi fallback"
+    ok "l8wifi fallback retired (keychain owns AirPort credentials)"
+}
+
+# The shim is inert without this marker, so a device whose Wi-Fi misbehaves is
+# recovered by deleting one file from SSHRD rather than by restoring a
+# re-signed binary. It sits beside the dylib on the System volume.
+enable_wifi_credentials() {
+    W_MARKER=/mnt1/usr/lib/.liter8-wifi-credentials
+    must_dev "
+: > '$W_MARKER.new'
+chmod 0600 '$W_MARKER.new'
+mv -f '$W_MARKER.new' '$W_MARKER'
+echo DONE_OK
+" "could not enable the AirPort credential shim marker"
+    ok "wifid AirPort credential fallback enabled by scoped marker"
+}
+
+# The os_log reader. It goes on the Data volume, in root's home directory,
+# because that is the only writable location on a normally booted device: the
+# System volume is sealed read-only once the device has booted, and /var/root
+# is where the host-side log reader looks for it. The binary carries Apple's
+# private logging entitlements, and logd checks the caller's entitlements
+# before it will open a stream, so the copy has to arrive byte for byte.
+deploy_oslog() {
+    O_LOCAL="$OSLOG"
+    O_DEVICE=/mnt2/root/oslog
+    O_STAGED=$O_DEVICE.liter8-new
+    O_READBACK=payload/.work/oslog.readback
+    mkdir -p payload/.work
+
+    [ -f "$O_LOCAL" ] || die "missing $O_LOCAL; it is a Liter8 resource beside the scripts or in payloads/"
+    O_WANT=$(shasum -a 256 "$O_LOCAL" | awk '{print $1}')
+    put "$O_LOCAL" "$O_STAGED"
+    must_dev "
+chmod 0755 '$O_STAGED'
+mv -f '$O_STAGED' '$O_DEVICE'
+echo DONE_OK
+" "could not activate oslog"
+    sh_dev "/bin/cat '$O_DEVICE'" > "$O_READBACK" \
+        || die "could not read back oslog"
+    O_GOT=$(shasum -a 256 "$O_READBACK" | awk '{print $1}')
+    [ "$O_GOT" = "$O_WANT" ] || die "oslog readback hash mismatch"
+    # The signature is written by ldid, whose CodeDirectory does not carry the
+    # ad-hoc flag that the host codesign insists on. The entitlement blob is
+    # what logd reads, so that is what has to survive the transfer.
+    "$LDID" -e "$O_READBACK" 2>/dev/null | grep -q com.apple.private.logging.stream \
+        || die "oslog readback lost its logging entitlements"
+    ok "oslog ($O_WANT)"
+}
+
 enable_pairing_fallback() {
     P_DIR=/mnt2/root/Library/Lockdown
     P_MARKER=$P_DIR/.liter8-pairing-fallback
@@ -562,6 +660,9 @@ deploy_userland_daemon() {
         remotepairingdeviced)
             U_DEVICE=/mnt1/usr/libexec/remotepairingdeviced
             ;;
+        wifid)
+            U_DEVICE=/mnt1/usr/sbin/wifid
+            ;;
         CommCenter)
             U_DEVICE=/mnt1/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter
             ;;
@@ -598,6 +699,202 @@ if wants pairing && [ "$CHECK_ONLY" = 0 ]; then
         deploy_userland_daemon "$U_NAME"
     done
     enable_pairing_fallback
+fi
+
+# ------------------------------------------------------------------- wifi
+# Without SEP the system keychain cannot retain the generic-password record
+# that carries a Wi-Fi network password, so the device forgets it on the next
+# boot and a password-protected network has to be typed again. The dylib keeps
+# that one record in a file on Data instead, and only while the marker is
+# present.
+#
+# The shim stores the password unencrypted, protected only by Unix mode 0600.
+# That is an explicit security tradeoff of the experimental SEP-less system,
+# and the same one the pairing fallback already makes for the lockdownd RSA
+# key.
+if wants wifi && [ "$CHECK_ONLY" = 0 ]; then
+    if wants keychain; then
+        # The keychain path supersedes the l8wifi side store: wifid's hooks
+        # would keep AirPort SecItem writes out of securityd, so the real
+        # keychain never sees them. Retire the fallback instead of enabling
+        # both (the PR body: "l8wifi is hereby retired").
+        say "AirPort credential fallback (retired: superseded by the keychain)"
+        retire_wifi_library
+    else
+        say "AirPort credential fallback"
+        deploy_wifi_library
+        deploy_userland_daemon wifid
+        enable_wifi_credentials
+    fi
+fi
+
+# ---------------------------------------------------------------- keychain
+# The software system keychain: securityd gets a dyld interposer that wraps
+# and unwraps keychain items with software class keys (marker-gated). The
+# master key persists on Data so items survive reboots. See
+# docs/aks-research/E04 and the research story document.
+deploy_keychain_library() {
+    K_LOCAL=payload/l8keychain.dylib
+    K_DEVICE=/mnt1/usr/lib/l8keychain.dylib
+    K_STAGED=$K_DEVICE.liter8-new
+    K_READBACK=payload/.work/userland/l8keychain.readback
+    mkdir -p payload/.work/userland
+
+    [ -f "$K_LOCAL" ] || die "missing $K_LOCAL; run fetch_payloads.sh keychain"
+    codesign -v "$K_LOCAL" || die "l8keychain.dylib has an invalid CodeDirectory"
+    K_WANT=$(shasum -a 256 "$K_LOCAL" | awk '{print $1}')
+    put "$K_LOCAL" "$K_STAGED"
+    must_dev "
+chmod 0755 '$K_STAGED'
+mv -f '$K_STAGED' '$K_DEVICE'
+echo DONE_OK
+" "could not activate l8keychain.dylib"
+    sh_dev "/bin/cat '$K_DEVICE'" > "$K_READBACK" \
+        || die "could not read back l8keychain.dylib"
+    K_GOT=$(shasum -a 256 "$K_READBACK" | awk '{print $1}')
+    [ "$K_GOT" = "$K_WANT" ] || die "l8keychain.dylib readback hash mismatch"
+    ok "l8keychain.dylib deployed and read back ($K_WANT)"
+}
+
+# securityd runs as _securityd, not root, and the shim inside it trusts only a
+# master owned by root or by its own euid with no group or other bits. A root
+# owned 0600 master is therefore unreadable to it: every wrap falls back to the
+# real AKS path, and securityd deletes those items as corrupt on the first read
+# after a reboot. That is how a fresh 24B156 install lost its Wi-Fi password.
+# The uid is read from the target's own passwd rather than written down, so a
+# firmware that renumbers the account is still handled.
+securityd_uid() {
+    sh_dev 'cat /mnt1/private/etc/passwd' 2>/dev/null | tr -d '\r' \
+        | sed -n 's/^_securityd:[^:]*:\([0-9][0-9]*\):.*/\1/p' | head -n 1
+}
+
+# The master as the shim's load_master_locked() would judge it, with one
+# stricter rule: provisioning writes exactly -rw-------, so that is what is
+# required. $1 is the securityd uid.
+keychain_master_state() {
+    sh_dev "M=/mnt2/Keychains/l8keychain.master U='$1'"'
+if [ -L "$M" ]; then echo "MISMATCH (symlink: the shim opens the master with O_NOFOLLOW, so securityd cannot use it)"; exit 0; fi
+if [ ! -f "$M" ]; then echo MISSING; exit 0; fi
+set -- $(ls -ln "$M")
+case "$1" in -rw-------*) ;; *) echo "MISMATCH (mode $1, must be -rw-------; fw provision repairs this)"; exit 0 ;; esac
+[ "$3" = "$U" ] || { echo "MISMATCH (owner uid $3, but securityd runs as uid $U and cannot read it; fw provision repairs this)"; exit 0; }
+[ "$5" = 32 ] || { echo "MISMATCH (size $5, must be 32; not repaired automatically, since replacing it orphans what it wraps)"; exit 0; }
+echo OK' | tr -d '\r'
+}
+
+# The SSH ramdisk has no chown on PATH (/usr/bin:/bin:/tmp/bin:...:/binpack/bin)
+# but does carry /usr/sbin/chown. A bare `chown` failed silently while the
+# device script still printed DONE_OK, which is how a root-owned master and a
+# never-checked marker owner shipped. Every chown below names this path and
+# aborts the device script if it fails.
+RAMDISK_CHOWN=/usr/sbin/chown
+
+create_keychain_master() {
+    # /private/var on the device is the Data-volume ROOT (= /mnt2), so the
+    # shim's /private/var/Keychains/... is /mnt2/Keychains/... - the previous
+    # /mnt2/var/Keychains path was a double-var and the shim never saw it.
+    K_MASTER=/mnt2/Keychains/l8keychain.master
+    K_UID=$(securityd_uid)
+    [ -n "$K_UID" ] || die "could not read the _securityd uid from /mnt1/private/etc/passwd"
+    # An existing master keeps its bytes and only has its owner and mode
+    # repaired, so the items it already wraps stay readable. A master of the
+    # wrong size is not regenerated here: keychain_master_state fails it, and
+    # replacing it silently would orphan whatever it wraps.
+    #
+    # Ownership copies stock: keychain-2.db and its directory are
+    # _securityd:wheel, and a freshly restored 24B156 already carries the
+    # directory as 64:0 0755. It is only created and owned here when it does
+    # not exist yet. A root-owned one, which a bare mkdir would leave, would
+    # stop securityd creating keychain-2.db at all; an existing one is left
+    # exactly as the restore made it.
+    must_dev "
+[ -x $RAMDISK_CHOWN ] || { echo 'no $RAMDISK_CHOWN on this ramdisk'; exit 1; }
+if [ ! -d /mnt2/Keychains ]; then
+  mkdir /mnt2/Keychains || exit 1
+  $RAMDISK_CHOWN $K_UID:0 /mnt2/Keychains || exit 1
+  chmod 0755 /mnt2/Keychains || exit 1
+fi
+if [ ! -s '$K_MASTER' ]; then
+  dd if=/dev/urandom of='$K_MASTER.new' bs=32 count=1 2>/dev/null || exit 1
+  chmod 0600 '$K_MASTER.new' || exit 1
+  $RAMDISK_CHOWN $K_UID:0 '$K_MASTER.new' || exit 1
+  mv -f '$K_MASTER.new' '$K_MASTER' || exit 1
+fi
+$RAMDISK_CHOWN $K_UID:0 '$K_MASTER' || exit 1
+chmod 0600 '$K_MASTER' || exit 1
+echo DONE_OK
+" "could not create the l8keychain master key"
+    K_STATE=$(keychain_master_state "$K_UID")
+    [ "$K_STATE" = OK ] || die "l8keychain master key is not usable by securityd: $K_STATE"
+    ok "l8keychain master key owned by _securityd:wheel (uid $K_UID), 0600, 32 bytes"
+}
+
+create_keychain_marker() {
+    # The shim's shim_enabled() requires one of these markers; without it the
+    # weak-loaded interposer stays inert on a fresh device.
+    K_MARKER=/mnt1/usr/lib/.liter8-keychain
+    must_dev "
+touch '$K_MARKER' || exit 1
+$RAMDISK_CHOWN 0:0 '$K_MARKER' || exit 1
+chmod 0600 '$K_MARKER' || exit 1
+ls -la '$K_MARKER'
+echo DONE_OK
+" "could not create the l8keychain enable marker"
+    ok "l8keychain enable marker present (root 0600)"
+}
+
+# securityd is patched with LC_LOAD_WEAK_DYLIB for /usr/lib/l8keychain.dylib
+# (the same structural edit launchdhook/patch_launchd.py applies to the other
+# shim consumers), then re-signed preserving Apple's identity and
+# entitlements. The pristine binary is preserved as keybagd.orig-style
+# .orig for rollback.
+patch_securityd_for_keychain() {
+    S_NAME=securityd
+    S_DEVICE=/mnt1/usr/libexec/securityd
+    S_DIR=payload/.work/userland
+    S_PRISTINE=$S_DIR/$S_NAME.pristine
+    S_PATCHED=$S_DIR/$S_NAME.patched
+    mkdir -p "$S_DIR"
+
+    sh_dev "if [ -f '$S_DEVICE.orig' ]; then /bin/cat '$S_DEVICE.orig'; else /bin/cat '$S_DEVICE'; fi" \
+        > "$S_PRISTINE" || die "could not read pristine securityd"
+    [ -s "$S_PRISTINE" ] || die "pristine securityd is empty"
+
+    python3 launchdhook/patch_launchd.py "$S_PRISTINE" \
+        -o "$S_PATCHED" --path /usr/lib/l8keychain.dylib --apply \
+        || die "could not append the weak l8keychain load command"
+
+    # Re-sign preserving Apple's identity and entitlements.
+    IDENT=$(/usr/bin/codesign -d --verbose=4 "$S_PRISTINE" 2>&1 | sed -n 's/^Identifier=//p' | head -1)
+    [ -n "$IDENT" ] || die "codesign did not report securityd's identifier"
+    /usr/bin/codesign -d --entitlements "$S_DIR/securityd.entitlements" --xml "$S_PRISTINE" >/dev/null 2>&1 \
+        || die "could not read securityd entitlements"
+    "$LDID" -I"$IDENT" -S"$S_DIR/securityd.entitlements" -Cadhoc "$S_PATCHED" \
+        || die "could not re-sign patched securityd"
+    /usr/bin/codesign -v "$S_PATCHED" >/dev/null 2>&1 \
+        || die "patched securityd signature verification failed"
+
+    S_STAGED=$S_DEVICE.liter8-new
+    S_WANT=$(shasum -a 256 "$S_PATCHED" | awk '{print $1}')
+    put "$S_PATCHED" "$S_STAGED"
+    must_dev "
+[ -f '$S_DEVICE.orig' ] || cp '$S_DEVICE' '$S_DEVICE.orig'
+chmod 0755 '$S_STAGED'
+mv -f '$S_STAGED' '$S_DEVICE'
+echo DONE_OK
+" "could not activate patched securityd"
+    sh_dev "/bin/cat '$S_DEVICE'" > "$S_DIR/securityd.readback" \
+        || die "could not read back securityd"
+    S_GOT=$(shasum -a 256 "$S_DIR/securityd.readback" | awk '{print $1}')
+    [ "$S_GOT" = "$S_WANT" ] || die "securityd readback hash mismatch"
+    ok "securityd patched, deployed and read back ($S_WANT)"
+}
+if wants keychain && [ "$CHECK_ONLY" = 0 ]; then
+    say "software system keychain"
+    deploy_keychain_library
+    patch_securityd_for_keychain
+    create_keychain_master
+    create_keychain_marker
 fi
 
 # -------------------------------------------------------------- cellular
@@ -1296,6 +1593,12 @@ mv -f /mnt2/jb/usr/bin/ddiwatch.usbl8r-new /mnt2/jb/usr/bin/ddiwatch
     ok "uicache (iOS 27 containerized registration)"
 fi
 
+# ----------------------------------------------------------------- logging
+if wants logging && [ "$CHECK_ONLY" = 0 ]; then
+    say "os_log reader on the Data volume"
+    deploy_oslog
+fi
+
 # ----------------------------------------------------------------- bundles
 # Sileo comes from payload/, built by fetch_payloads.sh from the upstream
 # release. It used to be scraped off the device (installed via dpkg, then pulled
@@ -1390,7 +1693,7 @@ echo $n' | tr -d ' \r')
     if [ "$missing" = 0 ]; then
         skip "the system apps are already present ($have bundles), skipping the 659 MB copy"
     elif [ ! -d "$IPSW_ROOT/private/var/staged_system_apps" ]; then
-        skip "IPSW not mounted at $IPSW_ROOT; cannot source the apps"
+        skip "IPSW not mounted at $IPSW_ROOT; cannot source the apps (the decrypted rootfs must stay mounted until provision finishes)"
     else
         SRC="$IPSW_ROOT/private/var/staged_system_apps"
         TAR=payload/apps50.tar.gz
@@ -1417,7 +1720,8 @@ echo $n' | tr -d ' \r')
         fi
         ok "streaming $(du -h "$TAR" | cut -f1) to /Applications"
         timeout 1800 "$SSHPASS" -p "$PW" ssh $SSHOPT "$DEV" \
-            'cd /mnt1/Applications && tar xzf - --numeric-owner' < "$TAR"
+            'cd /mnt1/Applications && tar xzf - --numeric-owner' < "$TAR" \
+            || die "app archive extraction failed with status $?; /Applications may hold a partial copy"
         ok "extracted"
     fi
 fi
@@ -1430,8 +1734,37 @@ FAIL=0
 note() {
     printf '    %-24s %s\n' "$1" "${2:-NO RESULT}"
     case "$2" in
-        ""|*ABSENT*|*MISSING*|*LOST*|*MISMATCH*|*UNREADABLE*|*UNSAFE*|ENABLED) FAIL=1 ;;
+        ""|*ABSENT*|*MISSING*|*LOST*|*MISMATCH*|*UNREADABLE*|*UNSAFE*|*STALE*|*CHECK-FAILED*|ENABLED) FAIL=1 ;;
     esac
+}
+
+# One dylib on the System volume: the local copy's hash against the copy on
+# the device, and the signature on the readback.
+verify_system_dylib() {
+    V_LABEL=$1
+    V_LOCAL=$2
+    V_DEVICE=$3
+    V_READBACK=payload/.work/verify.$(basename "$V_LOCAL")
+    if [ ! -f "$V_LOCAL" ]; then
+        note "$V_LABEL" "MISSING"
+        return
+    fi
+    V_WANT=$(shasum -a 256 "$V_LOCAL" | awk '{print $1}')
+    sh_dev "/bin/cat '$V_DEVICE'" > "$V_READBACK" 2>/dev/null || true
+    if [ -s "$V_READBACK" ] && \
+       [ "$(shasum -a 256 "$V_READBACK" | awk '{print $1}')" = "$V_WANT" ] && \
+       codesign -v "$V_READBACK" >/dev/null 2>&1; then
+        note "$V_LABEL" "OK"
+    else
+        note "$V_LABEL" "MISMATCH"
+    fi
+}
+
+# Reports a state without making it a boot-readiness failure. Used for the
+# helpers nothing else on the device depends on: their absence is worth
+# saying out loud, but it must not tell the operator not to boot.
+report() {
+    printf '    %-24s %s\n' "$1" "${2:-NO RESULT}"
 }
 
 # Decide a presence marker exactly as the code that reads it decides: a regular
@@ -1655,6 +1988,29 @@ verify_userland_patch ctkd \
     /mnt1/System/Library/Frameworks/CryptoTokenKit.framework/ctkd
 verify_userland_patch lockdownd /mnt1/usr/libexec/lockdownd
 verify_userland_patch remotepairingdeviced /mnt1/usr/libexec/remotepairingdeviced
+# The keychain path retires the l8wifi fallback (the wifi step handles this);
+# the verify then expects the pieces absent instead of failing on them.
+#
+# This is a query, not a mutation, so it goes through sh_dev and never
+# must_dev: must_dev demands DONE_OK, which a query cannot print, and this
+# line once died the whole verify report with a swallowed default message
+# while the command substitution hid even that. The answer is checked against
+# the only two values it can have, and anything else dies naming what the
+# device actually returned.
+W_RETIRED=$(sh_dev "if test -f /mnt1/usr/lib/.liter8-keychain && ! test -f /mnt1/usr/lib/l8wifi.dylib; then echo yes; else echo no; fi" 2>&1 | tr -d ' \r')
+case "$W_RETIRED" in
+    yes)
+        note "AirPort credential fallback" "retired - keychain owns credentials"
+        note "AirPort credential marker" "retired"
+        ;;
+    no)
+        verify_userland_patch wifid /mnt1/usr/sbin/wifid
+        note "AirPort credential marker" "$(required_marker /mnt1/usr/lib/.liter8-wifi-credentials)"
+        ;;
+    *)
+        die "could not query the keychain/wifi state: expected yes or no, got '${W_RETIRED:-nothing}'"
+        ;;
+esac
 if [ "$HAS_BASEBAND" = 1 ]; then
     verify_userland_patch CommCenter \
         /mnt1/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter
@@ -1662,68 +2018,14 @@ else
     note "CommCenter patch" "not used: this board has no baseband"
 fi
 
-if [ -f payload/l8pair.dylib ]; then
-    pairing_want=$(shasum -a 256 payload/l8pair.dylib | awk '{print $1}')
-    sh_dev '/bin/cat /mnt1/usr/lib/l8pair.dylib' \
-        > payload/.work/verify.l8pair 2>/dev/null || true
-    if [ -s payload/.work/verify.l8pair ] && \
-       [ "$(shasum -a 256 payload/.work/verify.l8pair | awk '{print $1}')" = "$pairing_want" ] && \
-       codesign -v payload/.work/verify.l8pair >/dev/null 2>&1; then
-        pairing_library_state=OK
-    else
-        pairing_library_state=MISMATCH
-    fi
+verify_system_dylib "l8pair dylib" payload/l8pair.dylib /mnt1/usr/lib/l8pair.dylib
+verify_system_dylib "l8remotepairing dylib" payload/l8remotepairing.dylib /mnt1/usr/lib/l8remotepairing.dylib
+verify_system_dylib "l8coreauth dylib" payload/l8coreauth.dylib /mnt1/usr/lib/l8coreauth.dylib
+if [ "$HAS_BASEBAND" = 1 ]; then
+    verify_system_dylib "l8fdr dylib" payload/l8fdr.dylib /mnt1/usr/lib/l8fdr.dylib
 else
-    pairing_library_state=MISSING
+    note "l8fdr dylib" "not used: this board has no baseband"
 fi
-note "l8pair dylib" "$pairing_library_state"
-if [ -f payload/l8remotepairing.dylib ]; then
-    remotepairing_want=$(shasum -a 256 payload/l8remotepairing.dylib | awk '{print $1}')
-    sh_dev '/bin/cat /mnt1/usr/lib/l8remotepairing.dylib' \
-        > payload/.work/verify.l8remotepairing 2>/dev/null || true
-    if [ -s payload/.work/verify.l8remotepairing ] && \
-       [ "$(shasum -a 256 payload/.work/verify.l8remotepairing | awk '{print $1}')" = "$remotepairing_want" ] && \
-       codesign -v payload/.work/verify.l8remotepairing >/dev/null 2>&1; then
-        remotepairing_library_state=OK
-    else
-        remotepairing_library_state=MISMATCH
-    fi
-else
-    remotepairing_library_state=MISSING
-fi
-note "l8remotepairing dylib" "$remotepairing_library_state"
-if [ -f payload/l8coreauth.dylib ]; then
-    coreauth_want=$(shasum -a 256 payload/l8coreauth.dylib | awk '{print $1}')
-    sh_dev '/bin/cat /mnt1/usr/lib/l8coreauth.dylib' \
-        > payload/.work/verify.l8coreauth 2>/dev/null || true
-    if [ -s payload/.work/verify.l8coreauth ] && \
-       [ "$(shasum -a 256 payload/.work/verify.l8coreauth | awk '{print $1}')" = "$coreauth_want" ] && \
-       codesign -v payload/.work/verify.l8coreauth >/dev/null 2>&1; then
-        coreauth_library_state=OK
-    else
-        coreauth_library_state=MISMATCH
-    fi
-else
-    coreauth_library_state=MISSING
-fi
-note "l8coreauth dylib" "$coreauth_library_state"
-if [ "$HAS_BASEBAND" = 0 ]; then
-    fdr_library_state="not used: this board has no baseband"
-elif [ -f payload/l8fdr.dylib ]; then
-    fdr_want=$(shasum -a 256 payload/l8fdr.dylib | awk '{print $1}')
-    sh_dev '/bin/cat /mnt1/usr/lib/l8fdr.dylib' \
-        > payload/.work/verify.l8fdr 2>/dev/null || true
-    if [ -s payload/.work/verify.l8fdr ] && \
-       [ "$(shasum -a 256 payload/.work/verify.l8fdr | awk '{print $1}')" = "$fdr_want" ] && \
-       codesign -v payload/.work/verify.l8fdr >/dev/null 2>&1; then
-        fdr_library_state=OK
-    else
-        fdr_library_state=MISMATCH
-    fi
-else
-    fdr_library_state=MISSING
-fi
-note "l8fdr dylib" "$fdr_library_state"
 # Reported separately from the dylib: with the dylib present and the marker gone the
 # bypass is deliberately inert, which is a recovery state rather than a broken one.
 if [ "$HAS_BASEBAND" = 1 ]; then
@@ -1731,7 +2033,94 @@ if [ "$HAS_BASEBAND" = 1 ]; then
 fi
 note "pairing fallback marker" "$(required_marker /mnt2/root/Library/Lockdown/.liter8-pairing-fallback)"
 note "RemoteXPC fallback marker" "$(required_marker /mnt1/usr/lib/.liter8-remotepairing-fallback)"
+case "$W_RETIRED" in
+    yes)
+        # The keychain path owns AirPort credentials: the wifi dylib and the
+        # credentials marker are absent BY DESIGN in this state. Verifying the
+        # dylib against its payload copy would report a healthy retirement as
+        # MISMATCH, and the marker's absence as MISSING, so both are reported
+        # as the retirement they are instead.
+        note "l8wifi dylib" "retired (absent by design)"
+        ;;
+    *)
+        verify_system_dylib "l8wifi dylib" payload/l8wifi.dylib /mnt1/usr/lib/l8wifi.dylib
+        note "AirPort credential marker" "$(required_marker /mnt1/usr/lib/.liter8-wifi-credentials)"
+        ;;
+esac
+# These three must run ON the device: /mnt1 and /mnt2 are ramdisk mounts, not
+# host paths, and a host-side `test` here has reported MISSING for files that
+# exist ever since this script carried its macOS legs.
+note "l8keychain dylib" "$(sh_dev '[ -f /mnt1/usr/lib/l8keychain.dylib ] && echo present || echo MISSING' | tr -d '\r')"
+note "l8keychain enable marker" "$(required_marker /mnt1/usr/lib/.liter8-keychain)"
+sh_dev 'cat /mnt1/usr/libexec/securityd' > payload/.work/verify.securityd 2>/dev/null || true
+# The string alone is not proof: what keeps securityd startable when the shim
+# is absent is the load command being LC_LOAD_WEAK_DYLIB (0x80000018). The
+# path sits 24 bytes into that command, so the command word is checked at
+# path-24 and the verdict names what was actually found.
+SEC_STATE=$(python3 - payload/.work/verify.securityd <<'PY' 2>&1
+import sys
+
+try:
+    blob = open(sys.argv[1], "rb").read()
+except OSError as error:
+    print(f"CHECK-FAILED: could not read securityd over the SSHRD link ({error})")
+    sys.exit(0)
+# The redirect above always creates the file, so a failed SSHRD read shows up
+# as an empty readback, not a missing file. Reporting that as MISSING would
+# blame the patch for a link failure.
+if not blob:
+    print("CHECK-FAILED: empty readback of securityd over the SSHRD link")
+    sys.exit(0)
+needle = b"/usr/lib/l8keychain.dylib"
+i = blob.find(needle)
+if i < 0:
+    print("MISSING: securityd carries no l8keychain.dylib path")
+    sys.exit(0)
+cmd = blob[i - 24:i - 20]
+if cmd == b"\x18\x00\x00\x80":
+    print("present")
+else:
+    print(f"MISSING: the l8keychain load command is {cmd.hex()}, not LC_LOAD_WEAK_DYLIB")
+PY
+)
+# Only the checker's three known verdicts pass through as-is. Anything else
+# (a python3 traceback, an empty capture) matches none of note()'s failure
+# patterns and would leave FAIL unset, so it is reported as CHECK-FAILED.
+case "$SEC_STATE" in
+    present|MISSING:*|CHECK-FAILED:*) note "securityd weak load" "$SEC_STATE" ;;
+    *) note "securityd weak load" "CHECK-FAILED: unexpected checker output: $(printf '%s' "$SEC_STATE" | tail -1)" ;;
+esac
+# Present is not enough: a master securityd cannot read leaves the keychain
+# unable to keep anything across a reboot, so the owner is checked too.
+SECD_UID=$(securityd_uid)
+if [ -n "$SECD_UID" ]; then
+    note "l8keychain master" "$(keychain_master_state "$SECD_UID")"
+else
+    note "l8keychain master" "CHECK-FAILED: could not read the _securityd uid from the target's passwd"
+fi
 note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_pairing_key.der ] && echo generated || echo pending' | tr -d '\r')"
+
+# The os_log reader. Its state is the file's own hash, because the binary is
+# a fixed resource: the same bytes, or the tool is not the one that was
+# validated. Reported and never fatal, because the reader is a convenience
+# and nothing else on the device depends on it. Failing here would make a
+# device provisioned without the logging step report "do not boot".
+if [ -f "$OSLOG" ]; then
+    oslog_want=$(shasum -a 256 "$OSLOG" | awk '{print $1}')
+    sh_dev '/bin/cat /mnt2/root/oslog' \
+        > payload/.work/verify.oslog 2>/dev/null || true
+    if [ -s payload/.work/verify.oslog ] && \
+       [ "$(shasum -a 256 payload/.work/verify.oslog | awk '{print $1}')" = "$oslog_want" ]; then
+        oslog_state=OK
+    elif [ -s payload/.work/verify.oslog ]; then
+        oslog_state=MISMATCH
+    else
+        oslog_state="not installed"
+    fi
+else
+    oslog_state="not installed"
+fi
+report "oslog reader" "$oslog_state"
 
 sh_dev '/bin/cat /mnt2/db/com.apple.xpc.launchd/disabled.plist' \
     > payload/.work/verify.disabled.plist 2>/dev/null || true
@@ -1799,6 +2188,22 @@ else
 fi
 note "uicache iOS 27" "$uicache_state"
 
+# One device build output against its staged copy: same hash and executable.
+# lhook, systemhook.dylib and sbextissue are build outputs that do not depend
+# on which launchd the build ships, so their staged copies stay a valid
+# reference even when the staged launchd pair is from another build.
+# $4 is appended to MISMATCH so the caller can say why a mismatch is ambiguous.
+staged_output_state() {
+    sh_dev "cat '$2'" > "$3" 2>/dev/null || true
+    if [ -s "$3" ] && \
+       [ "$(shasum -a 256 "$3" | awk '{print $1}')" = "$1" ] && \
+       sh_dev "[ -x '$2' ]" >/dev/null 2>&1; then
+        echo OK
+    else
+        echo "MISMATCH$4"
+    fi
+}
+
 if [ -f payload/launchd.orig ] && [ -f payload/launchd.hooked ] && \
    [ -f payload/lhook.dylib ] && [ -f payload/systemhook.dylib ] && \
    [ -f payload/sbextissue ]; then
@@ -1809,17 +2214,58 @@ if [ -f payload/launchd.orig ] && [ -f payload/launchd.hooked ] && \
     verify_sbextissue=$(shasum -a 256 payload/sbextissue | awk '{print $1}')
     if [ "$verify_stock" != "$LAUNCHD_SHA" ] || \
        ! python3 launchdhook/verify_diff.py payload/launchd.orig payload/launchd.hooked >/dev/null; then
-        injection_launchd=MISMATCH
-        injection_backup=MISMATCH
-        injection_hook=MISMATCH
-        injection_systemhook=MISMATCH
-        injection_sbextissue=MISMATCH
+        # The five verdicts below compare the device against the staged
+        # payload copies, so a stale reference reports the healthy device as
+        # MISMATCH without a word of why. A --check run re-stages the workflow
+        # directory and drops the Nov-1-era copies from device/payload back
+        # in, which is exactly how this bit a correctly provisioned 24B156.
+        # Only the launchd pair is build-specific, so only those two verdicts
+        # need another reference.
+        #
+        # The stock backup is verified against the profile oracle directly:
+        # LAUNCHD_SHA IS the stock launchd of this build, wherever it came
+        # from. The hooked launchd is re-derived from the device's own backup
+        # with the same deterministic patcher the deploy ran, then compared
+        # byte for byte. lhook, systemhook.dylib and sbextissue do not depend
+        # on the launchd build, so they are still checked against their staged
+        # copies. Those copies may be as old as the launchd pair, so a
+        # mismatch here says so instead of blaming the device outright.
+        stale_note=" vs staged copy, which may be as stale as the launchd pair"
+        injection_hook=$(staged_output_state "$verify_lhook" /mnt1/usr/lib/lhook payload/.work/verify.lhook "$stale_note")
+        injection_systemhook=$(staged_output_state "$verify_systemhook" /mnt1/usr/lib/systemhook.dylib payload/.work/verify.systemhook "$stale_note")
+        injection_sbextissue=$(staged_output_state "$verify_sbextissue" /mnt1/usr/local/bin/sbextissue payload/.work/verify.sbextissue "$stale_note")
+
+        sh_dev 'cat /mnt1/sbin/launchd.bak' > payload/.work/verify.launchd.bak 2>/dev/null || true
+        if [ -s payload/.work/verify.launchd.bak ] && \
+           [ "$(shasum -a 256 payload/.work/verify.launchd.bak | awk '{print $1}')" = "$LAUNCHD_SHA" ] && \
+           sh_dev '[ -x /mnt1/sbin/launchd.bak ]'; then
+            injection_backup=OK
+        else
+            injection_backup=MISMATCH
+        fi
+
+        injection_launchd=STALE-REF
+        if [ -s payload/.work/verify.launchd.bak ]; then
+            python3 launchdhook/patch_launchd.py payload/.work/verify.launchd.bak \
+                -o payload/.work/verify.launchd.expected --apply >/dev/null 2>&1 \
+                && python3 launchdhook/resign_pagehashes.py payload/.work/verify.launchd.expected --apply >/dev/null 2>&1 \
+                && sh_dev 'cat /mnt1/sbin/launchd' > payload/.work/verify.launchd 2>/dev/null \
+                && cmp -s payload/.work/verify.launchd.expected payload/.work/verify.launchd \
+                && sh_dev '[ -x /mnt1/sbin/launchd ]' \
+                && injection_launchd=OK || injection_launchd=MISMATCH
+        fi
+
+        # report, not note: this describes the host's staged copies, not the
+        # device. Every device verdict below still fails closed on its own, so
+        # a stale host reference no longer blocks a device that verified.
+        if [ "$verify_stock" != "$LAUNCHD_SHA" ]; then
+            report "staged launchd reference" "STALE: launchd.orig is $verify_stock, not this profile's stock $LAUNCHD_SHA; the launchd lines below verify against the device's own stock backup and the deterministic patcher"
+        else
+            report "staged launchd reference" "STALE: launchd.hooked does not correspond to launchd.orig (verify_diff failed); the launchd lines below verify against the device's own stock backup and the deterministic patcher"
+        fi
     else
         sh_dev 'cat /mnt1/sbin/launchd' > payload/.work/verify.launchd 2>/dev/null || true
         sh_dev 'cat /mnt1/sbin/launchd.bak' > payload/.work/verify.launchd.bak 2>/dev/null || true
-        sh_dev 'cat /mnt1/usr/lib/lhook' > payload/.work/verify.lhook 2>/dev/null || true
-        sh_dev 'cat /mnt1/usr/lib/systemhook.dylib' > payload/.work/verify.systemhook 2>/dev/null || true
-        sh_dev 'cat /mnt1/usr/local/bin/sbextissue' > payload/.work/verify.sbextissue 2>/dev/null || true
         [ -s payload/.work/verify.launchd ] && \
             [ "$(shasum -a 256 payload/.work/verify.launchd | awk '{print $1}')" = "$verify_hooked" ] && \
             sh_dev '[ -x /mnt1/sbin/launchd ]' \
@@ -1828,18 +2274,9 @@ if [ -f payload/launchd.orig ] && [ -f payload/launchd.hooked ] && \
             [ "$(shasum -a 256 payload/.work/verify.launchd.bak | awk '{print $1}')" = "$verify_stock" ] && \
             sh_dev '[ -x /mnt1/sbin/launchd.bak ]' \
             && injection_backup=OK || injection_backup=MISMATCH
-        [ -s payload/.work/verify.lhook ] && \
-            [ "$(shasum -a 256 payload/.work/verify.lhook | awk '{print $1}')" = "$verify_lhook" ] && \
-            sh_dev '[ -x /mnt1/usr/lib/lhook ]' \
-            && injection_hook=OK || injection_hook=MISMATCH
-        [ -s payload/.work/verify.systemhook ] && \
-            [ "$(shasum -a 256 payload/.work/verify.systemhook | awk '{print $1}')" = "$verify_systemhook" ] && \
-            sh_dev '[ -x /mnt1/usr/lib/systemhook.dylib ]' \
-            && injection_systemhook=OK || injection_systemhook=MISMATCH
-        [ -s payload/.work/verify.sbextissue ] && \
-            [ "$(shasum -a 256 payload/.work/verify.sbextissue | awk '{print $1}')" = "$verify_sbextissue" ] && \
-            sh_dev '[ -x /mnt1/usr/local/bin/sbextissue ]' \
-            && injection_sbextissue=OK || injection_sbextissue=MISMATCH
+        injection_hook=$(staged_output_state "$verify_lhook" /mnt1/usr/lib/lhook payload/.work/verify.lhook "")
+        injection_systemhook=$(staged_output_state "$verify_systemhook" /mnt1/usr/lib/systemhook.dylib payload/.work/verify.systemhook "")
+        injection_sbextissue=$(staged_output_state "$verify_sbextissue" /mnt1/usr/local/bin/sbextissue payload/.work/verify.sbextissue "")
     fi
 else
     injection_launchd=MISSING

@@ -1,0 +1,44 @@
+{
+  "expectedOutputSHA256" : "d73fa79b79f70b7a1ff199736d65d59837f665861401004f3770105c6567f62e",
+  "expectedPatches" : [
+    {
+      "id" : "kernel.tfp0.task-conversion",
+      "offset" : 52127296,
+      "originalBytes" : "1f0009eb",
+      "replacementBytes" : "ff031feb"
+    },
+    {
+      "id" : "kernel.tfp0.pid-zero",
+      "offset" : 57406332,
+      "originalBytes" : "f7070034",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "kernel.tfp0.kernel-map",
+      "offset" : 52133800,
+      "originalBytes" : "41010054",
+      "replacementBytes" : "0a000014"
+    },
+    {
+      "id" : "kernel.tfp0.dyld-info-cave",
+      "offset" : 60806460,
+      "originalBytes" : "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "replacementBytes" : "6893fed0083145f99f0208ebc10000548893fe9008b547f9df0200f9c80600f9ab0be01788f241f9c80200f988f641f9c80600f9a60be017"
+    },
+    {
+      "id" : "kernel.tfp0.dyld-info-slide-scoped",
+      "offset" : 52429816,
+      "originalBytes" : "88f241f9",
+      "replacementBytes" : "51f41f14"
+    }
+  ],
+  "expectedSize" : 67534848,
+  "resolver" : "kernel-tfp0",
+  "sha256" : "813be26ab6bd1d8de211904eca413a1a2ebf79989f90c33a48ff0f2fcff99036",
+  "target" : {
+    "board" : "n104ap",
+    "build" : "24A446",
+    "component" : "kernelcache.release.iphone12b",
+    "device" : "iPhone 11"
+  }
+}

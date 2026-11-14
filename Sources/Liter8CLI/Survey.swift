@@ -33,6 +33,18 @@ enum Survey {
         "ibec-force-pinot-id": "--pinot-id",
     ]
 
+    /// Plans whose target hardware is absent on some boards, and the driver
+    /// string that decides it. Without this a board that simply does not have
+    /// the hardware reports a resolver failure, which is indistinguishable
+    /// from the signature having stopped matching on a board that does.
+    ///
+    /// `ibec-force-pinot-id` is the other Pinot plan and is not listed: it is
+    /// already reported as needing `--pinot-id` above and never reaches this
+    /// check. See `IBECPinotDriver` for the 24B119 measurement.
+    private static let requiresDriver = [
+        "ibec-ignore-pinot-failure": IBECPinotDriver.environmentVariable,
+    ]
+
     private struct Candidate {
         let url: URL
         let fourcc: String
@@ -92,6 +104,12 @@ enum Survey {
                     continue
                 }
                 guard let candidate = artifact(for: component, plan: plan, in: candidates) else {
+                    continue
+                }
+                if let driver = requiresDriver[plan],
+                   candidate.image.findAll(utf8: driver).isEmpty {
+                    rows.append(Row(component: component, plan: plan, count: nil,
+                                    note: "skipped, no \(driver) in this \(candidate.fourcc)"))
                     continue
                 }
                 do {

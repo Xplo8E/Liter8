@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  ElleKit/Substrate filter: Foundation is in every ObjC process, so this
+	  reaches securityd too. The constructor no-ops unless getprogname() is
+	  "securityd" AND the marker /private/var/root/Library/.liter8-keychain
+	  exists — dormant everywhere else. Dyld-interposes the AppleKeyStore
+	  client calls aks_wrap_key/aks_unwrap_key with software class keys; see
+	  l8keychain.m for the verified contract and the documented limits
+	  (software keys protect nothing).
+	-->
+	<key>Filter</key>
+	<dict>
+		<key>Bundles</key>
+		<array>
+			<string>com.apple.Foundation</string>
+		</array>
+	</dict>
+</dict>
+</plist>

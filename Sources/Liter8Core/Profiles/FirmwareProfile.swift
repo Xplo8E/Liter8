@@ -84,6 +84,11 @@ public struct KernelResolverProfile: Equatable, Sendable {
     }
 }
 
+private let tfp0Variant = ResolverVariantProfile(
+    signature: KernelTFP0Resolver.signatureID,
+    payload: KernelTFP0Resolver.payloadID
+)
+
 /// The reviewed build-to-variant map.
 ///
 /// This table contains no offsets. Offsets remain outputs of semantic
@@ -151,6 +156,7 @@ public enum KernelResolverProfileRegistry {
                     signature: "ios27-24A435-acm-v1",
                     payload: "acm-return-success-v1"
                 ),
+                KernelTFP0Resolver.variantKey: tfp0Variant,
             ]
         ),
         KernelResolverProfile(
@@ -170,6 +176,7 @@ public enum KernelResolverProfileRegistry {
                     signature: "ios272-24B5084k-acm-v1",
                     payload: "acm-return-success-v1"
                 ),
+                KernelTFP0Resolver.variantKey: tfp0Variant,
             ]
         ),
         KernelResolverProfile(
@@ -191,6 +198,7 @@ public enum KernelResolverProfileRegistry {
                     signature: "ios272b2-24B5089g-acm-v1",
                     payload: "acm-return-success-v1"
                 ),
+                KernelTFP0Resolver.variantKey: tfp0Variant,
             ]
         ),
         KernelResolverProfile(
@@ -209,6 +217,7 @@ public enum KernelResolverProfileRegistry {
                     signature: "ios272b3-24B5099f-acm-v1",
                     payload: "acm-return-success-v1"
                 ),
+                KernelTFP0Resolver.variantKey: tfp0Variant,
             ]
         ),
         KernelResolverProfile(
@@ -226,6 +235,91 @@ public enum KernelResolverProfileRegistry {
                     signature: "ios272b4-24B5110a-acm-v1",
                     payload: "acm-return-success-v1"
                 ),
+                KernelTFP0Resolver.variantKey: tfp0Variant,
+            ]
+        ),
+        KernelResolverProfile(
+            // The 27.2 release build, and the fifth distinct 27.2 XNU string.
+            // It shares beta 4's base version and differs only in the build
+            // suffix (~28 against ~13), but `detect` matches the whole string,
+            // so that is a different fingerprint and needs its own entry.
+            //
+            // 24B156 (27.2.1) is this build's point release and the 24A446
+            // relationship again: byte-identical kernelcache apart from
+            // UUID/version metadata, identical records on both caches.
+            // One ACM family, in `builds` together, like 24A435/24A437/24A446.
+            id: "ios272-24B119-n104ap",
+            productVersion: "27.2, 27.2.1",
+            builds: ["24B119", "24B156"],
+            // The 11 Pro and Pro Max ship a different kernelcache from the
+            // iPhone 11 (`kernelcache.release.iphone12`, 67862528 bytes against
+            // iphone12b's 67796992) but it embeds the same XNU string, so
+            // `detect` selects this profile for all three boards and they
+            // cannot be split into separate entries: two profiles sharing one
+            // fingerprint make `detect` return nil for both.
+            //
+            // Measured on the iPhone12,3/iPhone12,5 24B119 IPSW rather than
+            // assumed from the shared build ID. Every kernel plan resolves on
+            // the Pro kernelcache with the record count this build produces on
+            // n104: credential-manager 52, sep 32, sandbox 46, restore 20,
+            // boot 169, aks 22, diagnostic 42, valeria 15. `acm-probe` against
+            // ios272-24B119-acm-v1 reports 24/26 exact with only the two
+            // scored entries ambiguous, which is what a family looks like on
+            // the build it was recorded from. Offsets differ between the two
+            // kernelcaches, as they must: they are rediscovered per image.
+            boards: ["n104ap", "d421ap", "d431ap"],
+            component: "kernelcache.release.iphone12b",
+            embeddedFingerprint: "xnu-13432.42.3~28/RELEASE_ARM64_T8030",
+            resolverVariants: [
+                // Shape-identical to beta 4; see
+                // KernelCredentialManagerSignatures.release24B119V1.
+                "kernel-credential-manager": ResolverVariantProfile(
+                    signature: "ios272-24B119-acm-v1",
+                    payload: "acm-return-success-v1"
+                ),
+                KernelTFP0Resolver.variantKey: tfp0Variant,
+            ]
+        ),
+        KernelResolverProfile(
+            // First 27.3 seed, sixth distinct 27.x XNU string, so a new
+            // profile. Both shipped IPSWs were measured, not assumed from the
+            // shared build ID: the iPhone 11 kernelcache
+            // (`kernelcache.release.iphone12b`, 69304320 bytes) and the 11
+            // Pro / Pro Max kernelcache (`kernelcache.release.iphone12`,
+            // 69369856 bytes) embed the same XNU string, so `detect` selects
+            // one profile for all three boards and they cannot be split into
+            // separate entries: two profiles sharing one fingerprint make
+            // `detect` return nil for both.
+            //
+            // Measured per kernelcache. On the Pro image every applicable
+            // plan resolves with the same record counts the iPhone 11
+            // kernelcache produces (credential-manager via acm-probe against
+            // ios273b1-24C5037i-acm-v1, sep 32, sandbox 46, restore 20,
+            // aks 22, diagnostic 42, valeria 15); the survey total differs by
+            // one record only because the Pro iBEC carries no
+            // pinot-panel-id, which skips ibec-ignore-pinot-failure.
+            //
+            // Validation state: static resolution against clean inputs only.
+            // No device run of any kind has happened on this build - no
+            // restore, no SSHRD, no boot. It resolves; nothing has booted it.
+            id: "ios273b1-24C5037i-n104ap",
+            productVersion: "27.3 beta 1",
+            builds: ["24C5037i"],
+            boards: ["n104ap", "d421ap", "d431ap"],
+            component: "kernelcache.release.iphone12b",
+            embeddedFingerprint: "xnu-13432.60.57~17/RELEASE_ARM64_T8030",
+            resolverVariants: [
+                // Shape-identical to 27.2 release: acm-probe of the 24B119
+                // family matches 24/26 exact with only the two scored entries
+                // ambiguous, and the positional rails hold at the same
+                // deltas. Recorded separately because the raw words differ in
+                // the masked fields. See
+                // KernelCredentialManagerSignatures.release24C5037iV1.
+                "kernel-credential-manager": ResolverVariantProfile(
+                    signature: "ios273b1-24C5037i-acm-v1",
+                    payload: "acm-return-success-v1"
+                ),
+                KernelTFP0Resolver.variantKey: tfp0Variant,
             ]
         ),
         KernelResolverProfile(

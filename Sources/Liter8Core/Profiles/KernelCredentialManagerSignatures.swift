@@ -653,6 +653,162 @@ enum KernelCredentialManagerSignatures {
         preserveBareBTI: true
     )
 
+    /// iOS 27.2 release `24B119`.
+    ///
+    /// Shape-identical to beta 4: `acm-probe` with `release24B5110aV1` against
+    /// this kernelcache matches twenty-four entries at exactly one site, and
+    /// `updateAnalytics` and `unlockItem` at two sites each, so only those two
+    /// carry `needsScoring`. `sendSEPCommand` and `setPowerStateGated` match
+    /// uniquely here as they did on beta 4, and keep the strict exact match so
+    /// a drifted body fails closed.
+    ///
+    /// Recorded as its own family for the same reason every seed since beta 1
+    /// was. The shapes match, the raw words do not: the differences are ADRP
+    /// pages, branch displacements and load immediates, precisely the fields
+    /// `allowDataLayoutDrift` masks. Sharing beta 4's entry would file this
+    /// build's addresses under beta 4's name and let the masking hide the
+    /// difference rather than account for it.
+    ///
+    /// `updateAnalytics` and `unlockItem` are located positionally, and the
+    /// function entries between their neighbours match the reference build
+    /// exactly: one entry at 0x124 after `scheduleDblClickDeferredAck`, and
+    /// four at 0x230, 0x3a0, 0x4c8 and 0x5f0 after `lockItem`, the first of
+    /// which is `unlockItem`. Verified by scanning for `bti c` followed by
+    /// `pacibsp` across both intervals on this kernelcache and on `24B5099f`,
+    /// where the counts, order and deltas agree.
+    static let release24B119V1 = KernelCredentialManagerSignatureVariant(
+        id: "ios272-24B119-acm-v1",
+        functions: [
+            // release file offset 0x20f8010
+            .init("sepManagerMatchedThreadCallHandler", words: "d503237f d10103ff a9037bfd 9100c3fd f9404c00 f9400010 aa0003f1 f2f9b431 dac11a30 f84e8e09 aa1003e8 b0000030"),
+            // release file offset 0x20f86f4
+            .init("callPlatformFunction", words: "d503237f d10183ff a9057bfd 910143fd b40001a4 b9400088 b81e03a8 f9400488 f81e43a8 381ec3bf f81f53bf f81ed3bf d10083a4 94000037 a9457bfd 910183ff"),
+            // release file offset 0x20f877c
+            .init("cmdContextV2", words: "d503237f d10183ff a9057bfd 910143fd b40001c4 b9400088 b81e03a8 f8404088 f81e43a8 39403088 381ec3a8 f81f53bf f81ed3bf d10083a4 94000014 a9457bfd"),
+            // release file offset 0x20f8808
+            .init("cmdContextV3", words: "d503237f d10283ff a90567fa a9065ff8 a90757f6 a9084ff4 a9097bfd 910243fd b40005e4 aa0403f8 aa0303f3 aa0203f4 aa0103f5 aa0003f7 97ffb3a0 aa0003f9"),
+            // release file offset 0x20f8ba0
+            .init("performCommandGated", words: "d503237f d10543ff a90f6ffc a91067fa a9115ff8 a91257f6 a9134ff4 a9147bfd 910503fd aa0403f4 aa0303f5 aa0203f6 aa0103f9 aa0003f8 6f00e400 ad3c03a0"),
+            // release file offset 0x20f9690
+            .init("_performKernelControl", words: "d503237f d10243ff a9036ffc a90467fa a9055ff8 a90657f6 a9074ff4 a9087bfd 910203fd aa0503f5 aa0403f6 aa0303f7 aa0203f8 aa0103f4 aa0003f3 d000f2da"),
+            // release file offset 0x20f9a50
+            .init("_performCommand", words: "d503237f d102c3ff a9056ffc a90667fa a9075ff8 a90857f6 a9094ff4 a90a7bfd 910283fd aa0603f8 aa0503f9 aa0403f4 aa0303f7 aa0203f3 aa0103f5 aa0003f6"),
+            // release file offset 0x20f9c7c
+            .init("processSCRDResponsePayload", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd aa0103f4 aa0003f3 d000f2d5 396e42a8 7100291f 540002e8 39423268 360001a8 f9400270 aa1303f1"),
+            // release file offset 0x20f9eac
+            .init("scheduleDblClickDeferredAck", words: "d503237f d10143ff a9034ff4 a9047bfd 910103fd aa0003f3 52800001 94000fa6 f9408e60 f9400010 aa0003f1 f2f9b431 dac11a30 f84b0e08 f2f362d0 d73f0910"),
+            // release file offset 0x20f9fd0
+            .init("updateAnalytics", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd aa0103f4 aa0003f3 d000f2d6 396e42c8 90ff2e15 91251ab5 7100291f 540002a8 39423268 360001a8 f9400270 aa1303f1 f2f9b431 dac11a30 d2803d11 8b110210 f9400208 aa1303e0 d2800001 f2e19390 d73f0910 14000003 d0ff2de0 9118d800 a90057e0 d0ff2d60", needsScoring: true),
+            // release file offset 0x20fa138
+            .init("performSCRDInitialization", words: "d503237f d10203ff a90557f6 a9064ff4 a9077bfd 9101c3fd aa0003f3 b000f2d4 396e4288 7100291f 540002e8 39423268 360001a8 f9400270 aa1303f1 f2f9b431"),
+            // release file offset 0x20fa400
+            .init("sendSEPCommand", words: "d503237f d10443ff a90b6ffc a90c67fa a90d5ff8 a90e57f6 a90f4ff4 a9107bfd 910403fd aa0703fc aa0603f7 aa0503f9 aa0403f5 aa0303f8 aa0203f6 aa0103f4 aa0003f3 f81a03a4 b000f2db 396e4368 7100291f 540002e8 39423268 360001a8 f9400270 aa1303f1 f2f9b431 dac11a30 d2803d11 8b110210 f9400208 aa1303e0"),
+            // release file offset 0x20fae7c
+            .init("_setPropertiesGated", words: "d503237f d10203ff a90367fa a9045ff8 a90557f6 a9064ff4 a9077bfd 9101c3fd aa0103f3 aa0003f4 b0ff6ec8 f9466508 f9400101 aa1303e0 94003dca b4001640"),
+            // release file offset 0x20fb308
+            .init("performDoubleClickQueryGated", words: "d503237f d10143ff a9034ff4 a9047bfd 910103fd b4000261 aa0103f3 a9007fff 52800041 52800002 d2800003 d2800004 d2800005 d2800006 52800027 97fffc2e"),
+            // release file offset 0x20fb3f8
+            .init("performLoggingLevelQueryGated", words: "d503245f b40000c1 52800000 9000f2c8 396e4108 f9000028 d65f03c0 d503237f d10103ff a9037bfd"),
+            // release file offset 0x20fb834
+            .init("lockItem", words: "d503237f d101c3ff a9035ff8 a90457f6 a9054ff4 a9067bfd 910183fd aa0203f3 aa0103f5 aa0003f4 9000f2d7 396e42e8"),
+            // release file offset 0x20fba64
+            .init("unlockItem", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd aa0103f4 aa0003f3 9000f2d6 396e42c8 b0ff2df5 913fbeb5 7100291f 540002a8 39423268 360001a8 f9400270 aa1303f1 f2f9b431 dac11a30 d2803d11 8b110210 f9400208 aa1303e0 d2800001 f2e19390 d73f0910 14000003 b0ff2de0 9118d800 a90057e0 b0ff2d60", needsScoring: true),
+            // release file offset 0x20fbf28
+            .init("handleSEPMessage", words: "d503237f d10203ff a90367fa a9045ff8 a90557f6 a9064ff4 a9077bfd 9101c3fd aa0103f4 aa0003f3 f9400058 d360ff19 9000f2d7 396e42e8 53107f15 d0ff2df6"),
+            // release file offset 0x20fc214
+            .init("readFromSEPBuffer", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd aa0203f4 aa0103f3 aa0003f5 f940a800 b50000a0 aa1503e0 9400022e f940aaa0 b4000760 f9400010"),
+            // release file offset 0x20fc378
+            .init("writeToSEPBuffer", words: "d503237f d10243ff a9036ffc a90467fa a9055ff8 a90657f6 a9074ff4 a9087bfd 910203fd aa0503f4 aa0403f5 aa0303f6 aa0203f7 aa0103f8 aa0003f3 f000f2bc"),
+            // release file offset 0x20fc724
+            .init("sendSEPMessage", words: "d503237f d10243ff a90467fa a9055ff8 a90657f6 a9074ff4 a9087bfd 910203fd aa0403f7 aa0303f5 aa0203f6 aa0103f4 aa0003f3 f000f2b9 396e4328 7100291f"),
+            // release file offset 0x20fc960
+            .init("clearSEPBuffer", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd b40008c1 aa0203f3 aa0103f4 f9400030 aa0103f1 f2f9b431 dac11a30 f8478e08 aa0103e0 f2e27af0"),
+            // release file offset 0x20fcb00
+            .init("getSEPEndpoint", words: "d503237f d10243ff a9036ffc a90467fa a9055ff8 a90657f6 a9074ff4 a9087bfd 910203fd aa0003f3 f000f2bb 396e4368 7100291f 540002e8 39423268 360001a8"),
+            // release file offset 0x20fd74c
+            .init("powerOffActionGated", words: "d503237f d10203ff a90367fa a9045ff8 a90557f6 a9064ff4 a9077bfd 9101c3fd aa0003f3 d000f2b9 396e4328 7100a11f 540002e8 39423268 360001a8 f9400270"),
+            // release file offset 0x20fda04
+            .init("sepManagerMatchedGated", words: "d503237f d10203ff a90367fa a9045ff8 a90557f6 a9064ff4 a9077bfd 9101c3fd aa0003f3 d000f2a8 396e4108 7100a11f 540002e8 39423268 360001a8 f9400270"),
+            // release file offset 0x2109ea8
+            .init("setPowerStateGated", words: "d503237f d101c3ff a9035ff8 a90457f6 a9054ff4 a9067bfd 910183fd aa0103f4 aa0003f3 d000f257 396e42e8 f0ff2d76 91392ad6 7100291f 54000268 39423268 36000188 97ffd058 f2f9b431 dac11a30 d2803d11 8b110210 f9400208 aa1303e0 d2800001 f2e19390 d73f0910 14000002 97ffd047 a9005be0 f0ff2ce0 910dd400"),
+        ]
+    )
+    /// iOS 27.3 beta 1 (`24C5037i`), recovered from the same class in that
+    /// kernelcache.
+    ///
+    /// Probing `release24B119V1` against this build matches 24 of 26 outright,
+    /// and the two that come back ambiguous (`updateAnalytics`, `unlockItem`)
+    /// are ambiguous on the build they were recorded from too. The positional
+    /// rails hold unchanged: one entry at delta `0x124` after
+    /// `scheduleDblClickDeferredAck`, four candidates after `lockItem` at
+    /// `0x230, 0x3a0, 0x4c8, 0x5f0`. The raw words still differ in exactly the
+    /// fields `allowDataLayoutDrift` masks — ADRP pages, branch displacements
+    /// and page-offset immediates — so the family is recorded separately rather
+    /// than shared, per the standing rule: sharing would let one build's
+    /// addresses stand in for the other's while the mask hid the difference.
+    ///
+    /// Method order, word counts and the scored pair are identical to
+    /// `release24B119V1`.
+    static let release24C5037iV1 = KernelCredentialManagerSignatureVariant(
+        id: "ios273b1-24C5037i-acm-v1",
+        functions: [
+            // 27.3 file offset 0x21bf594
+            .init("sepManagerMatchedThreadCallHandler", words: "d503237f d10103ff a9037bfd 9100c3fd f9404c00 f9400010 aa0003f1 f2f9b431 dac11a30 f84e8e09 aa1003e8 b0000030"),
+            // 27.3 file offset 0x21bfc78
+            .init("callPlatformFunction", words: "d503237f d10183ff a9057bfd 910143fd b40001a4 b9400088 b81e03a8 f9400488 f81e43a8 381ec3bf f81f53bf f81ed3bf d10083a4 94000037 a9457bfd 910183ff"),
+            // 27.3 file offset 0x21bfd00
+            .init("cmdContextV2", words: "d503237f d10183ff a9057bfd 910143fd b40001c4 b9400088 b81e03a8 f8404088 f81e43a8 39403088 381ec3a8 f81f53bf f81ed3bf d10083a4 94000014 a9457bfd"),
+            // 27.3 file offset 0x21bfd8c
+            .init("cmdContextV3", words: "d503237f d10283ff a90567fa a9065ff8 a90757f6 a9084ff4 a9097bfd 910243fd b40005e4 aa0403f8 aa0303f3 aa0203f4 aa0103f5 aa0003f7 97ffb391 aa0003f9"),
+            // 27.3 file offset 0x21c0124
+            .init("performCommandGated", words: "d503237f d10543ff a90f6ffc a91067fa a9115ff8 a91257f6 a9134ff4 a9147bfd 910503fd aa0403f4 aa0303f5 aa0203f6 aa0103f9 aa0003f8 6f00e400 ad3c03a0"),
+            // 27.3 file offset 0x21c0c14
+            .init("_performKernelControl", words: "d503237f d10243ff a9036ffc a90467fa a9055ff8 a90657f6 a9074ff4 a9087bfd 910203fd aa0503f5 aa0403f6 aa0303f7 aa0203f8 aa0103f4 aa0003f3 b000f7da"),
+            // 27.3 file offset 0x21c0fd4
+            .init("_performCommand", words: "d503237f d102c3ff a9056ffc a90667fa a9075ff8 a90857f6 a9094ff4 a90a7bfd 910283fd aa0603f8 aa0503f9 aa0403f4 aa0303f7 aa0203f3 aa0103f5 aa0003f6"),
+            // 27.3 file offset 0x21c1200
+            .init("processSCRDResponsePayload", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd aa0103f4 aa0003f3 9000f7d5 394002a8 7100291f 540002e8 39423268 360001a8 f9400270 aa1303f1"),
+            // 27.3 file offset 0x21c1430
+            .init("scheduleDblClickDeferredAck", words: "d503237f d10143ff a9034ff4 a9047bfd 910103fd aa0003f3 52800001 94000fa6 f9408e60 f9400010 aa0003f1 f2f9b431 dac11a30 f84b0e08 f2f362d0 d73f0910"),
+            // 27.3 file offset 0x21c1554; located positionally, the only entry
+            // in its interval (delta 0x124 from scheduleDblClickDeferredAck)
+            .init("updateAnalytics", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd aa0103f4 aa0003f3 9000f7d6 394002c8 d0ff2895 913a1ab5 7100291f 540002a8 39423268 360001a8 f9400270 aa1303f1 f2f9b431 dac11a30 d2803d11 8b110210 f9400208 aa1303e0 d2800001 f2e19390 d73f0910 14000003 b0ff2880 912dd800 a90057e0 b0ff2800", needsScoring: true),
+            // 27.3 file offset 0x21c16bc
+            .init("performSCRDInitialization", words: "d503237f d10203ff a90557f6 a9064ff4 a9077bfd 9101c3fd aa0003f3 9000f7d4 39400288 7100291f 540002e8 39423268 360001a8 f9400270 aa1303f1 f2f9b431"),
+            // 27.3 file offset 0x21c1984
+            .init("sendSEPCommand", words: "d503237f d10443ff a90b6ffc a90c67fa a90d5ff8 a90e57f6 a90f4ff4 a9107bfd 910403fd aa0703fc aa0603f7 aa0503f9 aa0403f5 aa0303f8 aa0203f6 aa0103f4 aa0003f3 f81a03a4 9000f7db 39400368 7100291f 540002e8 39423268 360001a8 f9400270 aa1303f1 f2f9b431 dac11a30 d2803d11 8b110210 f9400208 aa1303e0"),
+            // 27.3 file offset 0x21c2400
+            .init("_setPropertiesGated", words: "d503237f d10203ff a90367fa a9045ff8 a90557f6 a9064ff4 a9077bfd 9101c3fd aa0103f3 aa0003f4 d0ff6b08 f945d108 f9400101 aa1303e0 94003dca b4001640"),
+            // 27.3 file offset 0x21c288c
+            .init("performDoubleClickQueryGated", words: "d503237f d10143ff a9034ff4 a9047bfd 910103fd b4000261 aa0103f3 a9007fff 52800041 52800002 d2800003 d2800004 d2800005 d2800006 52800027 97fffc2e"),
+            // 27.3 file offset 0x21c297c; entry is the BTI pad itself
+            .init("performLoggingLevelQueryGated", words: "d503245f b40000c1 52800000 f000f7a8 39400108 f9000028 d65f03c0 d503237f d10103ff a9037bfd"),
+            // 27.3 file offset 0x21c2db8
+            .init("lockItem", words: "d503237f d101c3ff a9035ff8 a90457f6 a9054ff4 a9067bfd 910183fd aa0203f3 aa0103f5 aa0003f4 f000f7b7 394002e8"),
+            // 27.3 file offset 0x21c2fe8; located positionally, first of four
+            // candidates after lockItem (deltas 0x230, 0x3a0, 0x4c8, 0x5f0)
+            .init("unlockItem", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd aa0103f4 aa0003f3 d000f7b6 394002c8 90ff2895 9114beb5 7100291f 540002a8 39423268 360001a8 f9400270 aa1303f1 f2f9b431 dac11a30 d2803d11 8b110210 f9400208 aa1303e0 d2800001 f2e19390 d73f0910 14000003 f0ff2860 912dd800 a90057e0 f0ff27e0", needsScoring: true),
+            // 27.3 file offset 0x21c34ac
+            .init("handleSEPMessage", words: "d503237f d10203ff a90367fa a9045ff8 a90557f6 a9064ff4 a9077bfd 9101c3fd aa0103f4 aa0003f3 f9400058 d360ff19 d000f7b7 394002e8 53107f15 90ff2896"),
+            // 27.3 file offset 0x21c3798
+            .init("readFromSEPBuffer", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd aa0203f4 aa0103f3 aa0003f5 f940a800 b50000a0 aa1503e0 9400022e f940aaa0 b4000760 f9400010"),
+            // 27.3 file offset 0x21c38fc
+            .init("writeToSEPBuffer", words: "d503237f d10243ff a9036ffc a90467fa a9055ff8 a90657f6 a9074ff4 a9087bfd 910203fd aa0503f4 aa0403f5 aa0303f6 aa0203f7 aa0103f8 aa0003f3 d000f7bc"),
+            // 27.3 file offset 0x21c3ca8
+            .init("sendSEPMessage", words: "d503237f d10243ff a90467fa a9055ff8 a90657f6 a9074ff4 a9087bfd 910203fd aa0403f7 aa0303f5 aa0203f6 aa0103f4 aa0003f3 d000f7b9 39400328 7100291f"),
+            // 27.3 file offset 0x21c3ee4
+            .init("clearSEPBuffer", words: "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd b40008c1 aa0203f3 aa0103f4 f9400030 aa0103f1 f2f9b431 dac11a30 f8478e08 aa0103e0 f2e27af0"),
+            // 27.3 file offset 0x21c4084
+            .init("getSEPEndpoint", words: "d503237f d10243ff a9036ffc a90467fa a9055ff8 a90657f6 a9074ff4 a9087bfd 910203fd aa0003f3 b000f7bb 39400368 7100291f 540002e8 39423268 360001a8"),
+            // 27.3 file offset 0x21c4cd0
+            .init("powerOffActionGated", words: "d503237f d10203ff a90367fa a9045ff8 a90557f6 a9064ff4 a9077bfd 9101c3fd aa0003f3 b000f7b9 39400328 7100a11f 540002e8 39423268 360001a8 f9400270"),
+            // 27.3 file offset 0x21c4f88
+            .init("sepManagerMatchedGated", words: "d503237f d10203ff a90367fa a9045ff8 a90557f6 a9064ff4 a9077bfd 9101c3fd aa0003f3 b000f7a8 39400108 7100a11f 540002e8 39423268 360001a8 f9400270"),
+            // 27.3 file offset 0x21d142c
+            .init("setPowerStateGated", words: "d503237f d101c3ff a9035ff8 a90457f6 a9054ff4 a9067bfd 910183fd aa0103f4 aa0003f3 9000f757 394002e8 d0ff2816 910e2ad6 7100291f 54000268 39423268 36000188 97ffd058 f2f9b431 dac11a30 d2803d11 8b110210 f9400208 aa1303e0 d2800001 f2e19390 d73f0910 14000002 97ffd047 a9005be0 b0ff2780 9122d400"),
+        ]
+    )
+
     static func variant(named id: String) -> KernelCredentialManagerSignatureVariant? {
         switch id {
         case earlyBetaV1.id: return earlyBetaV1
@@ -661,6 +817,8 @@ enum KernelCredentialManagerSignatures {
         case release24B5089gV1.id: return release24B5089gV1
         case release24B5099fV1.id: return release24B5099fV1
         case release24B5110aV1.id: return release24B5110aV1
+        case release24B119V1.id: return release24B119V1
+        case release24C5037iV1.id: return release24C5037iV1
         case release23H30V1.id: return release23H30V1
         default: return nil
         }

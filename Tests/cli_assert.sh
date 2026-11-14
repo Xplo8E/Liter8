@@ -109,6 +109,7 @@ expect_help "acm-probe --help works"                 "signature-variant" acm-pro
 expect_help "fw actions --help works"                "OVERVIEW" fw actions --help
 expect_help "fw make-cfw --help names --serial"      "--serial" fw make-cfw --help
 expect_help "fw get-boot --help names --demote-ap"  "--demote-ap" fw get-boot --help
+expect_help "fw get-boot --help names --tfp0"       "--tfp0" fw get-boot --help
 expect_help "fw restore-cfw --help names the option" "--idevicerestore" fw restore-cfw --help
 
 print -r -- ""; print -r -- "== help does NOT offer options that do not apply =="

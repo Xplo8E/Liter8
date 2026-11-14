@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Stream the device's unified log through sshdev, forwarding oslog arguments.
+
+A normally booted Liter8 device has no /usr/bin/log, so the os_log reader
+installed on the device as /var/root/oslog is the way to see what the device
+is logging. It is installed by `liter8 fw provision`.
+"""
+
+import os
+from pathlib import Path
+import shlex
+import sys
+
+DEVICE_OSLOG = os.environ.get("LITER8_DEVICE_OSLOG", "/var/root/oslog")
+
+if sys.argv[1:] in (["-h"], ["--help"]):
+    print("usage: logdev [--info|--debug] [-p PID|name] [--noLevelInfo]")
+    print(f"Streams {DEVICE_OSLOG} through sshdev. Ctrl-C stops the stream.")
+    sys.exit(0)
+
+sshdev = str(Path(__file__).resolve().with_name("sshdev"))
+command = shlex.join([DEVICE_OSLOG, *sys.argv[1:]])
+# SSH redirects stdout, so line buffering keeps the messages visible as they
+# arrive instead of arriving in one block at the end.
+remote = (
+    "if command -v stdbuf >/dev/null 2>&1; then "
+    f"exec stdbuf -oL {command}; else exec {command}; fi"
+)
+os.execv(sshdev, [sshdev, remote])

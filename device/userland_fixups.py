@@ -81,6 +81,7 @@ def build_binary(
             "/usr/lib/l8remotepairing.dylib",
             "remotepairingdeviced.load-l8remotepairing",
         ),
+        "wifid": ("/usr/lib/l8wifi.dylib", "wifid.load-l8wifi"),
     }
 
     # Daemons that need a semantic instruction patch *and* a weak dependency.
@@ -235,6 +236,7 @@ def main() -> None:
             "ctkd",
             "lockdownd",
             "remotepairingdeviced",
+            "wifid",
             "CommCenter",
         ),
     )

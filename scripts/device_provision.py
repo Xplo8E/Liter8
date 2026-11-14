@@ -14,6 +14,7 @@ from liter8_workflow import Context, WorkflowError, main_guard, run
 
 BOOTSTRAP_SHA256 = "8354c3aa1ecdad8ebc47d9a76dfca6f830a2b757278068bd33b98bf1d638a9cb"
 SSHRD_PAYLOAD_SHA256 = "ddfa230acd2789c7e61ddb0d2ec3df9a6c741f2ddcab58fc1a826d278be1d74d"
+OSLOG_SHA256 = "b15e0091dbf9d4276a2159d1f8f912425411c0b1516e8f0df873364ce909bbeb"
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -56,6 +57,16 @@ def prepare_runtime(context: Context) -> Path:
     runtime_payload = workflow / "ssh.tar.gz"
     runtime_payload.unlink(missing_ok=True)
     runtime_payload.symlink_to(ssh_payload)
+
+    # The unified-log reader, beside the scripts that deploy it. It is a
+    # device binary, so it must never be resolved from the mutable work
+    # directory: the symlink points into the immutable resource directory.
+    oslog_helper = context.resources / "payloads/oslog"
+    if not oslog_helper.is_file() or sha256_file(oslog_helper) != OSLOG_SHA256:
+        raise WorkflowError("bundled oslog helper failed its SHA-256 check")
+    runtime_oslog = workflow / "oslog"
+    runtime_oslog.unlink(missing_ok=True)
+    runtime_oslog.symlink_to(oslog_helper)
 
     # Homebrew exposes GNU timeout as gtimeout on macOS. Give the proven shell
     # script the name it expects without modifying the host installation.

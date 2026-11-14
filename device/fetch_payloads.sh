@@ -160,7 +160,7 @@ fetch_cached() {
     || die "ldid at $LDID cannot run on this host; brew install ldid-procursus"
 mkdir -p "$OUT" "$WORK"
 
-WANT="${*:-sileo helpers cache injection tweaks pairing cellular}"
+WANT="${*:-sileo helpers cache injection tweaks pairing wifi cellular keychain}"
 wants() { case " $WANT " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # A board without a modem has nothing for the cellular payload to fix; see
@@ -569,6 +569,32 @@ if wants pairing; then
     ok "coreauthd-only l8coreauth.dylib ready"
 fi
 
+# --------------------------------------------------------------------- wifi
+if wants wifi; then
+    say "AirPort credential fallback"
+    ( cd wififix && ./build.sh ) || die "AirPort credential shim build failed"
+    cp wififix/l8wifi.dylib "$OUT/l8wifi.dylib"
+    codesign -v "$OUT/l8wifi.dylib" \
+        || die "AirPort credential shim signature verification failed"
+    ok "marker-gated wifid-only l8wifi.dylib ready"
+fi
+
+# --------------------------------------------------------------- keychain
+# The software system keychain: without a SEP the device keybag has no
+# per-class keys, so every system-keychain write fails -25291. The
+# interposer gives securityd software wrap/unwrap for the keychain classes,
+# marker-gated, with the same explicit 0600-file security tradeoff as the
+# Wi-Fi and pairing fallbacks. See docs/aks-research/E04 and the research
+# story document.
+if wants keychain; then
+    say "software system keychain"
+    ( cd keychainprobe && ./build.sh ) || die "l8keychain build failed"
+    cp keychainprobe/l8keychain.dylib "$OUT/l8keychain.dylib"
+    codesign -v "$OUT/l8keychain.dylib" \
+        || die "l8keychain signature verification failed"
+    ok "marker-gated securityd-only l8keychain.dylib ready"
+fi
+
 # ----------------------------------------------------------------- cellular
 if wants cellular; then
     say "baseband calibration FDR bypass"
@@ -775,7 +801,7 @@ for p in "$OUT/Sileo.app/Sileo" "$OUT/Sileo.app/giveMeRoot" \
          "$OUT/launchd.orig" "$OUT/launchd.hooked" "$OUT/lhook.dylib" \
          "$OUT/systemhook.dylib" "$OUT/sbextissue" "$OUT/l8pair.dylib" \
          "$OUT/l8remotepairing.dylib" "$OUT/l8coreauth.dylib" \
-         "$OUT/l8fdr.dylib" "$OUT/uicache" \
+         "$OUT/l8fdr.dylib" "$OUT/l8wifi.dylib" "$OUT/uicache" \
          "$OUT/tweaks/libinjector.dylib" "$OUT/tweaks/ellekit.deb" \
          "$OUT/tweaks/TweakInject/l8localauth.dylib" \
          "$OUT/tweaks/TweakInject/l8persona.dylib" \

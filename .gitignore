@@ -39,7 +39,10 @@ device/coreauthfix/l8coreauth.dylib
 device/remotexpcfix/l8remotepairing.dylib
 # Built by device/fdrfix/build.sh, reproduced from source each run.
 device/fdrfix/l8fdr.dylib
+device/keychainprobe/l8keychain.dylib
 device/fdrfix/l8radio
+# Built by device/wififix/build.sh, reproduced from source each run.
+device/wififix/l8wifi.dylib
 # Built by device/launchdhook/build.sh, reproduced from source each run.
 device/launchdhook/lhookctl
 # Built by device/localauthfix/build.sh, reproduced from source each run.
@@ -49,3 +52,12 @@ device/personafix/l8persona.dylib
 # Host-built/downloaded device payloads; always reproduced by fetch_payloads.sh.
 device/payload/
 .run-ios272b4/
+.ios272r/
+
+# 27.3 beta 1 work dirs
+.ios273/
+.ios273-pro/
+# 27.2.1 work dirs
+.ios2721/
+.ios2721-pro/
+.ios2721-pro-d431/

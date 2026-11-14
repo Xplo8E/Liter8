@@ -23,7 +23,18 @@
 # fails at launchd initialization. ls and cat are retained because the known-working
 # beta-4 shell used them and they make recovery possible before /var/jb is prepared.
 #
-# The binary is NOT re-signed. It ships signed with `platform-application` and
+# sftp-server is installed too, as a convenience rather than a requirement, and is
+# handled by OPTIONAL_FILES below so a failure to copy it cannot cost anything else.
+# Dropbear implements no SFTP of its own: for a `sftp` subsystem request its
+# sessioncommand replaces the command with the SFTPSERVER_PATH compiled into the
+# binary, which in this build is the literal /usr/libexec/sftp-server. Stock iOS has
+# no such file, and scripts/sshrd.py only puts one inside the ramdisk image, so a
+# normally-booted device used to exec a path that does not exist and drop the
+# channel. That cost scp as well as sftp, because OpenSSH 9 and later speak SFTP for
+# scp by default with no fallback, which is why the normal-boot helpers here transfer
+# through `ssh "cat > path"` instead.
+#
+# The binaries are NOT re-signed. They ship signed with `platform-application` and
 # `com.apple.private.security.container-required=false`, and an ldid re-sign would strip
 # the restricted entitlement. Loading it relies on the AMFIIsCDHashInTrustCache kernel
 # patch, same as everything else we run.
@@ -54,12 +65,25 @@ CHECK_ONLY=0
 [[ "${1:-}" == "--check" ]] && CHECK_ONLY=1
 
 # Left = path inside the tarball, right = path on the device. /mnt1 is the System volume.
+# Recovery-critical: a transfer failure here stops the installer, because a device
+# missing any of these has no login shell and a com.jbboot job launchd cannot start.
 FILES=(
   "usr/local/bin/dropbear|/mnt1/usr/local/bin/dropbear"
   "usr/local/bin/dropbearkey|/mnt1/usr/local/bin/dropbearkey"
   "bin/sh|/mnt1/bin/sh"
   "bin/ls|/mnt1/bin/ls"
   "bin/cat|/mnt1/bin/cat"
+)
+
+# Convenience, and therefore kept out of FILES and out of every exit status below.
+# Without sftp-server a normally-booted device still has ssh, a login shell and
+# com.jbboot; it only loses sftp and scp. Making it a sixth fatal transfer would let
+# one flaky copy abort the run before the chmod and host-key steps, leaving the
+# recovery-critical set installed but non-executable and keyless. Reporting it as a
+# check failure would also fail `fw provision --check` on every device provisioned
+# before this file existed, and stop the check that follows from running at all.
+OPTIONAL_FILES=(
+  "usr/libexec/sftp-server|/mnt1/usr/libexec/sftp-server"
 )
 
 # type | Data-volume path | key size. Dropbear 2016.74 advertises these three
@@ -146,7 +170,10 @@ mkdir -p "$STAGE" || exit 1
 tar xzf "$PKG" -C "$STAGE" || { print -u2 "[!] extract failed"; exit 1; }
 print "[*] extracted $PKG -> $STAGE"
 
-for e in "${FILES[@]}"; do
+# Both sets, including the optional one: a member missing from a digest-pinned
+# archive means the local resource is wrong, which is not a device condition and
+# must not be silently skipped.
+for e in "${FILES[@]}" "${OPTIONAL_FILES[@]}"; do
     src="${e%%|*}"
     [[ -f "$STAGE/$src" ]] || { print -u2 "[!] not in the tarball: $src"; exit 1; }
 done
@@ -198,6 +225,13 @@ if (( CHECK_ONLY )); then
     for e in "${HOST_KEYS[@]}"; do
         report_key "${${e#*|}%%|*}" || check_failed=1
     done
+    # Reported, never counted. A device provisioned before sftp-server was added
+    # is complete for boot, ssh and com.jbboot, so this must not turn a passing
+    # check into a failure that also stops sshrd_provision.sh --check from running.
+    print "\n  optional (reported only, does not affect the exit status)"
+    for e in "${OPTIONAL_FILES[@]}"; do
+        report "${e%%|*}" "${e#*|}" || true
+    done
     rm -rf "$STAGE"
     (( check_failed == 0 )) || exit 1
     exit 0
@@ -218,7 +252,7 @@ sshdev "/sbin/mount -u -o rw /dev/disk1s2 2>/dev/null; \
         /usr/bin/touch /mnt2/.liter8-write-test && \
         /bin/rm -f /mnt2/.liter8-write-test" \
     || { print -u2 "[!] Data volume is not writable"; exit 1; }
-sshdev "/bin/mkdir -p /mnt1/usr/local/bin /mnt1/bin" \
+sshdev "/bin/mkdir -p /mnt1/usr/local/bin /mnt1/bin /mnt1/usr/libexec" \
     || { print -u2 "[!] could not create dropbear target directories"; exit 1; }
 sshdev "/bin/mkdir -p /mnt2/dropbear && /bin/chmod 700 /mnt2/dropbear" \
     || { print -u2 "[!] could not create the private host-key directory"; exit 1; }
@@ -238,12 +272,25 @@ for e in "${FILES[@]}"; do
     fi
 done
 
+# Sent last and never fatal. A failure here costs sftp and scp on the booted
+# device and nothing else, so it must not skip the chmod and host-key steps.
+for e in "${OPTIONAL_FILES[@]}"; do
+    src="${e%%|*}"; dst="${e##*|}"
+    printf "  %-56s " "$dst"
+    if scpdev "$STAGE/$src" "root@localhost:$dst" >/dev/null 2>&1; then
+        print "sent"
+    else
+        print "FAILED (optional: sftp and scp will not work, ssh still will)"
+    fi
+done
+
 # scp does not reliably carry the executable bit here. Try chmod from whichever location
 # actually has one: the ramdisk may not, and a System-volume binary may or may not run from
 # the ramdisk's dyld cache. Not fatal if none work, so report instead of dying.
 CHMOD=$(sshdev 'for c in /bin/chmod /usr/bin/chmod /mnt1/bin/chmod; do [ -x "$c" ] && { echo "$c"; break; }; done' 2>/dev/null)
 if [[ -n "$CHMOD" ]]; then
     sshdev "$CHMOD 755 /mnt1/usr/local/bin/dropbear /mnt1/usr/local/bin/dropbearkey \
+                        /mnt1/usr/libexec/sftp-server \
                         /mnt1/bin/sh /mnt1/bin/ls /mnt1/bin/cat 2>/dev/null" >/dev/null 2>&1
     print "\n[*] permissions set using $CHMOD"
 else
@@ -299,6 +346,11 @@ else
 fi
 for e in "${HOST_KEYS[@]}"; do
     report_key "${${e#*|}%%|*}" || fail=1
+done
+# Same reasoning as the --check block: reported, not counted.
+print "\n  optional (reported only, does not affect the exit status)"
+for e in "${OPTIONAL_FILES[@]}"; do
+    report "${e%%|*}" "${e##*|}" || true
 done
 
 print ""

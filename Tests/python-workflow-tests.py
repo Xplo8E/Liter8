@@ -11,6 +11,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 import urllib.request
@@ -44,6 +45,7 @@ from device_boot import (  # noqa: E402
 )
 from device_provision import (  # noqa: E402
     BOOTSTRAP_SHA256,
+    OSLOG_SHA256,
     SSHRD_PAYLOAD_SHA256,
     prepared_rootfs,
     prepare_runtime,
@@ -1053,6 +1055,56 @@ class ContextTests(unittest.TestCase):
         self.assertIn("$CHMOD 600", installer)
         self.assertIn("closes during key exchange", (DEVICE / "finalize.sh").read_text())
 
+    def test_normal_boot_dropbear_installs_the_sftp_subsystem_binary(self):
+        """Dropbear execs a compiled-in SFTPSERVER_PATH; the System volume must hold it.
+
+        The path is not configurable at runtime, and OpenSSH 9 and later use SFTP
+        for scp with no fallback, so omitting this binary breaks both sftp and scp
+        against a normally-booted device.
+        """
+        installer = (DEVICE / "install_dropbear.sh").read_text()
+        optional = installer.split("OPTIONAL_FILES=(", 1)[1].split(")", 1)[0]
+        self.assertIn('"usr/libexec/sftp-server|/mnt1/usr/libexec/sftp-server"', optional)
+        self.assertIn("/mnt1/usr/libexec/sftp-server", installer.split("$CHMOD 755", 1)[1])
+        self.assertIn("/mnt1/usr/libexec", installer.split("/bin/mkdir -p", 1)[1])
+        # The archive member the installer names has to exist, or every provisioning
+        # run fails in the preflight loop instead of at install time.
+        payload = SCRIPTS.parent / "payloads" / "ssh.tar.gz"
+        with tarfile.open(payload) as archive:
+            member = archive.getmember("usr/libexec/sftp-server")
+        self.assertTrue(member.isfile())
+
+    def test_optional_dropbear_payload_cannot_fail_the_run_or_the_check(self):
+        """sftp-server is a convenience and must not gate anything boot-critical.
+
+        A sixth fatal transfer would let one flaky copy abort before the chmod and
+        host-key steps, and counting it in the check would fail `fw provision
+        --check` on every device provisioned before the file existed, stopping
+        sshrd_provision.sh --check from running at all.
+        """
+        installer = (DEVICE / "install_dropbear.sh").read_text()
+        critical = installer.split("FILES=(", 1)[1].split(")", 1)[0]
+        self.assertNotIn("sftp-server", critical)
+        # The recovery-critical set still ends with the files a login shell and
+        # com.jbboot need, so nothing optional is transferred ahead of them.
+        for entry in ('"bin/sh|/mnt1/bin/sh"', '"bin/ls|/mnt1/bin/ls"',
+                      '"bin/cat|/mnt1/bin/cat"'):
+            self.assertIn(entry, critical)
+        # Every loop over the optional set has to be non-fatal: no `exit 1`, and the
+        # report status discarded rather than folded into check_failed or fail.
+        standalone = installer.split('for e in "${OPTIONAL_FILES[@]}"')[1:]
+        self.assertEqual(len(standalone), 3, "install, --check and verify loops")
+        for block in standalone:
+            loop = block.split("done", 1)[0]
+            self.assertNotIn("exit 1", loop)
+            self.assertNotIn("check_failed=1", loop)
+            self.assertNotIn("fail=1", loop)
+        # The digest-pinned archive is a local resource, so a missing member there
+        # stays fail-closed in the staging preflight.
+        preflight = installer.split('for e in "${FILES[@]}" "${OPTIONAL_FILES[@]}"', 1)
+        self.assertEqual(len(preflight), 2)
+        self.assertIn("not in the tarball", preflight[1].split("done", 1)[0])
+
     def test_setup_shell_owns_its_usb_forward_and_reports_transport_failure(self):
         """A refused SSH connection must not be mislabeled as missing zsh."""
         setup = (SCRIPTS.parent / "device/setup_shell.sh").read_text()
@@ -1105,9 +1157,9 @@ class ContextTests(unittest.TestCase):
         self.assertIn("deploy_userland_daemon coreauthd", provisioner)
         self.assertIn("if ! wants userland", provisioner)
         self.assertIn(".liter8-pairing-fallback", provisioner)
-        self.assertIn('note "l8pair dylib"', provisioner)
-        self.assertIn('note "l8remotepairing dylib"', provisioner)
-        self.assertIn('note "l8coreauth dylib"', provisioner)
+        self.assertIn('verify_system_dylib "l8pair dylib"', provisioner)
+        self.assertIn('verify_system_dylib "l8remotepairing dylib"', provisioner)
+        self.assertIn('verify_system_dylib "l8coreauth dylib"', provisioner)
         self.assertIn('note "ScreenTime overrides"', provisioner)
         self.assertIn('note "Setup CodeDirectory/id"', provisioner)
         self.assertIn('note "System /bin/sh"', provisioner)
@@ -1149,7 +1201,7 @@ class ContextTests(unittest.TestCase):
         runner = (SCRIPTS.parent / "Sources/Liter8CLI/FirmwareWorkflowRunner.swift").read_text()
         self.assertIn('[ "$step" = cellular ] || no_cellular=', provisioner)
         self.assertIn('note "CommCenter patch" "not used: this board has no baseband"', provisioner)
-        self.assertIn('fdr_library_state="not used: this board has no baseband"', provisioner)
+        self.assertIn('note "l8fdr dylib" "not used: this board has no baseband"', provisioner)
         self.assertIn('[ "$item" = cellular ] || no_cellular=', fetch)
         self.assertIn('selectedEnvironment["LITER8_HAS_BASEBAND"] = profile.hasBaseband ? "1" : "0"',
                       runner)
@@ -1284,6 +1336,244 @@ class ContextTests(unittest.TestCase):
         self.assertIn("method_setImplementation", coreauth_source)
         self.assertIn('"coreauthd": ("/usr/lib/l8coreauth.dylib"', fixups)
 
+    def test_keychain_master_is_owned_by_the_securityd_account(self):
+        """A root-owned master is unreadable to securityd, which runs as _securityd.
+
+        Runs the provisioner's own securityd_uid and keychain_master_state
+        against a scratch tree, with sh_dev stubbed to run there locally, so
+        the verdicts are the ones the device check would print.
+        """
+        provisioner = (DEVICE / "sshrd_provision.sh").read_text()
+        self.assertNotIn("chown 0:0 '$K_MASTER", provisioner)
+        self.assertIn('keychain_master_state "$SECD_UID"', provisioner)
+        # Stock ownership is _securityd:wheel; a directory provisioning has to
+        # create gets the measured 24B156 stock 0755 instead of a root owner.
+        # The ramdisk has no chown on PATH, so a bare `chown` would silently do
+        # nothing: every owner change names /usr/sbin/chown and must abort on
+        # failure.
+        self.assertIn("RAMDISK_CHOWN=/usr/sbin/chown", provisioner)
+        self.assertIn("$RAMDISK_CHOWN $K_UID:0 '$K_MASTER' || exit 1", provisioner)
+        self.assertIn("$RAMDISK_CHOWN $K_UID:0 /mnt2/Keychains || exit 1", provisioner)
+        self.assertIn("$RAMDISK_CHOWN 0:0 '$K_MARKER' || exit 1", provisioner)
+        self.assertIn("chmod 0755 /mnt2/Keychains", provisioner)
+        self.assertNotIn("mkdir -p /mnt2/Keychains", provisioner)
+        self.assertNotRegex(provisioner, r"(?m)^\s*chown ", "a bare chown silently fails on the ramdisk")
+        bodies = []
+        for name in ("securityd_uid", "keychain_master_state"):
+            match = re.search(rf"^{name}\(\) {{\n.*?^}}\n", provisioner, re.M | re.S)
+            self.assertIsNotNone(match, f"{name}() is no longer defined in sshrd_provision.sh")
+            bodies.append(match.group(0))
+        helpers = "\n".join(bodies)
+        uid = os.getuid()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "mnt1/private/etc").mkdir(parents=True)
+            (root / "mnt1/private/etc/passwd").write_text(
+                "root:*:0:0:System Administrator:/var/root:/bin/sh\n"
+                f"_securityd:*:{uid}:{uid}:securityd:/var/empty:/usr/bin/false\n"
+            )
+            (root / "mnt2/Keychains").mkdir(parents=True)
+            master = root / "mnt2/Keychains/l8keychain.master"
+            stub = (
+                'sh_dev() { sh -c "$(printf %s "$1" | '
+                f'sed -e "s#/mnt1#{root}/mnt1#g" -e "s#/mnt2#{root}/mnt2#g")"; }}\n'
+            )
+
+            def state(expected_uid):
+                """Return '<parsed securityd uid>|<master verdict for expected_uid>'."""
+                script = (stub + helpers +
+                          f'printf "%s|%s" "$(securityd_uid)" "$(keychain_master_state {expected_uid})"\n')
+                return subprocess.run(["sh", "-c", script], capture_output=True,
+                                      text=True, check=True).stdout
+
+            self.assertEqual(state(uid), f"{uid}|MISSING")
+            master.write_bytes(b"k" * 32)
+            master.chmod(0o600)
+            self.assertEqual(state(uid), f"{uid}|OK")
+            # Owned by an account other than securityd's: the 24B156 failure.
+            self.assertIn("MISMATCH (owner uid", state(uid + 1))
+            master.chmod(0o640)
+            self.assertIn("MISMATCH (mode", state(uid))
+            master.chmod(0o600)
+            master.write_bytes(b"k" * 31)
+            self.assertIn("MISMATCH (size 31", state(uid))
+            # A symlink is not a missing master: the shim refuses it with
+            # O_NOFOLLOW, so it has to be reported as the fault it is.
+            real = root / "mnt2/Keychains/real.master"
+            real.write_bytes(b"k" * 32)
+            real.chmod(0o600)
+            master.unlink()
+            master.symlink_to(real)
+            self.assertIn("MISMATCH (symlink", state(uid))
+
+    def test_airport_credential_shim_is_narrow_and_marker_gated(self):
+        source = (DEVICE / "wififix/l8wifi.c").read_text()
+        builder = (DEVICE / "wififix/build.sh").read_text()
+        payload_builder = (DEVICE / "fetch_payloads.sh").read_text()
+        provisioner = (DEVICE / "sshrd_provision.sh").read_text()
+        fixups = (DEVICE / "userland_fixups.py").read_text()
+
+        # The shim claims exactly the AirPort generic-password item and
+        # leaves every other keychain request to the real implementation.
+        self.assertIn('CFSTR("AirPort")', source)
+        self.assertIn("kSecClassGenericPassword", source)
+        self.assertIn("kSecUseSystemKeychain", source)
+        self.assertIn("is_airport_password_query", source)
+        self.assertIn("fallback_enabled()", source)
+        self.assertIn('strcmp(program, L8WIFI_TARGET_PROGRAM)', source)
+        self.assertIn("O_NOFOLLOW", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemCopyMatching", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemAdd", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemUpdate", source)
+        self.assertIn("DYLD_INTERPOSE(l8_SecItemDelete", source)
+
+        # The marker is what turns the shim on, and it must be the operator's
+        # to create: root-owned and not group or other writable.
+        self.assertIn("L8WIFI_MARKER_UID 0", source)
+        self.assertIn("S_ISREG(status.st_mode)", source)
+        self.assertIn("(status.st_mode & (S_IWGRP | S_IWOTH)) == 0", source)
+
+        # The store holds the password, so it must be private.
+        self.assertIn("S_IRUSR | S_IWUSR", source)
+        self.assertIn("kMaximumStoreBytes", source)
+
+        # The dylib belongs on the sealed System volume: a restricted platform
+        # binary declines to load a dylib from anywhere else.
+        self.assertIn("-install_name /usr/lib/l8wifi.dylib", builder)
+        self.assertIn("-framework Security", builder)
+        self.assertIn("-not_for_dyld_shared_cache", builder)
+        self.assertIn('"wifid": ("/usr/lib/l8wifi.dylib"', fixups)
+        self.assertIn('"wifid.load-l8wifi"', fixups)
+
+        # The payload set builds and ships it, and the provisioning step
+        # deploys the dylib, patches wifid and enables the marker.
+        self.assertIn("wififix/l8wifi.dylib", payload_builder)
+        self.assertIn('"/usr/lib/l8wifi.dylib"', fixups)
+        self.assertIn("deploy_wifi_library", provisioner)
+        self.assertIn("deploy_userland_daemon wifid", provisioner)
+        self.assertIn("enable_wifi_credentials", provisioner)
+        self.assertIn("verify_userland_patch wifid /mnt1/usr/sbin/wifid", provisioner)
+        self.assertIn('verify_system_dylib "l8wifi dylib"', provisioner)
+        self.assertIn("AirPort credential marker", provisioner)
+        self.assertIn("/mnt1/usr/lib/.liter8-wifi-credentials", provisioner)
+        self.assertIn("/mnt1/usr/lib/l8wifi.dylib", provisioner)
+        self.assertLessEqual(
+            {"sileo", "helpers", "cache", "injection", "pairing", "wifi"},
+            default_step_set(payload_builder, r'^WANT="\$\{\*:-([^}]*)\}"'),
+        )
+        self.assertLessEqual(
+            {"ticket", "setup", "userland", "pairing", "wifi"},
+            default_step_set(provisioner, r'^STEPS="([^"]*)"'),
+        )
+
+    def test_oslog_reader_is_pinned_installed_and_verified(self):
+        """The log reader is a fixed resource and reaches the device intact."""
+        payload = SCRIPTS.parent / "payloads/oslog"
+        provisioner = (DEVICE / "sshrd_provision.sh").read_text()
+        logdev = (SCRIPTS.parent / "tools/logdev").read_text()
+
+        # The binary is a pinned resource, not something a build produces.
+        self.assertTrue(payload.is_file())
+        self.assertEqual(sha256_file(payload), OSLOG_SHA256)
+        self.assertTrue(os.access(payload, os.X_OK))
+
+        # It reaches the device as a symlink into the immutable resources, so
+        # the mutable work directory can never supply a different binary.
+        context = Context(
+            profile_id="iphone12,1-n104ap-24A5390f",
+            work=self.work,
+            source=self.source,
+            cfw=self.work / "CFW",
+            components={},
+            liter8=self.liter8,
+            resources=SCRIPTS.parent,
+        )
+        runtime = prepare_runtime(context)
+        staged = runtime / "oslog"
+        self.assertTrue(staged.is_symlink())
+        self.assertEqual(staged.resolve(), payload.resolve())
+        self.assertEqual(sha256_file(staged), OSLOG_SHA256)
+
+        # A resource whose bytes are not the pinned ones must fail closed,
+        # rather than installing a reader that was never validated.
+        with tempfile.TemporaryDirectory(prefix="liter8-oslog-") as directory:
+            resources = Path(directory)
+            (resources / "device").mkdir()
+            (resources / "device/bootstrap_1900.tar.zst").write_bytes(b"")
+            (resources / "tools").mkdir()
+            (resources / "payloads").mkdir()
+            (resources / "payloads/ssh.tar.gz").symlink_to(
+                SCRIPTS.parent / "payloads/ssh.tar.gz"
+            )
+            (resources / "payloads/oslog").write_bytes(b"not the reader")
+            broken = Context(
+                profile_id="iphone12,1-n104ap-24A5390f",
+                work=self.work,
+                source=self.source,
+                cfw=self.work / "CFW",
+                components={},
+                liter8=self.liter8,
+                resources=resources,
+            )
+            with self.assertRaises(WorkflowError):
+                prepare_runtime(broken)
+
+        # The device copy lands in root's home on the Data volume, which is
+        # the only writable place on a booted device, and it is compared byte
+        # for byte after the transfer.
+        self.assertIn("/mnt2/root/oslog", provisioner)
+        self.assertIn("oslog readback hash mismatch", provisioner)
+        self.assertIn("com.apple.private.logging.stream", provisioner)
+        self.assertLessEqual(
+            {"logging"},
+            default_step_set(provisioner, r'^STEPS="([^"]*)"'),
+        )
+
+        # The reader is a convenience and nothing else on the device depends
+        # on it, so its absence must not make the verification say "do not
+        # boot". It is reported, and the reporting helper cannot fail.
+        self.assertIn('report "oslog reader"', provisioner)
+        self.assertNotIn('note "oslog reader"', provisioner)
+        report = re.search(r"^report\(\) \{\n(.*?)^\}", provisioner, re.M | re.S)
+        self.assertIsNotNone(report, "the report helper is missing")
+        self.assertNotIn("FAIL=1", report.group(1))
+
+        # The host helper reads the device's log through the same path.
+        self.assertIn("/var/root/oslog", logdev)
+
+    def test_oslog_reader_resolves_in_the_checkout_and_the_staged_runtime(self):
+        """The reader is found wherever the provisioning script is run from.
+
+        The staged runtime carries it beside the scripts, and the checkout
+        has it one level up. A run from the checkout that cannot find it
+        would stop half way through the device work.
+        """
+        provisioner = (DEVICE / "sshrd_provision.sh").read_text()
+        payload = SCRIPTS.parent / "payloads/oslog"
+        resolution = re.search(
+            r'^OSLOG="\$BASE/oslog"\n\[ -f "\$OSLOG" \] \|\| OSLOG="\$BASE/\.\./payloads/oslog"$',
+            provisioner,
+            re.M,
+        )
+        self.assertIsNotNone(resolution, "the reader resolution is missing")
+
+        def resolved(base: Path) -> Path:
+            result = subprocess.run(
+                ["sh", "-c", f'BASE="{base}"; {resolution.group(0)}; printf %s "$OSLOG"'],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return Path(result.stdout).resolve()
+
+        # From the checkout: the committed copy one level up.
+        self.assertEqual(resolved(DEVICE), payload.resolve())
+        # From the staged runtime: the symlink beside the scripts.
+        with tempfile.TemporaryDirectory(prefix="liter8-oslog-") as directory:
+            staged = Path(directory)
+            (staged / "oslog").symlink_to(payload)
+            self.assertEqual(resolved(staged), payload.resolve())
+
     def test_userland_builder_preserves_identity_and_entitlements(self):
         liter8 = SCRIPTS.parent / ".build/debug/liter8"
         ldid = SCRIPTS.parent / "tools/ldid_macosx_arm64"
@@ -1351,6 +1641,12 @@ class ContextTests(unittest.TestCase):
     def test_no_txm_plan_without_txm_in_the_identity(self):
         # j171aap has no SPTM/TXM: only the kernel half applies there.
         self.assertEqual(normal_boot_plans(patch_txm=False), ("boot-jit", None))
+
+    def test_normal_boot_plans_with_explicit_tfp0(self):
+        self.assertEqual(
+            normal_boot_plans(patch_txm=True, tfp0=True),
+            ("boot-tfp0", "boot-permissive"),
+        )
 
     def test_boot_sequence_uses_only_firmware_in_the_identity(self):
         # The j171aap 23H30 erase identity has no SPTM/TXM, PMP or WCH, and its

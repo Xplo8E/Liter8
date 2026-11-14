@@ -50,6 +50,10 @@ integration: build
 	# header's probe and exercises absent, legacy-empty, malformed, stale and
 	# current markers. Boot-critical and otherwise uncovered by any target.
 	python3 Tests/lhook-session-tests.py
+	# The AirPort credential shim: compiles the real source for the host with
+	# redirected paths and checks which keychain item it claims, which it
+	# leaves alone, and that it stays inert without its marker.
+	python3 Tests/l8wifi-tests.py
 	# The per-boot helper: SSH PATH links in a world-writable /tmp and the
 	# lhook auto-enable opt-in, compiled for the host with redirected paths.
 	python3 Tests/l8boot-tests.py
