@@ -160,7 +160,7 @@ must_dev() {
     _out=$(sh_dev "$1" 2>&1) || true
     if ! printf '%s' "$_out" | grep -q DONE_OK; then
         printf '%s\n' "$_out" | sed 's/^/        /'
-        die "${2:-device step failed}"
+        die "${2:-device step failed: $1}"
     fi
     printf '%s' "$_out" | grep -v DONE_OK | sed 's/^/        /' || true
 }
@@ -1617,7 +1617,7 @@ echo $n' | tr -d ' \r')
     if [ "$missing" = 0 ]; then
         skip "the system apps are already present ($have bundles), skipping the 659 MB copy"
     elif [ ! -d "$IPSW_ROOT/private/var/staged_system_apps" ]; then
-        skip "IPSW not mounted at $IPSW_ROOT; cannot source the apps"
+        skip "IPSW not mounted at $IPSW_ROOT; cannot source the apps (the decrypted rootfs must stay mounted until provision finishes)"
     else
         SRC="$IPSW_ROOT/private/var/staged_system_apps"
         TAR=payload/apps50.tar.gz
@@ -1644,7 +1644,8 @@ echo $n' | tr -d ' \r')
         fi
         ok "streaming $(du -h "$TAR" | cut -f1) to /Applications"
         timeout 1800 "$SSHPASS" -p "$PW" ssh $SSHOPT "$DEV" \
-            'cd /mnt1/Applications && tar xzf - --numeric-owner' < "$TAR"
+            'cd /mnt1/Applications && tar xzf - --numeric-owner' < "$TAR" \
+            || die "app archive extraction failed with status $?; /Applications may hold a partial copy"
         ok "extracted"
     fi
 fi
@@ -1657,7 +1658,7 @@ FAIL=0
 note() {
     printf '    %-24s %s\n' "$1" "${2:-NO RESULT}"
     case "$2" in
-        ""|*ABSENT*|*MISSING*|*LOST*|*MISMATCH*|*UNREADABLE*|*UNSAFE*|ENABLED) FAIL=1 ;;
+        ""|*ABSENT*|*MISSING*|*LOST*|*MISMATCH*|*UNREADABLE*|*UNSAFE*|*STALE*|ENABLED) FAIL=1 ;;
     esac
 }
 
@@ -1911,19 +1912,29 @@ verify_userland_patch ctkd \
     /mnt1/System/Library/Frameworks/CryptoTokenKit.framework/ctkd
 verify_userland_patch lockdownd /mnt1/usr/libexec/lockdownd
 verify_userland_patch remotepairingdeviced /mnt1/usr/libexec/remotepairingdeviced
-if must_dev "test -f /mnt1/usr/lib/.liter8-keychain && ! test -f /mnt1/usr/lib/l8wifi.dylib; echo \$?" >/dev/null 2>&1 || false; then
-    :
-fi
 # The keychain path retires the l8wifi fallback (the wifi step handles this);
 # the verify then expects the pieces absent instead of failing on them.
-W_RETIRED=$(must_dev "if test -f /mnt1/usr/lib/.liter8-keychain && ! test -f /mnt1/usr/lib/l8wifi.dylib; then echo yes; else echo no; fi" "could not query the keychain/wifi state")
-if [ "$W_RETIRED" = "yes" ]; then
-    note "AirPort credential fallback" "retired - keychain owns credentials"
-    note "AirPort credential marker" "retired"
-else
-    verify_userland_patch wifid /mnt1/usr/sbin/wifid
-    note "AirPort credential marker" "$(required_marker /mnt1/usr/lib/.liter8-wifi-credentials)"
-fi
+#
+# This is a query, not a mutation, so it goes through sh_dev and never
+# must_dev: must_dev demands DONE_OK, which a query cannot print, and this
+# line once died the whole verify report with a swallowed default message
+# while the command substitution hid even that. The answer is checked against
+# the only two values it can have, and anything else dies naming what the
+# device actually returned.
+W_RETIRED=$(sh_dev "if test -f /mnt1/usr/lib/.liter8-keychain && ! test -f /mnt1/usr/lib/l8wifi.dylib; then echo yes; else echo no; fi" 2>&1 | tr -d ' \r')
+case "$W_RETIRED" in
+    yes)
+        note "AirPort credential fallback" "retired - keychain owns credentials"
+        note "AirPort credential marker" "retired"
+        ;;
+    no)
+        verify_userland_patch wifid /mnt1/usr/sbin/wifid
+        note "AirPort credential marker" "$(required_marker /mnt1/usr/lib/.liter8-wifi-credentials)"
+        ;;
+    *)
+        die "could not query the keychain/wifi state: expected yes or no, got '${W_RETIRED:-nothing}'"
+        ;;
+esac
 verify_userland_patch CommCenter \
     /mnt1/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter
 
@@ -1940,7 +1951,7 @@ note "RemoteXPC fallback marker" "$(required_marker /mnt1/usr/lib/.liter8-remote
 note "AirPort credential marker" "$(required_marker /mnt1/usr/lib/.liter8-wifi-credentials)"
 note "l8keychain dylib" "$(test -f /mnt1/usr/lib/l8keychain.dylib && echo present || echo MISSING)"
 note "l8keychain enable marker" "$(required_marker /mnt1/usr/lib/.liter8-keychain)"
-note "securityd weak load" "$(must_dev "lipo -thin arm64 -output /dev/null /mnt1/usr/libexec/securityd 2>/dev/null; strings /mnt1/usr/libexec/securityd | grep -q 'l8keychain.dylib' && echo present || echo MISSING" 2>/dev/null || echo CHECK-FAILED)"
+note "securityd weak load" "$(sh_dev 'lipo -thin arm64 -output /dev/null /mnt1/usr/libexec/securityd 2>/dev/null; strings /mnt1/usr/libexec/securityd | grep -q l8keychain.dylib && echo present || echo MISSING' 2>&1 | tail -n 1)"
 note "l8keychain master" "$(test -s /mnt2/Keychains/l8keychain.master && echo present || echo MISSING)"
 note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_pairing_key.der ] && echo generated || echo pending' | tr -d '\r')"
 
@@ -2047,6 +2058,18 @@ if [ -f payload/launchd.orig ] && [ -f payload/launchd.hooked ] && \
         injection_hook=MISMATCH
         injection_systemhook=MISMATCH
         injection_sbextissue=MISMATCH
+        # The five verdicts below compare the device against the staged
+        # payload copies, so a stale reference reports the healthy device as
+        # MISMATCH without a word of why. A --check run re-stages the workflow
+        # directory and drops the Nov-1-era copies from device/payload back
+        # in, which is exactly how this bit a correctly provisioned 24B156.
+        # Name the reference and both hashes instead of letting five bare
+        # MISMATCH lines stand in for the reason.
+        if [ "$verify_stock" != "$LAUNCHD_SHA" ]; then
+            note "staged launchd reference" "STALE: launchd.orig is $verify_stock, not this profile's stock $LAUNCHD_SHA; the launchd MISMATCH below compares the device against that stale reference, not against the deployed state"
+        else
+            note "staged launchd reference" "STALE: launchd.hooked does not correspond to launchd.orig (verify_diff failed); the launchd MISMATCH below inherits it"
+        fi
     else
         sh_dev 'cat /mnt1/sbin/launchd' > payload/.work/verify.launchd 2>/dev/null || true
         sh_dev 'cat /mnt1/sbin/launchd.bak' > payload/.work/verify.launchd.bak 2>/dev/null || true
