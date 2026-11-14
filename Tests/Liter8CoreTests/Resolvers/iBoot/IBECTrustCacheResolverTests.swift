@@ -16,6 +16,7 @@ final class IBECTrustCacheResolverTests: XCTestCase {
         errorLow: UInt32 = 0x5280_00C8,     // MOV W8,#6
         errorAdd: UInt32 = 0x1100_1900,     // ADD W0,W8,#6 -> 0x400d000c
         returnsMinusOne: Bool = true,
+        branchTargetsBeforeImage: Bool = false,
         copies: Int = 1
     ) -> (BinaryImage, [UInt64]) {
         var words: [UInt32] = []
@@ -32,7 +33,12 @@ final class IBECTrustCacheResolverTests: XCTestCase {
             words += [0] // B.EQ, patched below
             words += Array(repeating: nop, count: 6)
             let failureIndex = words.count
-            words[branchIndex] = 0x5400_0000 | (UInt32(failureIndex - branchIndex) << 5)
+            // Before-image target is file offset -4: close enough to zero that
+            // the wrapped UInt64 overflows when the failure window is added.
+            let displacement = branchTargetsBeforeImage
+                ? -(branchIndex + 1) : failureIndex - branchIndex
+            words[branchIndex] = 0x5400_0000
+                | ((UInt32(bitPattern: Int32(displacement)) & 0x7_FFFF) << 5)
             branches.append(UInt64(branchIndex * 4))
             words += [0x5280_0BC8] // MOV W8,#0x5e (log line)
             words += Array(repeating: nop, count: 8)
@@ -63,6 +69,19 @@ final class IBECTrustCacheResolverTests: XCTestCase {
         XCTAssertThrowsError(try IBECAllowDuplicateTrustCacheResolver().resolve(in: noReturn))
         let (wrongLow, _) = routine(errorLow: 0x5280_00E8) // MOV W8,#7
         XCTAssertThrowsError(try IBECAllowDuplicateTrustCacheResolver().resolve(in: wrongLow))
+    }
+
+    /// A malformed B.EQ whose target lands before offset 0 must fail as "no
+    /// candidate", not trap: conditionalTarget wraps the negative target to a
+    /// huge UInt64, which used to pass the forward check and overflow the
+    /// failure-block window.
+    func testBackwardTargetBeforeTheImageIsRejectedNotATrap() {
+        let (image, _) = routine(branchTargetsBeforeImage: true)
+        XCTAssertThrowsError(try IBECAllowDuplicateTrustCacheResolver().resolve(in: image)) { error in
+            guard case PatchfinderError.noCandidate = error else {
+                return XCTFail("expected noCandidate, got \(error)")
+            }
+        }
     }
 
     func testRequiresTheLoopToCompareWithTheIncomingType() {

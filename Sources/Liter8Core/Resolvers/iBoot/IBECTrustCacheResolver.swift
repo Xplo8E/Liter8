@@ -68,9 +68,14 @@ public struct IBECAllowDuplicateTrustCacheResolver: Sendable {
                 // B.EQ <failure>: cond field 0 (EQ), bit 4 clear.
                 let branchOffset = cursor + 8
                 let branch = try image.readUInt32(at: branchOffset)
+                // A backward target below offset 0 comes back from
+                // conditionalTarget wrapped to a huge UInt64, which passes
+                // `> branchOffset`. Bounding it by the image end rejects that
+                // and keeps `start + window` in failsWithDuplicateTypeError
+                // from overflowing.
                 guard branch & 0xFF00_001F == 0x5400_0000,
                       let failure = ARM64.conditionalTarget(instruction: branch, at: branchOffset),
-                      failure > branchOffset,
+                      failure > branchOffset, failure < end,
                       try failsWithDuplicateTypeError(at: failure, in: image)
                 else { continue }
                 candidates.append(branchOffset)
