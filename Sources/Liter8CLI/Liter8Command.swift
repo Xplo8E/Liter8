@@ -25,7 +25,7 @@ struct Liter8: ParsableCommand {
         `liter8 <command> --help` for anything below.
         """,
         // Bump before tagging; the tag is v<version>.
-        version: "0.2.3",
+        version: "0.3.0",
         subcommands: [
             Firmware.self,
             Resolve.self,
