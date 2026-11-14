@@ -1658,7 +1658,7 @@ FAIL=0
 note() {
     printf '    %-24s %s\n' "$1" "${2:-NO RESULT}"
     case "$2" in
-        ""|*ABSENT*|*MISSING*|*LOST*|*MISMATCH*|*UNREADABLE*|*UNSAFE*|*STALE*|ENABLED) FAIL=1 ;;
+        ""|*ABSENT*|*MISSING*|*LOST*|*MISMATCH*|*UNREADABLE*|*UNSAFE*|*STALE*|*CHECK-FAILED*|ENABLED) FAIL=1 ;;
     esac
 }
 
@@ -1941,6 +1941,7 @@ verify_userland_patch CommCenter \
 verify_system_dylib "l8pair dylib" payload/l8pair.dylib /mnt1/usr/lib/l8pair.dylib
 verify_system_dylib "l8remotepairing dylib" payload/l8remotepairing.dylib /mnt1/usr/lib/l8remotepairing.dylib
 verify_system_dylib "l8coreauth dylib" payload/l8coreauth.dylib /mnt1/usr/lib/l8coreauth.dylib
+verify_system_dylib "l8fdr dylib" payload/l8fdr.dylib /mnt1/usr/lib/l8fdr.dylib
 # Reported separately from the dylib: with the dylib present and the marker gone the
 # bypass is deliberately inert, which is a recovery state rather than a broken one.
 note "FDR sik bypass marker" "$(required_marker /mnt1/usr/lib/.liter8-fdr-sik-bypass)"
@@ -1966,13 +1967,34 @@ esac
 note "l8keychain dylib" "$(sh_dev '[ -f /mnt1/usr/lib/l8keychain.dylib ] && echo present || echo MISSING' | tr -d '\r')"
 note "l8keychain enable marker" "$(required_marker /mnt1/usr/lib/.liter8-keychain)"
 sh_dev 'cat /mnt1/usr/libexec/securityd' > payload/.work/verify.securityd 2>/dev/null || true
-if [ -s payload/.work/verify.securityd ] && grep -aq l8keychain.dylib payload/.work/verify.securityd; then
-    note "securityd weak load" "present"
-elif [ -s payload/.work/verify.securityd ]; then
-    note "securityd weak load" "MISSING: securityd carries no l8keychain.dylib reference"
-else
-    note "securityd weak load" "CHECK-FAILED: could not read securityd over the SSHRD link"
-fi
+# The string alone is not proof: what keeps securityd startable when the shim
+# is absent is the load command being LC_LOAD_WEAK_DYLIB (0x80000018). The
+# path sits 24 bytes into that command, so the command word is checked at
+# path-24 and the verdict names what was actually found.
+SEC_STATE=$(python3 - payload/.work/verify.securityd <<'PY' 2>&1
+import sys
+
+try:
+    blob = open(sys.argv[1], "rb").read()
+except OSError as error:
+    print(f"CHECK-FAILED: could not read securityd over the SSHRD link ({error})")
+    sys.exit(0)
+needle = b"/usr/lib/l8keychain.dylib"
+i = blob.find(needle)
+if i < 0:
+    print("MISSING: securityd carries no l8keychain.dylib path")
+    sys.exit(0)
+cmd = blob[i - 24:i - 20]
+if cmd == b"\x18\x00\x00\x80":
+    print("present")
+else:
+    print(f"MISSING: the l8keychain load command is {cmd.hex()}, not LC_LOAD_WEAK_DYLIB")
+PY
+)
+case "$SEC_STATE" in
+    present) note "securityd weak load" "present" ;;
+    *) note "securityd weak load" "$SEC_STATE" ;;
+esac
 note "l8keychain master" "$(sh_dev '[ -s /mnt2/Keychains/l8keychain.master ] && echo present || echo MISSING' | tr -d '\r')"
 note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_pairing_key.der ] && echo generated || echo pending' | tr -d '\r')"
 
