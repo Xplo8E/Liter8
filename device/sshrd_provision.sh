@@ -1979,6 +1979,12 @@ try:
 except OSError as error:
     print(f"CHECK-FAILED: could not read securityd over the SSHRD link ({error})")
     sys.exit(0)
+# The redirect above always creates the file, so a failed SSHRD read shows up
+# as an empty readback, not a missing file. Reporting that as MISSING would
+# blame the patch for a link failure.
+if not blob:
+    print("CHECK-FAILED: empty readback of securityd over the SSHRD link")
+    sys.exit(0)
 needle = b"/usr/lib/l8keychain.dylib"
 i = blob.find(needle)
 if i < 0:
@@ -1991,9 +1997,12 @@ else:
     print(f"MISSING: the l8keychain load command is {cmd.hex()}, not LC_LOAD_WEAK_DYLIB")
 PY
 )
+# Only the checker's three known verdicts pass through as-is. Anything else
+# (a python3 traceback, an empty capture) matches none of note()'s failure
+# patterns and would leave FAIL unset, so it is reported as CHECK-FAILED.
 case "$SEC_STATE" in
-    present) note "securityd weak load" "present" ;;
-    *) note "securityd weak load" "$SEC_STATE" ;;
+    present|MISSING:*|CHECK-FAILED:*) note "securityd weak load" "$SEC_STATE" ;;
+    *) note "securityd weak load" "CHECK-FAILED: unexpected checker output: $(printf '%s' "$SEC_STATE" | tail -1)" ;;
 esac
 note "l8keychain master" "$(sh_dev '[ -s /mnt2/Keychains/l8keychain.master ] && echo present || echo MISSING' | tr -d '\r')"
 note "pairing fallback key" "$(sh_dev '[ -s /mnt2/root/Library/Lockdown/liter8_pairing_key.der ] && echo generated || echo pending' | tr -d '\r')"
@@ -2086,6 +2095,22 @@ else
 fi
 note "uicache iOS 27" "$uicache_state"
 
+# One device build output against its staged copy: same hash and executable.
+# lhook, systemhook.dylib and sbextissue are build outputs that do not depend
+# on which launchd the build ships, so their staged copies stay a valid
+# reference even when the staged launchd pair is from another build.
+# $4 is appended to MISMATCH so the caller can say why a mismatch is ambiguous.
+staged_output_state() {
+    sh_dev "cat '$2'" > "$3" 2>/dev/null || true
+    if [ -s "$3" ] && \
+       [ "$(shasum -a 256 "$3" | awk '{print $1}')" = "$1" ] && \
+       sh_dev "[ -x '$2' ]" >/dev/null 2>&1; then
+        echo OK
+    else
+        echo "MISMATCH$4"
+    fi
+}
+
 if [ -f payload/launchd.orig ] && [ -f payload/launchd.hooked ] && \
    [ -f payload/lhook.dylib ] && [ -f payload/systemhook.dylib ] && \
    [ -f payload/sbextissue ]; then
@@ -2101,20 +2126,21 @@ if [ -f payload/launchd.orig ] && [ -f payload/launchd.hooked ] && \
         # MISMATCH without a word of why. A --check run re-stages the workflow
         # directory and drops the Nov-1-era copies from device/payload back
         # in, which is exactly how this bit a correctly provisioned 24B156.
-        # Two of the five can still be verified absolutely, and the rest say
-        # STALE-REF instead of borrowing a reference that is known wrong.
+        # Only the launchd pair is build-specific, so only those two verdicts
+        # need another reference.
         #
         # The stock backup is verified against the profile oracle directly:
         # LAUNCHD_SHA IS the stock launchd of this build, wherever it came
         # from. The hooked launchd is re-derived from the device's own backup
         # with the same deterministic patcher the deploy ran, then compared
-        # byte for byte. lhook.dylib, systemhook.dylib and sbextissue are
-        # build outputs with no on-device pristine to re-derive from, so they
-        # are reported STALE-REF rather than judged by a reference known to
-        # be wrong.
-        injection_hook=STALE-REF
-        injection_systemhook=STALE-REF
-        injection_sbextissue=STALE-REF
+        # byte for byte. lhook, systemhook.dylib and sbextissue do not depend
+        # on the launchd build, so they are still checked against their staged
+        # copies. Those copies may be as old as the launchd pair, so a
+        # mismatch here says so instead of blaming the device outright.
+        stale_note=" vs staged copy, which may be as stale as the launchd pair"
+        injection_hook=$(staged_output_state "$verify_lhook" /mnt1/usr/lib/lhook payload/.work/verify.lhook "$stale_note")
+        injection_systemhook=$(staged_output_state "$verify_systemhook" /mnt1/usr/lib/systemhook.dylib payload/.work/verify.systemhook "$stale_note")
+        injection_sbextissue=$(staged_output_state "$verify_sbextissue" /mnt1/usr/local/bin/sbextissue payload/.work/verify.sbextissue "$stale_note")
 
         sh_dev 'cat /mnt1/sbin/launchd.bak' > payload/.work/verify.launchd.bak 2>/dev/null || true
         if [ -s payload/.work/verify.launchd.bak ] && \
@@ -2136,17 +2162,17 @@ if [ -f payload/launchd.orig ] && [ -f payload/launchd.hooked ] && \
                 && injection_launchd=OK || injection_launchd=MISMATCH
         fi
 
+        # report, not note: this describes the host's staged copies, not the
+        # device. Every device verdict below still fails closed on its own, so
+        # a stale host reference no longer blocks a device that verified.
         if [ "$verify_stock" != "$LAUNCHD_SHA" ]; then
-            note "staged launchd reference" "STALE: launchd.orig is $verify_stock, not this profile's stock $LAUNCHD_SHA; the launchd lines below verify against the device's own stock backup and the deterministic patcher, and lhook.dylib / icon systemhook / icon token issuer are STALE-REF (no trusted reference)"
+            report "staged launchd reference" "STALE: launchd.orig is $verify_stock, not this profile's stock $LAUNCHD_SHA; the launchd lines below verify against the device's own stock backup and the deterministic patcher"
         else
-            note "staged launchd reference" "STALE: launchd.hooked does not correspond to launchd.orig (verify_diff failed); the launchd lines below verify against the device's own stock backup and the deterministic patcher, and lhook.dylib / icon systemhook / icon token issuer are STALE-REF (no trusted reference)"
+            report "staged launchd reference" "STALE: launchd.hooked does not correspond to launchd.orig (verify_diff failed); the launchd lines below verify against the device's own stock backup and the deterministic patcher"
         fi
     else
         sh_dev 'cat /mnt1/sbin/launchd' > payload/.work/verify.launchd 2>/dev/null || true
         sh_dev 'cat /mnt1/sbin/launchd.bak' > payload/.work/verify.launchd.bak 2>/dev/null || true
-        sh_dev 'cat /mnt1/usr/lib/lhook' > payload/.work/verify.lhook 2>/dev/null || true
-        sh_dev 'cat /mnt1/usr/lib/systemhook.dylib' > payload/.work/verify.systemhook 2>/dev/null || true
-        sh_dev 'cat /mnt1/usr/local/bin/sbextissue' > payload/.work/verify.sbextissue 2>/dev/null || true
         [ -s payload/.work/verify.launchd ] && \
             [ "$(shasum -a 256 payload/.work/verify.launchd | awk '{print $1}')" = "$verify_hooked" ] && \
             sh_dev '[ -x /mnt1/sbin/launchd ]' \
@@ -2155,18 +2181,9 @@ if [ -f payload/launchd.orig ] && [ -f payload/launchd.hooked ] && \
             [ "$(shasum -a 256 payload/.work/verify.launchd.bak | awk '{print $1}')" = "$verify_stock" ] && \
             sh_dev '[ -x /mnt1/sbin/launchd.bak ]' \
             && injection_backup=OK || injection_backup=MISMATCH
-        [ -s payload/.work/verify.lhook ] && \
-            [ "$(shasum -a 256 payload/.work/verify.lhook | awk '{print $1}')" = "$verify_lhook" ] && \
-            sh_dev '[ -x /mnt1/usr/lib/lhook ]' \
-            && injection_hook=OK || injection_hook=MISMATCH
-        [ -s payload/.work/verify.systemhook ] && \
-            [ "$(shasum -a 256 payload/.work/verify.systemhook | awk '{print $1}')" = "$verify_systemhook" ] && \
-            sh_dev '[ -x /mnt1/usr/lib/systemhook.dylib ]' \
-            && injection_systemhook=OK || injection_systemhook=MISMATCH
-        [ -s payload/.work/verify.sbextissue ] && \
-            [ "$(shasum -a 256 payload/.work/verify.sbextissue | awk '{print $1}')" = "$verify_sbextissue" ] && \
-            sh_dev '[ -x /mnt1/usr/local/bin/sbextissue ]' \
-            && injection_sbextissue=OK || injection_sbextissue=MISMATCH
+        injection_hook=$(staged_output_state "$verify_lhook" /mnt1/usr/lib/lhook payload/.work/verify.lhook "")
+        injection_systemhook=$(staged_output_state "$verify_systemhook" /mnt1/usr/lib/systemhook.dylib payload/.work/verify.systemhook "")
+        injection_sbextissue=$(staged_output_state "$verify_sbextissue" /mnt1/usr/local/bin/sbextissue payload/.work/verify.sbextissue "")
     fi
 else
     injection_launchd=MISSING
