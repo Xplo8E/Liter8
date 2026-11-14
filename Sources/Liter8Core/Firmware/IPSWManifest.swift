@@ -820,9 +820,12 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: []
             )
         ),
-        // iOS 27.2.1, measured from its own rootfs, no device run yet. A
-        // 24B119 point release sharing its kernel profile and tfp0 evidence;
-        // the launchd digest reproduces 24B119's, the cache digest is new.
+        // iOS 27.2.1, device-validated on an iPhone 11 (2026-11-14): erase
+        // restore, SSHRD provisioning, normal boot, repeat boot, finalize and
+        // setup-debugger all passed, 268 apps registered and visible on both
+        // boots. A 24B119 point release sharing its kernel profile and tfp0
+        // evidence; the launchd digest reproduces 24B119's, the cache digest
+        // is new.
         DeviceWorkflowProfile(
             id: "iphone12,1-n104ap-24B156",
             productVersion: "27.2.1",
@@ -832,7 +835,7 @@ public enum DeviceWorkflowRegistry {
             chipID: 0x8030,
             boardID: 0x04,
             extractedDirectoryName: "iPhone12,1_27.2.1_24B156_Restore",
-            validationState: .experimental,
+            validationState: .reviewed,
             launchdSHA256: "0776cff26027264644dbf7a36049e8bc9c10fa296a787d1c62f174ccccaf40d3",
             launchdCacheSHA256: "a07c37e3ffa51167cc43c1212008a25cb650c964bafaf281a298e5c01d9f597d",
             launchdCacheDaemonCount: 732,

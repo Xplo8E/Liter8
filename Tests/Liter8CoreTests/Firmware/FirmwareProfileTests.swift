@@ -559,10 +559,11 @@ final class FirmwareProfileTests: XCTestCase {
         )
     }
 
-    /// The 27.2.1 (24B156) entries: measured, still experimental, sharing
-    /// 24B119's kernel profile and ACM family the way 24A446 shares 24A435's.
-    /// launchd equal (byte-identical file), service cache different.
-    func testTwoSevenTwoPointOneEntriesAreExperimentalAndMeasured() throws {
+    /// The 27.2.1 (24B156) entries: n104 reviewed after its full device run,
+    /// the Pro boards still experimental, all sharing 24B119's kernel profile
+    /// and ACM family the way 24A446 shares 24A435's. launchd equal
+    /// (byte-identical file), service cache different.
+    func testTwoSevenTwoPointOneEntriesAreMeasuredAndReviewedOnN104() throws {
         // Kernel profile: same profile and family as 24B119, no new entry.
         let kernel = try XCTUnwrap(
             KernelResolverProfileRegistry.profiles.first { $0.covers(build: "24B156") }
@@ -578,9 +579,9 @@ final class FirmwareProfileTests: XCTestCase {
         let n104 = try XCTUnwrap(
             DeviceWorkflowRegistry.profiles.first { $0.id == "iphone12,1-n104ap-24B156" }
         )
-        // No device run yet: the promotion to `.reviewed` happens only after
-        // this build's own erase restore and repeat boot.
-        XCTAssertEqual(n104.validationState, .experimental)
+        // Reviewed after the full device run: erase restore, SSHRD
+        // provisioning, normal boot, repeat boot, finalize.
+        XCTAssertEqual(n104.validationState, .reviewed)
         XCTAssertEqual(n104.productVersion, "27.2.1")
         XCTAssertEqual(n104.build, "24B156")
         XCTAssertEqual(n104.deviceClass, "n104ap")

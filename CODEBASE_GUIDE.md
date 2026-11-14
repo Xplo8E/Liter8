@@ -58,8 +58,8 @@ Swift decides, Python plumbs. Swift picks the firmware profile, parses the binar
 
 ## Supported builds
 
-Twenty `DeviceWorkflowProfile` entries. Nine are iPhone 11 `n104ap`: eight
-`.reviewed` after full device runs, and `24B156` `.experimental` until its run.
+Twenty `DeviceWorkflowProfile` entries. Nine are iPhone 11 `n104ap`, and all
+nine are `.reviewed` after full device runs:
 
 | Build | Version | State |
 | --- | --- | --- |
@@ -71,7 +71,7 @@ Twenty `DeviceWorkflowProfile` entries. Nine are iPhone 11 `n104ap`: eight
 | `24B5099f` | 27.2 beta 3 | reviewed |
 | `24B5110a` | 27.2 beta 4 | reviewed |
 | `24B119` | 27.2 | reviewed |
-| `24B156` | 27.2.1 | experimental |
+| `24B156` | 27.2.1 | reviewed |
 | `24C5037i` | 27.3 beta 1 | reviewed |
 
 The remaining eleven are `.experimental` entries for `d421ap` and `d431ap` on
