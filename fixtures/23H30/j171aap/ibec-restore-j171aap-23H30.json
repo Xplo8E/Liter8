@@ -1,0 +1,50 @@
+{
+  "expectedOutputSHA256" : "154e1e12514260e8d5e2991114415937c198fa32e8960b3d4425f0455340a615",
+  "expectedPatches" : [
+    {
+      "id" : "ibss.validate-asn1.branch",
+      "offset" : 151664,
+      "originalBytes" : "01070054",
+      "replacementBytes" : "1f2003d5"
+    },
+    {
+      "id" : "ibss.validate-asn1.result",
+      "offset" : 151668,
+      "originalBytes" : "e00314aa",
+      "replacementBytes" : "000080d2"
+    },
+    {
+      "id" : "ibss.boot-args.adrp",
+      "offset" : 165928,
+      "originalBytes" : "020700b0",
+      "replacementBytes" : "42040090"
+    },
+    {
+      "id" : "ibss.boot-args.add",
+      "offset" : 165932,
+      "originalBytes" : "423c2591",
+      "replacementBytes" : "42803691"
+    },
+    {
+      "id" : "ibss.boot-args.string",
+      "offset" : 724384,
+      "originalBytes" : "0000000000000000000000000000000000000000000000000000",
+      "replacementBytes" : "2d76207764743d2d312072643d6d6430202d726573746f726500"
+    },
+    {
+      "id" : "ibec.recovery-nonce.preserve",
+      "offset" : 203272,
+      "originalBytes" : "48010837",
+      "replacementBytes" : "0a000014"
+    }
+  ],
+  "expectedSize" : 2190896,
+  "resolver" : "ibec-restore",
+  "sha256" : "07061a532e169761da59ef6e1bb82458fca795ebcac7eb3d14bffdb808f2188b",
+  "target" : {
+    "board" : "j171aap",
+    "build" : "23H30",
+    "component" : "iBEC",
+    "device" : "iPad 8 (Wi-Fi)"
+  }
+}

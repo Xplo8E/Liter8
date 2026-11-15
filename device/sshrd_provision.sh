@@ -45,6 +45,7 @@ usage() {
     echo "  keychain software system keychain: securityd wraps keychain items"
     echo "           with software class keys (marker-gated; see E04 notes)"
     echo "  cellular unseal baseband calibration and stop CommCenter refusing a data context"
+    echo "           (only on a profile with a baseband; Wi-Fi-only boards such as j171aap skip it)"
     echo "  screentime make Setup's unavailable ScreenTime requests fail fast"
     echo "  injection install launchd hook plus icon grant, disabled for first boot"
     echo "  tweaks   install the tweak loader and the TweakInject payloads"
@@ -61,10 +62,11 @@ usage() {
 }
 
 CHECK_ONLY=0
+DEFAULT_RUN=0
 case "${1:-}" in
     --list|-h|--help) usage ;;
     --check) CHECK_ONLY=1; WANT="mounts verify" ;;
-    "") WANT="$STEPS" ;;
+    "") WANT="$STEPS"; DEFAULT_RUN=1 ;;
     *) WANT="mounts $* verify" ;;
 esac
 
@@ -113,6 +115,27 @@ say()  { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 ok()   { printf '    [+] %s\n' "$1"; }
 skip() { printf '    [=] %s\n' "$1"; }
 die()  { printf '    [!] %s\n' "$1"; exit 1; }
+
+# Whether this board has a modem, from the exact firmware profile
+# (DeviceWorkflowProfile.hasBaseband). The cellular step fixes CommCenter's
+# baseband calibration and data context. A Wi-Fi-only board (j171aap) has
+# neither to fix, and the CommCenter resolver was written for the iOS 27
+# iPhone builds, so there the step is left out of the default run, refused
+# when named, and not expected by verify.
+HAS_BASEBAND=${LITER8_HAS_BASEBAND:?Liter8 did not provide the reviewed baseband policy}
+case "$HAS_BASEBAND" in
+    0|1) ;;
+    *) die "LITER8_HAS_BASEBAND must be 0 or 1, not $HAS_BASEBAND" ;;
+esac
+if [ "$HAS_BASEBAND" = 0 ] && wants cellular; then
+    [ "$DEFAULT_RUN" = 1 ] \
+        || die "this firmware profile has no baseband; the cellular step does not apply"
+    no_cellular=
+    for step in $WANT; do
+        [ "$step" = cellular ] || no_cellular="$no_cellular $step"
+    done
+    WANT=${no_cellular# }
+fi
 
 # SSHRD's old Dropbear occasionally rejects a valid password when the workflow
 # opens several connections back-to-back. Buffer each attempt independently so
@@ -1988,16 +2011,26 @@ case "$W_RETIRED" in
         die "could not query the keychain/wifi state: expected yes or no, got '${W_RETIRED:-nothing}'"
         ;;
 esac
-verify_userland_patch CommCenter \
-    /mnt1/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter
+if [ "$HAS_BASEBAND" = 1 ]; then
+    verify_userland_patch CommCenter \
+        /mnt1/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter
+else
+    note "CommCenter patch" "not used: this board has no baseband"
+fi
 
 verify_system_dylib "l8pair dylib" payload/l8pair.dylib /mnt1/usr/lib/l8pair.dylib
 verify_system_dylib "l8remotepairing dylib" payload/l8remotepairing.dylib /mnt1/usr/lib/l8remotepairing.dylib
 verify_system_dylib "l8coreauth dylib" payload/l8coreauth.dylib /mnt1/usr/lib/l8coreauth.dylib
-verify_system_dylib "l8fdr dylib" payload/l8fdr.dylib /mnt1/usr/lib/l8fdr.dylib
+if [ "$HAS_BASEBAND" = 1 ]; then
+    verify_system_dylib "l8fdr dylib" payload/l8fdr.dylib /mnt1/usr/lib/l8fdr.dylib
+else
+    note "l8fdr dylib" "not used: this board has no baseband"
+fi
 # Reported separately from the dylib: with the dylib present and the marker gone the
 # bypass is deliberately inert, which is a recovery state rather than a broken one.
-note "FDR sik bypass marker" "$(required_marker /mnt1/usr/lib/.liter8-fdr-sik-bypass)"
+if [ "$HAS_BASEBAND" = 1 ]; then
+    note "FDR sik bypass marker" "$(required_marker /mnt1/usr/lib/.liter8-fdr-sik-bypass)"
+fi
 note "pairing fallback marker" "$(required_marker /mnt2/root/Library/Lockdown/.liter8-pairing-fallback)"
 note "RemoteXPC fallback marker" "$(required_marker /mnt1/usr/lib/.liter8-remotepairing-fallback)"
 case "$W_RETIRED" in

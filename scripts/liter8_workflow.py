@@ -58,6 +58,25 @@ def validate_ibss_additional_plans(value: object, mode: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+def validate_ibec_additional_plans(value: object) -> tuple[str, ...]:
+    """Validate the normal-boot iBEC plans the profile selected.
+
+    Same fail-closed rule as the iBSS list. A plan belongs here only when
+    boot_artifacts.py may apply it to the normal-boot iBEC and nowhere else.
+    """
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise WorkflowError("Liter8 context has an invalid normal iBEC plan list")
+    allowed = {"ibec-allow-duplicate-trust-cache"}
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise WorkflowError(
+            f"Liter8 context selects unsupported normal iBEC plans: {', '.join(unknown)}"
+        )
+    if len(value) != len(set(value)):
+        raise WorkflowError("Liter8 context repeats a normal iBEC plan")
+    return tuple(value)
+
+
 @dataclass(frozen=True)
 class Context:
     profile_id: str
@@ -71,6 +90,7 @@ class Context:
     build: str = ""
     normal_ibss_additional_plans: tuple[str, ...] = ()
     restore_ibss_additional_plans: tuple[str, ...] = ()
+    normal_ibec_additional_plans: tuple[str, ...] = ()
     preserve_im4p_compression: bool = False
     normal_boot_static_trust_cache: bool = False
     optional_passthrough_firmware: frozenset[str] = frozenset()
@@ -94,6 +114,7 @@ class Context:
         restore_plans = validate_ibss_additional_plans(
             boot_plan.get("restoreIBSSAdditionalPlans"), "restore"
         )
+        ibec_plans = validate_ibec_additional_plans(boot_plan.get("normalIBECAdditionalPlans"))
         preserve_compression = boot_plan.get("preservesIM4PCompression")
         if not isinstance(preserve_compression, bool):
             raise WorkflowError("Liter8 context boot plan has no IM4P compression policy")
@@ -126,6 +147,7 @@ class Context:
             build=str(document.get("build", "")),
             normal_ibss_additional_plans=normal_plans,
             restore_ibss_additional_plans=restore_plans,
+            normal_ibec_additional_plans=ibec_plans,
             preserve_im4p_compression=preserve_compression,
             normal_boot_static_trust_cache=static_trust_cache,
             optional_passthrough_firmware=frozenset(optional_firmware),

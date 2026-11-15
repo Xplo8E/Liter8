@@ -56,6 +56,13 @@ PRs welcome on any of these, especially SEP.
 | iOS 27.2.1      | `24B156`   | run       | experimental | experimental |
 | iOS 27.3 beta 1 | `24C5037i` | run       | experimental | experimental |
 
+| Firmware      | Build    | iPad 8 Wi-Fi |
+| ------------- | -------- | ------------ |
+| iPadOS 26.7.1 | `23H30`  | experimental |
+| iPadOS 26.7.2 | `23H128` | experimental |
+
+The iPad 8 port (A12, iPadOS 26) is by [gru2007](https://github.com/gru2007). On 23H30 they ran the restore, SSH ramdisk, provisioning and a normal boot, with no repeat boot yet. 23H128 needs one extra iBEC patch to boot normally, and that patch hasn't been booted yet. Port notes: [23H30](docs/runs/IPAD8_J171AAP_23H30.md), [23H128](docs/runs/IPAD8_J171AAP_23H128.md).
+
 **run**: I did an erase restore, booted it normally, then rebooted and it came back up.
 
 **experimental**: resolves, and you can use it with `--experimental`, but nobody has confirmed it on that phone. The 11 Pro and Pro Max have profiles and no device to test on. If you own one and try it, tell me what happens and I'll change the tag.
@@ -236,6 +243,7 @@ For the source layout and how execution moves through it, see [CODEBASE_GUIDE.md
 - [iPhone 11 beta 4 device run](docs/runs/IOS_27_BETA4_IPHONE11.md)
 - [iPhone 11 `24A446` pairing and watchdog research](docs/runs/IOS_27_24A446_PAIRING_AND_WATCHDOG.md)
 - tfp0 kernel read/write on [`24A446`](docs/runs/IOS_27_24A446_TFP0.md) and [`24C5037i`](docs/runs/IOS_273_24C5037i_TFP0.md)
+- iPad 8 port notes for [`23H30`](docs/runs/IPAD8_J171AAP_23H30.md) and [`23H128`](docs/runs/IPAD8_J171AAP_23H128.md)
 
 ## Contributing and support
 

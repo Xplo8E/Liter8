@@ -77,6 +77,8 @@ public struct KernelBootCompatibilityResolver: Sendable {
 /// It also clears the exception-port behavior enforcement byte, because the
 /// trust-cache patches make every app a platform binary and platform binaries
 /// are killed for registering `EXCEPTION_DEFAULT` handlers, which crash SDKs do.
+/// A kernel profile may omit that family (j171aap does: the resolver has not
+/// been ported to its kernel).
 public struct KernelBootJITResolver: Sendable {
     public static let name = "kernel-boot-jit"
     public init() {}
@@ -84,7 +86,7 @@ public struct KernelBootJITResolver: Sendable {
     public func resolve(in image: BinaryImage) throws -> [PatchRecord] {
         try KernelBootCompatibilityResolver().resolve(in: image)
             + KernelCodeSigningResolver.requiredRecords(in: image)
-            + KernelExceptionPortResolver().resolve(in: image)
+            + KernelExceptionPortResolver.compositeRecords(in: image)
     }
 }
 
