@@ -1,0 +1,3 @@
+# Optional; plain backups use only the Python standard library.
+# Pin the callback rename API and the cleanup adapter tested by this repository.
+iphone_backup_decrypt==0.11.2

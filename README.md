@@ -86,6 +86,9 @@ The binary ends up at `.build/release/liter8`.
 
 ## Usage
 
+Optional host-side backup helper: [backup guide](docs/BACKUP_RECOVERY.md).
+It does not replace or change the erase restore workflow.
+
 Everything lands in one work directory: `WORK_DIR`, or `--work-dir`, or the directory you're standing in if you set neither.
 
 Run the steps in order, every time. Each one eats the output of the one before it. Coming back to a phone days later, restart from `fw make-cfw` rather than guessing where you left off.
