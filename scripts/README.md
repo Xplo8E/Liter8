@@ -26,3 +26,7 @@ stages remain visible in the terminal, while full debug logs are retained in
 the selected work directory's `logs/` directory.
 `apticket.py` owns DER/IM4M validation and atomic publication;
 `capture_ticket.py` recovers the ticket from an already completed restore log.
+
+The optional `backup_wizard.py`, `backup_preflight.py` and `backup_recovery.py`
+helpers are standalone host tools. They do not run firmware or boot actions.
+See [the backup guide](../docs/BACKUP_RECOVERY.md).
