@@ -37,7 +37,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install -r requirements-encrypted.txt ruff==0.17.5
-      - run: python -m ruff check Tests/BackupRecoveryTests scripts/backup_common.py scripts/backup_preflight.py scripts/backup_recovery.py scripts/backup_wizard.py
-      - run: python -m ruff format --check Tests/BackupRecoveryTests scripts/backup_common.py scripts/backup_preflight.py scripts/backup_recovery.py scripts/backup_wizard.py
+      - run: python -m ruff check --config .github/backup-ruff.toml Tests/BackupRecoveryTests scripts/backup_common.py scripts/backup_preflight.py scripts/backup_recovery.py scripts/backup_wizard.py
+      - run: python -m ruff format --check --config .github/backup-ruff.toml Tests/BackupRecoveryTests scripts/backup_common.py scripts/backup_preflight.py scripts/backup_recovery.py scripts/backup_wizard.py
       - run: python -m compileall -q Tests/BackupRecoveryTests scripts/backup_common.py scripts/backup_preflight.py scripts/backup_recovery.py scripts/backup_wizard.py
       - run: python -m unittest discover -s Tests/BackupRecoveryTests -p "test_*.py" -v
