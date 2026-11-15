@@ -69,9 +69,7 @@ def select_udid(preferred=None):
     if len(devices) == 1:
         return devices[0]
     if not devices:
-        raise RuntimeError(
-            "No iPhone found. Unlock it and trust this computer."
-        )
+        raise RuntimeError("No iPhone found. Unlock it and trust this computer.")
     print("Connected devices:")
     for i, name in enumerate(devices, 1):
         print(f" {i}. {name}")
@@ -128,7 +126,9 @@ def validate_backup(path, encrypted):
         if encrypted:
             # Ciphertext cannot be integrity-checked without the existing password.
             if size % 16:
-                raise RuntimeError("Encrypted Manifest.db is truncated (length is not a multiple of 16).")
+                raise RuntimeError(
+                    "Encrypted Manifest.db is truncated (length is not a multiple of 16)."
+                )
         else:
             rows = read_rows(path)
             for fid, _, _ in rows:
@@ -209,9 +209,7 @@ def before(args):
     args.state = args.state.expanduser().absolute()
     with state_lock(args.state):
         if args.state.exists() or args.state.is_symlink():
-            raise RuntimeError(
-                "Session state already exists. Use a new --state path."
-            )
+            raise RuntimeError("Session state already exists. Use a new --state path.")
         _before(args)
 
 
