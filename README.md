@@ -258,3 +258,13 @@ None of this starts without these people.
 ## License
 
 MIT, see [LICENSE](LICENSE). Submodules, tools and payloads keep their own licenses.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=xplo8e%2Fliter8&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=xplo8e/liter8&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=xplo8e/liter8&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=xplo8e/liter8&type=date&legend=top-left" />
+ </picture>
+</a>
