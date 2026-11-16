@@ -37,6 +37,38 @@ class WorkflowError(RuntimeError):
     """A clear operator-facing workflow failure."""
 
 
+def _require_regular_file(path: Path) -> None:
+    """Refuse links and special files before treating a path as a saved copy."""
+    if not stat.S_ISREG(path.lstat().st_mode):
+        raise WorkflowError(f"expected a regular file, not a link or special file: {path}")
+
+
+def _copy_file_atomically(source: Path, destination: Path, *, replace: bool) -> None:
+    """Publish a complete copy, leaving existing data intact on copy failure."""
+    _require_regular_file(source)
+    descriptor, name = tempfile.mkstemp(
+        prefix=f".{destination.name}.copy-", dir=destination.parent
+    )
+    os.close(descriptor)
+    temporary = Path(name)
+    try:
+        shutil.copy2(source, temporary, follow_symlinks=False)
+        _require_regular_file(temporary)
+        if replace:
+            if destination.exists() or destination.is_symlink():
+                _require_regular_file(destination)
+            os.replace(temporary, destination)
+        else:
+            try:
+                # Same-directory hard linking publishes without clobbering a
+                # first backup completed by another writer in the meantime.
+                os.link(temporary, destination)
+            except FileExistsError:
+                _require_regular_file(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def validate_ibss_additional_plans(value: object, mode: str) -> tuple[str, ...]:
     """Validate the narrow plan vocabulary accepted from Swift.
 
@@ -133,6 +165,8 @@ class Context:
 
     def component(self, name: str, *, in_cfw: bool = False) -> Path:
         """Resolve a semantic manifest component below its trusted tree."""
+        if in_cfw:
+            self._check_cfw_path()
         try:
             relative = self.components[name]
         except KeyError as error:
@@ -156,7 +190,10 @@ class Context:
 
     def prepare_cfw(self) -> None:
         """Create a writable, copy-on-write clone of the extracted IPSW."""
+        self._check_cfw_path()
         marker = self.cfw / ".copy-complete"
+        if marker.is_symlink():
+            raise WorkflowError(f"CFW completion marker must not be a symbolic link: {marker}")
         if marker.is_file():
             try:
                 recorded = json.loads(marker.read_text())
@@ -210,17 +247,25 @@ class Context:
                 shutil.rmtree(staging)
         print(f"[*] CFW clone ready in {time.monotonic() - started:.2f}s", flush=True)
 
+    def _check_cfw_path(self) -> None:
+        if self.cfw.is_symlink():
+            raise WorkflowError(f"CFW directory must not be a symbolic link: {self.cfw}")
+
     def backup(self, path: Path) -> Path:
         """Keep the pristine container used for repeatable extract/repack."""
+        if path.exists() or path.is_symlink():
+            _require_regular_file(path)
         backup = path.with_name(path.name + ".bak")
-        if not backup.exists():
-            shutil.copy2(path, backup)
+        if backup.exists() or backup.is_symlink():
+            _require_regular_file(backup)
+        else:
+            _copy_file_atomically(path, backup, replace=False)
         return backup
 
     def reset_to_pristine(self, path: Path) -> Path:
         """Restore a component from its first-run backup before repatching."""
         backup = self.backup(path)
-        shutil.copy2(backup, path)
+        _copy_file_atomically(backup, path, replace=True)
         return backup
 
     def extract_im4p(self, source: Path, output: Path) -> None:

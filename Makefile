@@ -2,7 +2,7 @@ SWIFT ?= swift
 PREFIX ?= /usr/local
 DESTDIR ?=
 
-.PHONY: all build release setup test test-fixtures test-full test-e2e integration check install clean
+.PHONY: all build release setup test test-host-files test-fixtures test-full test-e2e integration check install clean
 
 # Debug is the normal development build and keeps repeated CLI runs fast.
 all: build
@@ -23,6 +23,10 @@ test:
 	# the deliberately duplicated production-wiring check have separate tiers.
 	$(SWIFT) test --skip KernelFixtureTests --skip KernelEndToEndTests --skip ReleaseFixtureTests
 
+# Standard-library file safety tests; no Swift build, firmware or device.
+test-host-files:
+	python3 Tests/host-file-safety-tests.py
+
 test-fixtures:
 	# Resolve each beta-4 and 24A435 component once per process. The tests still
 	# verify exact offsets, preimages, replacements and complete output hashes.
@@ -42,6 +46,7 @@ test-e2e:
 
 # Exercise the real CLI handoff without requiring a multi-gigabyte IPSW.
 integration: build
+	python3 Tests/host-file-safety-tests.py
 	bash Tests/fw-workflow-integration.sh
 	python3 Tests/ipsw-robustness-integration.py
 	python3 Tests/firmware-container-integration.py
