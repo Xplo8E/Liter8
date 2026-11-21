@@ -890,6 +890,31 @@ public enum DeviceWorkflowRegistry {
                 restoreIBSSAdditionalPlans: []
             )
         ),
+        // iPhone SE 2nd generation, measured with `survey --guards` on the
+        // single-board iPhone12,8 24B156 IPSW, not copied from the entries
+        // above: the launchd digest matches the shared 24B156 rootfs, while
+        // the cache digest is this board's own. No device run yet, so the
+        // profile stays experimental and bootPlan stays empty until the
+        // d79ap display behaviour is known.
+        DeviceWorkflowProfile(
+            id: "iphone12,8-d79ap-24B156",
+            productVersion: "27.2.1",
+            build: "24B156",
+            productType: "iPhone12,8",
+            deviceClass: "d79ap",
+            chipID: 0x8030,
+            boardID: 0x10,
+            extractedDirectoryName: "iPhone12,8_27.2.1_24B156_Restore",
+            validationState: .experimental,
+            launchdSHA256: "0776cff26027264644dbf7a36049e8bc9c10fa296a787d1c62f174ccccaf40d3",
+            launchdCacheSHA256: "a9d365ef5bc8628df1a27317535af539fde39db25cf1a2024b8e3873684c9910",
+            launchdCacheDaemonCount: 732,
+            setupControllerMethodCount: 64,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            )
+        ),
     ]
 
     /// Every profile this IPSW could be restored with.
