@@ -414,18 +414,18 @@ final class FirmwareProfileTests: XCTestCase {
         }
     }
 
-    /// One XNU fingerprint covers all three 24B119 boards, so the kernel
-    /// profile has to name them rather than being split in two.
+    /// One XNU fingerprint covers the 24B119 boards and the d79ap point-release
+    /// kernel, so one kernel profile has to name all four boards.
     ///
     /// Splitting would give two profiles the same fingerprint, and `detect`
     /// returns nil on a tie: every kernel plan would silently lose variant
     /// selection on both. The `builds` list must stay single-entry for the
     /// same reason `testNoBuildIDIsClaimedByTwoProfiles` exists.
-    func testTwoSevenTwoKernelProfileCoversBothProBoards() throws {
+    func testTwoSevenTwoKernelProfileCoversAllSupportedBoards() throws {
         let profile = try XCTUnwrap(
             KernelResolverProfileRegistry.profiles.first { $0.id == "ios272-24B119-n104ap" }
         )
-        XCTAssertEqual(profile.boards.sorted(), ["d421ap", "d431ap", "n104ap"])
+        XCTAssertEqual(profile.boards.sorted(), ["d421ap", "d431ap", "d79ap", "n104ap"])
         // 24B156 (27.2.1) is this build's point release: same XNU string,
         // kernelcache byte-identical apart from UUID/version metadata, and
         // every kernel plan resolving to identical records, so it joins the

@@ -41,17 +41,19 @@ die()  { printf '    [!] %s\n' "$1"; exit 1 }
 sh_dev() { "$SSHPASS" -p "$PW" ssh "${SSHOPT[@]}" "$DEV" "$@" }
 
 assistive_probe_remote_plist() {
-    local path=$1
+    # `path` is a special zsh array tied to PATH. A local named `path` would
+    # dynamically replace PATH while sh_dev runs and break askpass-sshpass.
+    local remote_path=$1
     local state
-    if ! state=$(sh_dev "[ -e $path ] && printf yes || printf no" \
+    if ! state=$(sh_dev "[ -e $remote_path ] && printf yes || printf no" \
         < /dev/null 2>/dev/null); then
-        die "could not inspect $path"
+        die "could not inspect $remote_path"
         return 1
     fi
     case "$state" in
         yes|no) assistive_present=$state ;;
         *)
-            die "unexpected response while inspecting $path"
+            die "unexpected response while inspecting $remote_path"
             return 1
             ;;
     esac

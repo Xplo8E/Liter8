@@ -59,7 +59,7 @@ PRs welcome on any of these, especially SEP.
 
 **run**: I did an erase restore, booted it normally, then rebooted and it came back up.
 
-**experimental**: resolves, and you can use it with `--experimental`, but nobody has confirmed it on that phone. The 11 Pro and Pro Max have profiles and no device to test on. If you own one and try it, tell me what happens and I'll change the tag.
+**experimental**: resolves and requires `--experimental`. The 11 Pro and Pro Max entries have not been run on those devices. The iPhone SE 2nd generation `24B156` entry has completed one contributor device run, including erase restore, finalization and repeat boot, but remains experimental pending maintainer review and broader validation.
 
 > [!WARNING]
 > `fw restore-cfw` pulls a fresh APTicket from Apple during the restore, so once Apple stops signing a build you can't install it anymore. A row stays in the table because I tested it, not because you can still use it today. Check signing first.

@@ -1108,11 +1108,12 @@ class ContextTests(unittest.TestCase):
 
         probe_driver = helper_source + r'''
 die() { print -r -- "$1" >&2; return 1; }
+SSHPASS=$1
+PW=alpine
+SSHOPT=()
+DEV=root@localhost
 sh_dev() {
-    case "$PROBE_RESULT" in
-        error) return 1 ;;
-        *) print -rn -- "$PROBE_RESULT" ;;
-    esac
+    "$SSHPASS" -p "$PW" ssh "${SSHOPT[@]}" "$DEV" "$@"
 }
 if assistive_probe_remote_plist /remote/accessibility.plist; then
     print -r -- "$assistive_present"
@@ -1120,29 +1121,43 @@ else
     exit $?
 fi
 '''
-        for response, expected in (("yes", "yes"), ("no", "no")):
-            result = subprocess.run(
-                ["/bin/zsh", "-c", probe_driver],
-                capture_output=True,
-                text=True,
-                env={**os.environ, "PROBE_RESULT": response},
-                check=False,
+        with tempfile.TemporaryDirectory(prefix="liter8-assistive-ssh-") as directory:
+            fake_bin = Path(directory)
+            fake_ssh = fake_bin / "ssh"
+            fake_ssh.write_text(
+                "#!/bin/sh\n"
+                "[ \"${PROBE_RESULT:-}\" != error ] || exit 1\n"
+                "printf %s \"${PROBE_RESULT:-}\"\n"
             )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), expected)
-        for response, message in (
-            ("error", "could not inspect"),
-            ("maybe", "unexpected response"),
-        ):
-            result = subprocess.run(
-                ["/bin/zsh", "-c", probe_driver],
-                capture_output=True,
-                text=True,
-                env={**os.environ, "PROBE_RESULT": response},
-                check=False,
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn(message, result.stderr)
+            fake_ssh.chmod(0o755)
+            environment = {
+                **os.environ,
+                "PATH": f"{fake_bin}:/usr/bin:/bin",
+            }
+            wrapper = DEVICE / "askpass-sshpass"
+            for response, expected in (("yes", "yes"), ("no", "no")):
+                result = subprocess.run(
+                    ["/bin/zsh", "-c", probe_driver, "probe-test", str(wrapper)],
+                    capture_output=True,
+                    text=True,
+                    env={**environment, "PROBE_RESULT": response},
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+            for response, message in (
+                ("error", "could not inspect"),
+                ("maybe", "unexpected response"),
+            ):
+                result = subprocess.run(
+                    ["/bin/zsh", "-c", probe_driver, "probe-test", str(wrapper)],
+                    capture_output=True,
+                    text=True,
+                    env={**environment, "PROBE_RESULT": response},
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
 
         with tempfile.TemporaryDirectory(prefix="liter8-assistive-") as directory:
             local = Path(directory) / "accessibility.plist"

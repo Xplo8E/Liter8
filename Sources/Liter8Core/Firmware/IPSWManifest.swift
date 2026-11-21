@@ -898,9 +898,11 @@ public enum DeviceWorkflowRegistry {
         // iPhone SE 2nd generation, measured with `survey --guards` on the
         // single-board iPhone12,8 24B156 IPSW, not copied from the entries
         // above: the launchd digest matches the shared 24B156 rootfs, while
-        // the cache digest is this board's own. No device run yet, so the
-        // profile stays experimental and bootPlan stays empty until the
-        // d79ap display behaviour is known.
+        // the cache digest is this board's own. Device-tested on one iPhone12,8:
+        // erase restore, SSHRD, provisioning, normal boot, finalization and
+        // repeat boot passed with an empty bootPlan. The profile remains
+        // experimental pending maintainer review and broader or second-operator
+        // validation.
         DeviceWorkflowProfile(
             id: "iphone12,8-d79ap-24B156",
             productVersion: "27.2.1",
