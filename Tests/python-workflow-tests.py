@@ -1088,6 +1088,108 @@ class ContextTests(unittest.TestCase):
         self.assertIn("/var/jb/usr/bin/uicache -a", finalizer)
         self.assertIn('action == "finalize"', runner)
 
+    def test_finalize_assistive_touch_transport_fails_closed_and_is_atomic(self):
+        """A transport fault must not replace the live Accessibility preferences."""
+        finalizer = (DEVICE / "finalize.sh").read_text()
+        assistive = finalizer.split('say "AssistiveTouch"', 1)[1].split(
+            'say "SpringBoard restart"', 1
+        )[0]
+        self.assertNotIn(" scp ", assistive)
+
+        helpers = []
+        for name in (
+            "assistive_probe_remote_plist",
+            "assistive_push_plist_atomically",
+        ):
+            match = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", finalizer, re.M | re.S)
+            self.assertIsNotNone(match, f"{name}() is no longer defined in finalize.sh")
+            helpers.append(match.group(0))
+        helper_source = "\n".join(helpers)
+
+        probe_driver = helper_source + r'''
+die() { print -r -- "$1" >&2; return 1; }
+sh_dev() {
+    case "$PROBE_RESULT" in
+        error) return 1 ;;
+        *) print -rn -- "$PROBE_RESULT" ;;
+    esac
+}
+if assistive_probe_remote_plist /remote/accessibility.plist; then
+    print -r -- "$assistive_present"
+else
+    exit $?
+fi
+'''
+        for response, expected in (("yes", "yes"), ("no", "no")):
+            result = subprocess.run(
+                ["/bin/zsh", "-c", probe_driver],
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PROBE_RESULT": response},
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), expected)
+        for response, message in (
+            ("error", "could not inspect"),
+            ("maybe", "unexpected response"),
+        ):
+            result = subprocess.run(
+                ["/bin/zsh", "-c", probe_driver],
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PROBE_RESULT": response},
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(message, result.stderr)
+
+        with tempfile.TemporaryDirectory(prefix="liter8-assistive-") as directory:
+            local = Path(directory) / "accessibility.plist"
+            local.write_bytes(b"plist payload")
+            log = Path(directory) / "ssh.log"
+            push_driver = helper_source + r'''
+die() { print -r -- "$1" >&2; return 1; }
+typeset -i call_count=0
+sh_dev() {
+    (( call_count += 1 ))
+    print -r -- "$*" >> "$CALL_LOG"
+    cat >/dev/null
+    if [[ "$PUSH_MODE" == upload-error && $call_count -eq 1 ]]; then
+        return 1
+    fi
+    if [[ "$PUSH_MODE" == install-error && $call_count -eq 2 ]]; then
+        return 1
+    fi
+}
+assistive_push_plist_atomically "$LOCAL_PLIST" /remote/accessibility.plist
+'''
+            for mode, expected_status in (("ok", 0), ("upload-error", 1), ("install-error", 1)):
+                log.write_text("")
+                result = subprocess.run(
+                    ["/bin/zsh", "-c", push_driver],
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "CALL_LOG": str(log),
+                        "LOCAL_PLIST": str(local),
+                        "PUSH_MODE": mode,
+                    },
+                    check=False,
+                )
+                self.assertEqual(result.returncode, expected_status, result.stderr)
+                calls = log.read_text()
+                self.assertNotIn("cat > /remote/accessibility.plist\n", calls)
+                if mode == "ok":
+                    self.assertIn("cat > /remote/accessibility.plist.liter8.", calls)
+                    self.assertIn("mv -f /remote/accessibility.plist.liter8.", calls)
+                elif mode == "upload-error":
+                    self.assertNotIn("mv -f", calls)
+                else:
+                    self.assertIn("mv -f", calls)
+                    self.assertIn("rm -f /remote/accessibility.plist.liter8.", calls)
+
     def test_screentime_override_preserves_unrelated_launchd_state(self):
         path = self.root / "disabled.plist"
         with path.open("wb") as stream:

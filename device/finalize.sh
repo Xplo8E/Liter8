@@ -40,8 +40,50 @@ die()  { printf '    [!] %s\n' "$1"; exit 1 }
 
 sh_dev() { "$SSHPASS" -p "$PW" ssh "${SSHOPT[@]}" "$DEV" "$@" }
 
+assistive_probe_remote_plist() {
+    local path=$1
+    local state
+    if ! state=$(sh_dev "[ -e $path ] && printf yes || printf no" \
+        < /dev/null 2>/dev/null); then
+        die "could not inspect $path"
+        return 1
+    fi
+    case "$state" in
+        yes|no) assistive_present=$state ;;
+        *)
+            die "unexpected response while inspecting $path"
+            return 1
+            ;;
+    esac
+}
+
+assistive_push_plist_atomically() {
+    local local_path=$1
+    local remote_path=$2
+    local remote_tmp="${remote_path}.liter8.$$"
+
+    # Never stream into the live preferences file: a dropped USB/SSH session
+    # would leave it truncated. The sibling temporary file makes the final
+    # rename atomic on the same filesystem.
+    if ! sh_dev "umask 077; cat > $remote_tmp" < "$local_path"; then
+        sh_dev "rm -f $remote_tmp" < /dev/null >/dev/null 2>&1 || true
+        die "could not stage $remote_path"
+        return 1
+    fi
+    if ! sh_dev "chown mobile:mobile $remote_tmp && chmod 0644 $remote_tmp && mv -f $remote_tmp $remote_path" \
+        < /dev/null; then
+        sh_dev "rm -f $remote_tmp" < /dev/null >/dev/null 2>&1 || true
+        die "could not install $remote_path"
+        return 1
+    fi
+}
+
 [[ -x "$SSHPASS" ]] || die "missing $SSHPASS"
 [[ -x setup_shell.sh ]] || die "setup_shell.sh is missing beside finalize.sh"
+
+ENABLE_ASSISTIVE_TOUCH=${LITER8_ENABLE_ASSISTIVE_TOUCH:-}
+[[ $ENABLE_ASSISTIVE_TOUCH == 0 || $ENABLE_ASSISTIVE_TOUCH == 1 ]] \
+    || die "LITER8_ENABLE_ASSISTIVE_TOUCH must be 0 or 1; Liter8 sets it from the workflow profile"
 
 say "normal-boot connection"
 
@@ -650,6 +692,82 @@ if print -r -- "$boot_job" | grep -q '^WATCHER_OK$'; then
 else
     skip "INCOMPLETE: PosterBoard repair watcher is not running"
     FINALIZE_INCOMPLETE=1
+fi
+
+say "AssistiveTouch"
+# The d79ap Home button is a haptic sensor behind the SEP, and this boot runs
+# without the SEP: the button reports nothing, and a Touch ID board has no
+# gesture navigation, so Setup cannot be dismissed without AssistiveTouch.
+# The flag lives in the mobile user's Accessibility preferences, and cfprefsd
+# caches that file, so the edit is pulled to the Mac, merged with plistlib and
+# pushed back, followed by a cfprefsd and assistivetouchd restart. The
+# SpringBoard restart below then surfaces the button. Removing the keys turns
+# AssistiveTouch off again; that is a choice, so --check reports it rather
+# than failing, and re-running finalize puts them back.
+ASSISTIVE_PLIST=/var/mobile/Library/Preferences/com.apple.Accessibility.plist
+if (( ! ENABLE_ASSISTIVE_TOUCH )); then
+    skip "AssistiveTouch is not required for this board"
+else
+    ASSISTIVE_TMP=$(mktemp -d)
+    ASSISTIVE_LOCAL="$ASSISTIVE_TMP/accessibility.plist"
+    # A fresh erase install may not have the file yet; an existing one must
+    # parse, or the state is unexpected and the run stops instead of guessing.
+    assistive_probe_remote_plist "$ASSISTIVE_PLIST"
+    allow_empty=0
+    if [[ "$assistive_present" == yes ]]; then
+        sh_dev "cat $ASSISTIVE_PLIST" > "$ASSISTIVE_LOCAL" 2>/dev/null \
+            || die "could not pull $ASSISTIVE_PLIST"
+    else
+        : > "$ASSISTIVE_LOCAL"
+        allow_empty=1
+    fi
+    if (( CHECK_ONLY )); then
+        state=$(python3 - "$ASSISTIVE_LOCAL" <<'PY'
+import plistlib, sys
+try:
+    with open(sys.argv[1], "rb") as fh:
+        data = plistlib.load(fh)
+    enabled = data.get("AssistiveTouchEnabledBySystem") is True and data.get("AssistiveTouchEnabled") is True
+except Exception:
+    enabled = None
+print("ON" if enabled else "OFF")
+PY
+)
+        rm -rf "$ASSISTIVE_TMP"
+        if [[ "$state" == ON ]]; then
+            ok "on: AssistiveTouch is enabled for the mobile user"
+        else
+            skip "INCOMPLETE: AssistiveTouch is not enabled; run without --check"
+            FINALIZE_INCOMPLETE=1
+        fi
+    else
+        python3 - "$ASSISTIVE_LOCAL" "$allow_empty" <<'PY'
+import os, plistlib, sys
+path, allow_empty = sys.argv[1], sys.argv[2] == "1"
+try:
+    with open(path, "rb") as fh:
+        data = plistlib.load(fh)
+except Exception as error:
+    if allow_empty and os.path.getsize(path) == 0:
+        data = {}
+    else:
+        raise SystemExit(f"unparsable Accessibility plist: {error}")
+data["AssistiveTouchEnabledBySystem"] = True
+data["AssistiveTouchEnabled"] = True
+with open(path, "wb") as fh:
+    plistlib.dump(data, fh)
+with open(path, "rb") as fh:
+    check = plistlib.load(fh)
+assert check["AssistiveTouchEnabledBySystem"] is True
+assert check["AssistiveTouchEnabled"] is True
+PY
+        [[ $? == 0 ]] || die "could not merge the AssistiveTouch keys into the pulled plist"
+        assistive_push_plist_atomically "$ASSISTIVE_LOCAL" "$ASSISTIVE_PLIST"
+        sh_dev "$RPATH; /var/jb/usr/bin/killall cfprefsd 2>/dev/null; /var/jb/usr/bin/killall assistivetouchd 2>/dev/null; :" \
+            < /dev/null >/dev/null 2>&1
+        ok "on: AssistiveTouch enabled for the mobile user; the SpringBoard restart below surfaces the button"
+        rm -rf "$ASSISTIVE_TMP"
+    fi
 fi
 
 if (( CHECK_ONLY )); then

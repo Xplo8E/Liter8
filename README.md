@@ -34,6 +34,7 @@ Tethered iOS 27 jailbreak for iPhone 11.
 ### Doesn't work yet
 
 - **SEP**, and passcode with it
+- **Home button on the SE 2nd generation** (d79ap), and navigation with it. The haptic button reports through the SEP, which this boot does not run, and a Touch ID board has no gesture navigation, so Setup cannot be dismissed without AssistiveTouch. Finalize enables it for this board; measured on the [port run](docs/runs/IOS_27_2_24B156_D79AP_SE2020.md)
 - **Cellular data**, and VoLTE with it. The bearer comes up with a real carrier address and the modem acknowledges every instruction, but nothing ever comes back. Narrowed to inside the baseband, with everything above it ruled out: [the blocker, and what was eliminated](docs/CELLULAR_DATA_BLOCKER.md)
 - **Apple services**, iCloud included (the App Store is the exception, see above). Push has no token, because minting one needs a real activation record, which needs a SEP-attested key. Measured, not assumed
 - **MobileBackup2**. Both clients reach the service and negotiate, then the backup fails because the boot has no normal persona state

@@ -296,6 +296,7 @@ struct IPSWManifestTests {
             profile?.launchdCacheSHA256
                 != "a07c37e3ffa51167cc43c1212008a25cb650c964bafaf281a298e5c01d9f597d"
         )
+        #expect(profile?.enableAssistiveTouch == true)
         #expect(profile?.bootPlan.supportsTFP0KernelTaskPort == false)
     }
 }

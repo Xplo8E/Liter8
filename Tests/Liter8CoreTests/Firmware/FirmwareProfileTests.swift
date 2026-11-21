@@ -138,6 +138,19 @@ final class FirmwareProfileTests: XCTestCase {
         ])
     }
 
+    /// AssistiveTouch is the navigation aid for boards whose Home button is a
+    /// haptic sensor behind the missing SEP. Only such boards set the flag,
+    /// and every profile of such a board must set it: a d79ap entry without
+    /// the flag ships a Setup that cannot be dismissed.
+    func testAssistiveTouchCoversEveryHomeButtonLessBoardProfile() {
+        let flagged = DeviceWorkflowRegistry.profiles.filter { $0.enableAssistiveTouch }
+        XCTAssertTrue(flagged.allSatisfy { $0.deviceClass == "d79ap" })
+
+        let d79apProfiles = DeviceWorkflowRegistry.profiles.filter { $0.deviceClass == "d79ap" }
+        XCTAssertFalse(d79apProfiles.isEmpty)
+        XCTAssertTrue(d79apProfiles.allSatisfy { $0.enableAssistiveTouch })
+    }
+
     /// Two builds must never claim one XNU string: `detect` returns nil on a
     /// tie, which would silently disable every kernel resolver for both.
     func testKernelResolverFingerprintsAreUnique() {

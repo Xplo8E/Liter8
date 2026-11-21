@@ -162,6 +162,13 @@ def provision() -> None:
         return
 
     if action == "finalize":
+        # Swift owns firmware selection and exports this value from the exact
+        # workflow profile. The script fails closed on a missing or other
+        # value rather than guessing a default.
+        if environment.get("LITER8_ENABLE_ASSISTIVE_TOUCH") not in {"0", "1"}:
+            raise WorkflowError(
+                "LITER8_ENABLE_ASSISTIVE_TOUCH must be 0 or 1 and is set by Swift"
+            )
         execute(workflow / "finalize.sh", check_only=check_only, environment=environment)
         return
 

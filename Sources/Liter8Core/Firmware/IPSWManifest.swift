@@ -199,6 +199,11 @@ public struct DeviceWorkflowProfile: Equatable, Sendable {
     /// Keeping this in the exact workflow profile prevents Python from
     /// silently applying an n104 workaround to every future device.
     public let bootPlan: DeviceBootPlan
+    /// Whether the board's navigation needs AssistiveTouch. The d79ap Home
+    /// button is a haptic sensor behind the SEP, which this boot does not run,
+    /// and a Touch ID board has no gesture navigation: without AssistiveTouch
+    /// Setup cannot be dismissed. Provisioning enables it for such boards.
+    public var enableAssistiveTouch: Bool = false
 
     public func supports(_ identity: IPSWIdentity) -> Bool {
         guard identity.productVersion == productVersion,
@@ -913,7 +918,8 @@ public enum DeviceWorkflowRegistry {
             bootPlan: DeviceBootPlan(
                 normalIBSSAdditionalPlans: [],
                 restoreIBSSAdditionalPlans: []
-            )
+            ),
+            enableAssistiveTouch: true
         ),
     ]
 
