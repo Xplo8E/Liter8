@@ -32,6 +32,13 @@ CHECK_ONLY=0
 
 RPATH='export PATH=/var/jb/usr/bin:/var/jb/bin:/var/jb/usr/sbin:/var/jb/sbin:/usr/bin:/bin:/usr/sbin:/sbin'
 REGISTRATION_MARKER=/var/jb/.liter8-system-apps-registered
+ASSISTIVE_STAGING_DIR=/var/root
+
+cleanup() {
+    [[ -z "${IPROXY_PID:-}" ]] || kill "$IPROXY_PID" 2>/dev/null
+    [[ -z "${ASSISTIVE_TMP:-}" ]] || rm -rf -- "$ASSISTIVE_TMP"
+}
+trap cleanup EXIT
 
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$1" }
 ok()   { printf '    [+] %s\n' "$1" }
@@ -45,13 +52,27 @@ assistive_probe_remote_plist() {
     # dynamically replace PATH while sh_dev runs and break askpass-sshpass.
     local remote_path=$1
     local state
-    if ! state=$(sh_dev "[ -e $remote_path ] && printf yes || printf no" \
+    if ! state=$(sh_dev "
+        if [ -L $remote_path ]; then printf symlink
+        elif [ -f $remote_path ]; then printf file
+        elif [ -e $remote_path ]; then printf other
+        else printf absent
+        fi" \
         < /dev/null 2>/dev/null); then
         die "could not inspect $remote_path"
         return 1
     fi
     case "$state" in
-        yes|no) assistive_present=$state ;;
+        file) assistive_present=yes ;;
+        absent) assistive_present=no ;;
+        symlink)
+            die "refusing symlink at $remote_path"
+            return 1
+            ;;
+        other)
+            die "refusing non-regular file at $remote_path"
+            return 1
+            ;;
         *)
             die "unexpected response while inspecting $remote_path"
             return 1
@@ -62,12 +83,32 @@ assistive_probe_remote_plist() {
 assistive_push_plist_atomically() {
     local local_path=$1
     local remote_path=$2
-    local remote_tmp="${remote_path}.liter8.$$"
+    local remote_tmp suffix
 
-    # Never stream into the live preferences file: a dropped USB/SSH session
-    # would leave it truncated. The sibling temporary file makes the final
-    # rename atomic on the same filesystem.
-    if ! sh_dev "umask 077; cat > $remote_tmp" < "$local_path"; then
+    # The Preferences directory is mobile-writable, so a predictable sibling
+    # path can be planted as a symlink before root opens it. mktemp creates the
+    # staging file exclusively in root's home instead. /var/root and
+    # /var/mobile are on the Data volume, so the final rename remains atomic.
+    if ! remote_tmp=$(sh_dev "$RPATH; umask 077; mktemp $ASSISTIVE_STAGING_DIR/.liter8-accessibility.XXXXXX" \
+        < /dev/null 2>/dev/null); then
+        die "could not allocate staging for $remote_path"
+        return 1
+    fi
+    remote_tmp=${remote_tmp//$'\r'/}
+    case "$remote_tmp" in
+        "$ASSISTIVE_STAGING_DIR"/.liter8-accessibility.*) ;;
+        *)
+            die "unexpected staging path for $remote_path"
+            return 1
+            ;;
+    esac
+    suffix=${remote_tmp#"$ASSISTIVE_STAGING_DIR"/.liter8-accessibility.}
+    if [[ -z "$suffix" || "$suffix" == *[^A-Za-z0-9]* ]]; then
+        die "unexpected staging path for $remote_path"
+        return 1
+    fi
+
+    if ! sh_dev "cat > $remote_tmp" < "$local_path"; then
         sh_dev "rm -f $remote_tmp" < /dev/null >/dev/null 2>&1 || true
         die "could not stage $remote_path"
         return 1
@@ -78,6 +119,13 @@ assistive_push_plist_atomically() {
         die "could not install $remote_path"
         return 1
     fi
+}
+
+restart_springboard() {
+    say "SpringBoard restart"
+    sh_dev "$RPATH; /var/jb/usr/bin/killall -9 SpringBoard" \
+        || die "could not restart SpringBoard"
+    ok "SpringBoard restart requested"
 }
 
 [[ -x "$SSHPASS" ]] || die "missing $SSHPASS"
@@ -98,7 +146,6 @@ if ! sh_dev 'exit 0' >/dev/null 2>&1; then
         || die "iproxy not found (brew install libimobiledevice)"
     iproxy 2222:22 >/dev/null 2>&1 &
     IPROXY_PID=$!
-    trap 'kill "$IPROXY_PID" 2>/dev/null' EXIT
     sleep 2
 fi
 
@@ -707,17 +754,19 @@ say "AssistiveTouch"
 # AssistiveTouch off again; that is a choice, so --check reports it rather
 # than failing, and re-running finalize puts them back.
 ASSISTIVE_PLIST=/var/mobile/Library/Preferences/com.apple.Accessibility.plist
+ASSISTIVE_TOUCH_NEEDS_RESTART=0
 if (( ! ENABLE_ASSISTIVE_TOUCH )); then
     skip "AssistiveTouch is not required for this board"
 else
-    ASSISTIVE_TMP=$(mktemp -d)
+    ASSISTIVE_TMP=$(mktemp -d) || die "could not create a local AssistiveTouch staging directory"
     ASSISTIVE_LOCAL="$ASSISTIVE_TMP/accessibility.plist"
     # A fresh erase install may not have the file yet; an existing one must
     # parse, or the state is unexpected and the run stops instead of guessing.
     assistive_probe_remote_plist "$ASSISTIVE_PLIST"
     allow_empty=0
     if [[ "$assistive_present" == yes ]]; then
-        sh_dev "cat $ASSISTIVE_PLIST" > "$ASSISTIVE_LOCAL" 2>/dev/null \
+        sh_dev "[ ! -L $ASSISTIVE_PLIST ] && [ -f $ASSISTIVE_PLIST ] && cat $ASSISTIVE_PLIST" \
+            > "$ASSISTIVE_LOCAL" 2>/dev/null \
             || die "could not pull $ASSISTIVE_PLIST"
     else
         : > "$ASSISTIVE_LOCAL"
@@ -736,6 +785,7 @@ print("ON" if enabled else "OFF")
 PY
 )
         rm -rf "$ASSISTIVE_TMP"
+        ASSISTIVE_TMP=
         if [[ "$state" == ON ]]; then
             ok "on: AssistiveTouch is enabled for the mobile user"
         else
@@ -743,7 +793,7 @@ PY
             FINALIZE_INCOMPLETE=1
         fi
     else
-        python3 - "$ASSISTIVE_LOCAL" "$allow_empty" <<'PY'
+        if ! python3 - "$ASSISTIVE_LOCAL" "$allow_empty" <<'PY'
 import os, plistlib, sys
 path, allow_empty = sys.argv[1], sys.argv[2] == "1"
 try:
@@ -763,12 +813,16 @@ with open(path, "rb") as fh:
 assert check["AssistiveTouchEnabledBySystem"] is True
 assert check["AssistiveTouchEnabled"] is True
 PY
-        [[ $? == 0 ]] || die "could not merge the AssistiveTouch keys into the pulled plist"
+        then
+            die "could not merge the AssistiveTouch keys into the pulled plist"
+        fi
         assistive_push_plist_atomically "$ASSISTIVE_LOCAL" "$ASSISTIVE_PLIST"
         sh_dev "$RPATH; /var/jb/usr/bin/killall cfprefsd 2>/dev/null; /var/jb/usr/bin/killall assistivetouchd 2>/dev/null; :" \
             < /dev/null >/dev/null 2>&1
-        ok "on: AssistiveTouch enabled for the mobile user; the SpringBoard restart below surfaces the button"
+        ASSISTIVE_TOUCH_NEEDS_RESTART=1
+        ok "on: AssistiveTouch enabled for the mobile user"
         rm -rf "$ASSISTIVE_TMP"
+        ASSISTIVE_TMP=
     fi
 fi
 
@@ -782,15 +836,19 @@ if (( CHECK_ONLY )); then
 fi
 
 if (( ${FINALIZE_INCOMPLETE:-0} )); then
+    # d79ap cannot navigate Setup without the overlay. Persistent work above
+    # may still be incomplete, but a successfully installed Accessibility
+    # preference must be surfaced before returning control to the operator.
+    if (( ASSISTIVE_TOUCH_NEEDS_RESTART )); then
+        restart_springboard
+        ASSISTIVE_TOUCH_NEEDS_RESTART=0
+    fi
     die "persistent setup completed, but the automatic boot job is unhealthy"
 fi
 
 # Restart only after every persistent result has been verified. SpringBoard is
 # not responsible for SSH, so the remote command should return normally while
 # the UI restarts and rereads the rebuilt application database.
-say "SpringBoard restart"
-sh_dev "$RPATH; /var/jb/usr/bin/killall -9 SpringBoard" \
-    || die "could not restart SpringBoard"
-ok "SpringBoard restart requested"
+restart_springboard
 
 printf '\n[+] Liter8 post-boot finalization complete\n'
