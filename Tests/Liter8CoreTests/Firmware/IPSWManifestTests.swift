@@ -261,4 +261,42 @@ struct IPSWManifestTests {
         // differs only in board ID, so it must not match this IPSW at all.
         #expect(!both.contains { $0.deviceClass == "n104ap" })
     }
+
+    /// The SE 2nd generation ships its own single-board IPSW, so once
+    /// experiments are allowed in the profile resolves with no board
+    /// argument at all, and the default lookup keeps refusing it. The cache
+    /// digest was measured on this board's rootfs copy and must not silently
+    /// follow the reviewed iPhone 11 entry that shares this build.
+    @Test func d79apOn24B156IsExperimentalSingleBoard() throws {
+        let manifest: [String: Any] = [
+            "ProductVersion": "27.2.1",
+            "ProductBuildVersion": "24B156",
+            "SupportedProductTypes": ["iPhone12,8"],
+            "BuildIdentities": [[
+                "ApBoardID": "0x10",
+                "ApChipID": "0x8030",
+                "Info": ["DeviceClass": "d79ap"],
+            ]],
+        ]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: manifest, format: .binary, options: 0
+        )
+        let identity = try IPSWManifestInspector.parse(data)
+
+        #expect(DeviceWorkflowRegistry.matchingProfiles(for: identity).isEmpty)
+
+        let profile = DeviceWorkflowRegistry.profile(
+            for: identity, includeExperimental: true
+        )
+        #expect(profile?.id == "iphone12,8-d79ap-24B156")
+        #expect(profile?.validationState == .experimental)
+        #expect(profile?.boardID == 0x10)
+        #expect(profile?.deviceClass == "d79ap")
+        #expect(
+            profile?.launchdCacheSHA256
+                != "a07c37e3ffa51167cc43c1212008a25cb650c964bafaf281a298e5c01d9f597d"
+        )
+        #expect(profile?.enableAssistiveTouch == true)
+        #expect(profile?.bootPlan.supportsTFP0KernelTaskPort == false)
+    }
 }

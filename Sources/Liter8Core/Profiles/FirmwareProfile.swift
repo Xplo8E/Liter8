@@ -253,10 +253,11 @@ public enum KernelResolverProfileRegistry {
             builds: ["24B119", "24B156"],
             // The 11 Pro and Pro Max ship a different kernelcache from the
             // iPhone 11 (`kernelcache.release.iphone12`, 67862528 bytes against
-            // iphone12b's 67796992) but it embeds the same XNU string, so
-            // `detect` selects this profile for all three boards and they
-            // cannot be split into separate entries: two profiles sharing one
-            // fingerprint make `detect` return nil for both.
+            // iphone12b's 67796992) but it embeds the same XNU string. The
+            // d79ap 24B156 kernel does too and completed artifact resolution
+            // and device boot, so `detect` selects this profile for all four
+            // boards. They cannot be split into separate entries: two profiles
+            // sharing one fingerprint make `detect` return nil for both.
             //
             // Measured on the iPhone12,3/iPhone12,5 24B119 IPSW rather than
             // assumed from the shared build ID. Every kernel plan resolves on
@@ -267,7 +268,7 @@ public enum KernelResolverProfileRegistry {
             // scored entries ambiguous, which is what a family looks like on
             // the build it was recorded from. Offsets differ between the two
             // kernelcaches, as they must: they are rediscovered per image.
-            boards: ["n104ap", "d421ap", "d431ap"],
+            boards: ["n104ap", "d421ap", "d431ap", "d79ap"],
             component: "kernelcache.release.iphone12b",
             embeddedFingerprint: "xnu-13432.42.3~28/RELEASE_ARM64_T8030",
             resolverVariants: [

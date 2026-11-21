@@ -1088,6 +1088,191 @@ class ContextTests(unittest.TestCase):
         self.assertIn("/var/jb/usr/bin/uicache -a", finalizer)
         self.assertIn('action == "finalize"', runner)
 
+    def test_finalize_assistive_touch_transport_fails_closed_and_is_atomic(self):
+        """A transport fault must not replace the live Accessibility preferences."""
+        finalizer = (DEVICE / "finalize.sh").read_text()
+        assistive = finalizer.split('say "AssistiveTouch"', 1)[1].split(
+            'say "SpringBoard restart"', 1
+        )[0]
+        self.assertNotIn(" scp ", assistive)
+
+        helpers = []
+        for name in (
+            "assistive_probe_remote_plist",
+            "assistive_push_plist_atomically",
+        ):
+            match = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", finalizer, re.M | re.S)
+            self.assertIsNotNone(match, f"{name}() is no longer defined in finalize.sh")
+            helpers.append(match.group(0))
+        helper_source = "\n".join(helpers)
+
+        probe_driver = helper_source + r'''
+die() { print -r -- "$1" >&2; return 1; }
+SSHPASS=$1
+PW=alpine
+SSHOPT=()
+DEV=root@localhost
+sh_dev() {
+    "$SSHPASS" -p "$PW" ssh "${SSHOPT[@]}" "$DEV" "$@"
+}
+if assistive_probe_remote_plist /remote/accessibility.plist; then
+    print -r -- "$assistive_present"
+else
+    exit $?
+fi
+'''
+        with tempfile.TemporaryDirectory(prefix="liter8-assistive-ssh-") as directory:
+            fake_bin = Path(directory)
+            fake_ssh = fake_bin / "ssh"
+            fake_ssh.write_text(
+                "#!/bin/sh\n"
+                "[ \"${PROBE_RESULT:-}\" != error ] || exit 1\n"
+                "printf %s \"${PROBE_RESULT:-}\"\n"
+            )
+            fake_ssh.chmod(0o755)
+            environment = {
+                **os.environ,
+                "PATH": f"{fake_bin}:/usr/bin:/bin",
+            }
+            wrapper = DEVICE / "askpass-sshpass"
+            for response, expected in (("file", "yes"), ("absent", "no")):
+                result = subprocess.run(
+                    ["/bin/zsh", "-c", probe_driver, "probe-test", str(wrapper)],
+                    capture_output=True,
+                    text=True,
+                    env={**environment, "PROBE_RESULT": response},
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+            for response, message in (
+                ("error", "could not inspect"),
+                ("symlink", "refusing symlink"),
+                ("other", "refusing non-regular file"),
+                ("maybe", "unexpected response"),
+            ):
+                result = subprocess.run(
+                    ["/bin/zsh", "-c", probe_driver, "probe-test", str(wrapper)],
+                    capture_output=True,
+                    text=True,
+                    env={**environment, "PROBE_RESULT": response},
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+        with tempfile.TemporaryDirectory(prefix="liter8-assistive-") as directory:
+            root = Path(directory)
+            local = root / "accessibility.plist"
+            local.write_bytes(b"plist payload")
+            log = root / "ssh.log"
+            remote_root = root / "remote-root"
+            remote_root.mkdir()
+            preferences = root / "preferences"
+            preferences.mkdir()
+            remote = preferences / "accessibility.plist"
+            victim = root / "victim"
+            victim.write_bytes(b"victim sentinel")
+            planted = preferences / "accessibility.plist.liter8.planted"
+            planted.symlink_to(victim)
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_chown = fake_bin / "chown"
+            fake_chown.write_text("#!/bin/sh\nexit 0\n")
+            fake_chown.chmod(0o755)
+
+            push_driver = helper_source + r'''
+die() { print -r -- "$1" >&2; return 1; }
+RPATH=:
+ASSISTIVE_STAGING_DIR=$REMOTE_STAGING
+sh_dev() {
+    print -r -- "$*" >> "$CALL_LOG"
+    if [[ "$PUSH_MODE" == upload-error && "$*" == *"cat >"* ]]; then
+        cat >/dev/null
+        return 1
+    fi
+    if [[ "$PUSH_MODE" == install-error && "$*" == *"chown mobile:mobile"* ]]; then
+        cat >/dev/null
+        return 1
+    fi
+    /bin/sh -c "$*"
+}
+assistive_push_plist_atomically "$LOCAL_PLIST" "$REMOTE_PLIST"
+'''
+            for mode, expected_status in (("ok", 0), ("upload-error", 1), ("install-error", 1)):
+                log.write_text("")
+                remote.write_bytes(b"live original")
+                result = subprocess.run(
+                    ["/bin/zsh", "-c", push_driver],
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "PATH": f"{fake_bin}:/usr/bin:/bin",
+                        "CALL_LOG": str(log),
+                        "LOCAL_PLIST": str(local),
+                        "PUSH_MODE": mode,
+                        "REMOTE_PLIST": str(remote),
+                        "REMOTE_STAGING": str(remote_root),
+                    },
+                    check=False,
+                )
+                self.assertEqual(result.returncode, expected_status, result.stderr)
+                calls = log.read_text()
+                self.assertIn(
+                    f"mktemp {remote_root}/.liter8-accessibility.XXXXXX",
+                    calls,
+                )
+                self.assertNotIn(f"cat > {remote}\n", calls)
+                self.assertEqual(victim.read_bytes(), b"victim sentinel")
+                self.assertTrue(planted.is_symlink())
+                self.assertEqual(list(remote_root.iterdir()), [])
+                if mode == "ok":
+                    self.assertEqual(remote.read_bytes(), b"plist payload")
+                    self.assertIn(f"cat > {remote_root}/.liter8-accessibility.", calls)
+                    self.assertIn(f"mv -f {remote_root}/.liter8-accessibility.", calls)
+                else:
+                    self.assertEqual(remote.read_bytes(), b"live original")
+                    self.assertIn(f"rm -f {remote_root}/.liter8-accessibility.", calls)
+
+    def test_finalize_surfaces_assistive_touch_before_incomplete_exit(self):
+        """An unhealthy boot job must not leave d79ap without navigation."""
+        finalizer = (DEVICE / "finalize.sh").read_text()
+        restart = re.search(
+            r"^restart_springboard\(\) \{\n.*?^\}\n",
+            finalizer,
+            re.M | re.S,
+        )
+        self.assertIsNotNone(restart)
+        marker = "if (( ${FINALIZE_INCOMPLETE:-0} )); then\n"
+        self.assertIn(marker, finalizer)
+        incomplete_tail = marker + finalizer.rsplit(marker, 1)[1]
+        driver = restart.group(0) + r'''
+say() { :; }
+ok() { :; }
+die() { print -r -- "$1" >&2; exit 1; }
+sh_dev() { print -r -- "$*" >> "$CALL_LOG"; }
+RPATH=:
+FINALIZE_INCOMPLETE=1
+ASSISTIVE_TOUCH_NEEDS_RESTART=1
+''' + incomplete_tail
+
+        with tempfile.TemporaryDirectory(prefix="liter8-assistive-incomplete-") as directory:
+            log = Path(directory) / "ssh.log"
+            result = subprocess.run(
+                ["/bin/zsh", "-c", driver],
+                capture_output=True,
+                text=True,
+                env={**os.environ, "CALL_LOG": str(log)},
+                check=False,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("automatic boot job is unhealthy", result.stderr)
+            calls = log.read_text().splitlines()
+            self.assertEqual(len(calls), 1)
+            self.assertIn("killall -9 SpringBoard", calls[0])
+
     def test_screentime_override_preserves_unrelated_launchd_state(self):
         path = self.root / "disabled.plist"
         with path.open("wb") as stream:

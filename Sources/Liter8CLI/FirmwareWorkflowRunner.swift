@@ -282,6 +282,13 @@ enum FirmwareWorkflowRunner {
                 profile.setupControllerMethodCount
             )
         }
+        if action == "finalize" {
+            // The profile states whether the board's navigation needs
+            // AssistiveTouch. Always export the value: finalize.sh refuses a
+            // missing one instead of guessing a default.
+            selectedEnvironment["LITER8_ENABLE_ASSISTIVE_TOUCH"] =
+                profile.enableAssistiveTouch ? "1" : "0"
+        }
         if profile.validationState == .experimental {
             selectedEnvironment["LITER8_EXPERIMENTAL_WORKFLOW"] = "1"
         }

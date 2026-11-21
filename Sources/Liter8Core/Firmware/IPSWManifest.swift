@@ -199,6 +199,11 @@ public struct DeviceWorkflowProfile: Equatable, Sendable {
     /// Keeping this in the exact workflow profile prevents Python from
     /// silently applying an n104 workaround to every future device.
     public let bootPlan: DeviceBootPlan
+    /// Whether the board's navigation needs AssistiveTouch. The d79ap Home
+    /// button is a haptic sensor behind the SEP, which this boot does not run,
+    /// and a Touch ID board has no gesture navigation: without AssistiveTouch
+    /// Setup cannot be dismissed. Provisioning enables it for such boards.
+    public var enableAssistiveTouch: Bool = false
 
     public func supports(_ identity: IPSWIdentity) -> Bool {
         guard identity.productVersion == productVersion,
@@ -889,6 +894,34 @@ public enum DeviceWorkflowRegistry {
                 normalIBSSAdditionalPlans: [],
                 restoreIBSSAdditionalPlans: []
             )
+        ),
+        // iPhone SE 2nd generation, measured with `survey --guards` on the
+        // single-board iPhone12,8 24B156 IPSW, not copied from the entries
+        // above: the launchd digest matches the shared 24B156 rootfs, while
+        // the cache digest is this board's own. Device-tested on one iPhone12,8:
+        // erase restore, SSHRD, provisioning, normal boot, finalization and
+        // repeat boot passed with an empty bootPlan. The profile remains
+        // experimental pending maintainer review and broader or second-operator
+        // validation.
+        DeviceWorkflowProfile(
+            id: "iphone12,8-d79ap-24B156",
+            productVersion: "27.2.1",
+            build: "24B156",
+            productType: "iPhone12,8",
+            deviceClass: "d79ap",
+            chipID: 0x8030,
+            boardID: 0x10,
+            extractedDirectoryName: "iPhone12,8_27.2.1_24B156_Restore",
+            validationState: .experimental,
+            launchdSHA256: "0776cff26027264644dbf7a36049e8bc9c10fa296a787d1c62f174ccccaf40d3",
+            launchdCacheSHA256: "a9d365ef5bc8628df1a27317535af539fde39db25cf1a2024b8e3873684c9910",
+            launchdCacheDaemonCount: 732,
+            setupControllerMethodCount: 64,
+            bootPlan: DeviceBootPlan(
+                normalIBSSAdditionalPlans: [],
+                restoreIBSSAdditionalPlans: []
+            ),
+            enableAssistiveTouch: true
         ),
     ]
 

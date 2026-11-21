@@ -34,6 +34,7 @@ Tethered iOS 27 jailbreak for iPhone 11.
 ### Doesn't work yet
 
 - **SEP**, and passcode with it
+- **Home button on the SE 2nd generation** (d79ap), and navigation with it. The haptic button reports through the SEP, which this boot does not run, and a Touch ID board has no gesture navigation, so Setup cannot be dismissed without AssistiveTouch. Finalize enables it for this board; measured on the [port run](docs/runs/IOS_27_2_24B156_D79AP_SE2020.md)
 - **Cellular data**, and VoLTE with it. The bearer comes up with a real carrier address and the modem acknowledges every instruction, but nothing ever comes back. Narrowed to inside the baseband, with everything above it ruled out: [the blocker, and what was eliminated](docs/CELLULAR_DATA_BLOCKER.md)
 - **Apple services**, iCloud included (the App Store is the exception, see above). Push has no token, because minting one needs a real activation record, which needs a SEP-attested key. Measured, not assumed
 - **MobileBackup2**. Both clients reach the service and negotiate, then the backup fails because the boot has no normal persona state
@@ -42,23 +43,23 @@ PRs welcome on any of these, especially SEP.
 
 ## Supported firmware
 
-| Firmware        | Build      | iPhone 11 | 11 Pro       | 11 Pro Max   |
-| --------------- | ---------- | --------- | ------------ | ------------ |
-| iOS 27.0 beta 4 | `24A5390f` | run       | -            | -            |
-| iOS 27.0 RC     | `24A435`   | run       | -            | -            |
-| iOS 27.0        | `24A437`   | -         | experimental | experimental |
-| iOS 27.0.1      | `24A446`   | run       | experimental | experimental |
-| iOS 27.2 beta 1 | `24B5084k` | run       | -            | -            |
-| iOS 27.2 beta 2 | `24B5089g` | run       | -            | -            |
-| iOS 27.2 beta 3 | `24B5099f` | run       | -            | -            |
-| iOS 27.2 beta 4 | `24B5110a` | run       | -            | -            |
-| iOS 27.2        | `24B119`   | run       | experimental | experimental |
-| iOS 27.2.1      | `24B156`   | run       | experimental | experimental |
-| iOS 27.3 beta 1 | `24C5037i` | run       | experimental | experimental |
+| Firmware        | Build      | iPhone 11 | 11 Pro       | 11 Pro Max   | iPhone SE 2nd gen |
+| --------------- | ---------- | --------- | ------------ | ------------ | ----------------- |
+| iOS 27.0 beta 4 | `24A5390f` | run       | -            | -            | -                 |
+| iOS 27.0 RC     | `24A435`   | run       | -            | -            | -                 |
+| iOS 27.0        | `24A437`   | -         | experimental | experimental | -                 |
+| iOS 27.0.1      | `24A446`   | run       | experimental | experimental | -                 |
+| iOS 27.2 beta 1 | `24B5084k` | run       | -            | -            | -                 |
+| iOS 27.2 beta 2 | `24B5089g` | run       | -            | -            | -                 |
+| iOS 27.2 beta 3 | `24B5099f` | run       | -            | -            | -                 |
+| iOS 27.2 beta 4 | `24B5110a` | run       | -            | -            | -                 |
+| iOS 27.2        | `24B119`   | run       | experimental | experimental | -                 |
+| iOS 27.2.1      | `24B156`   | run       | experimental | experimental | experimental      |
+| iOS 27.3 beta 1 | `24C5037i` | run       | experimental | experimental | -                 |
 
 **run**: I did an erase restore, booted it normally, then rebooted and it came back up.
 
-**experimental**: resolves, and you can use it with `--experimental`, but nobody has confirmed it on that phone. The 11 Pro and Pro Max have profiles and no device to test on. If you own one and try it, tell me what happens and I'll change the tag.
+**experimental**: resolves and requires `--experimental`. The 11 Pro and Pro Max entries have not been run on those devices. The iPhone SE 2nd generation `24B156` entry has completed one contributor device run, including erase restore, finalization and repeat boot, but remains experimental pending maintainer review and broader validation.
 
 > [!WARNING]
 > `fw restore-cfw` pulls a fresh APTicket from Apple during the restore, so once Apple stops signing a build you can't install it anymore. A row stays in the table because I tested it, not because you can still use it today. Check signing first.
@@ -234,6 +235,7 @@ For the source layout and how execution moves through it, see [CODEBASE_GUIDE.md
 - [Baseband and cellular](docs/design/BASEBAND_AND_CELLULAR.md): how each problem was found, and what failed
 - [iOS 27 `24A435` resolver and device evidence](docs/plans/IOS_27_24A435_RC_PATCHES.md)
 - [iPhone 11 beta 4 device run](docs/runs/IOS_27_BETA4_IPHONE11.md)
+- [iPhone SE 2nd generation `24B156` port run](docs/runs/IOS_27_2_24B156_D79AP_SE2020.md)
 - [iPhone 11 `24A446` pairing and watchdog research](docs/runs/IOS_27_24A446_PAIRING_AND_WATCHDOG.md)
 - tfp0 kernel read/write on [`24A446`](docs/runs/IOS_27_24A446_TFP0.md) and [`24C5037i`](docs/runs/IOS_273_24C5037i_TFP0.md)
 
@@ -254,6 +256,7 @@ None of this starts without these people.
 - [tihmstar](https://github.com/tihmstar): `img4`, `img4tool`, APTicket signing
 - [m1stadev](https://github.com/m1stadev), [doronz88](https://github.com/doronz88): `pyimg4`, `pymobiledevice3`
 - [Lakr233](https://github.com/Lakr233): [vphone-cli](https://github.com/Lakr233/vphone-cli), `trollvnc`, USB device control
+- [sayaome](https://github.com/sayaome): the iPhone SE 2nd generation (d79ap) port, iOS 27.2.1 device run
 
 ## License
 
