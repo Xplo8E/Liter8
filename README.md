@@ -42,19 +42,19 @@ PRs welcome on any of these, especially SEP.
 
 ## Supported firmware
 
-| Firmware        | Build      | iPhone 11 | 11 Pro       | 11 Pro Max   |
-| --------------- | ---------- | --------- | ------------ | ------------ |
-| iOS 27.0 beta 4 | `24A5390f` | run       | -            | -            |
-| iOS 27.0 RC     | `24A435`   | run       | -            | -            |
-| iOS 27.0        | `24A437`   | -         | experimental | experimental |
-| iOS 27.0.1      | `24A446`   | run       | experimental | experimental |
-| iOS 27.2 beta 1 | `24B5084k` | run       | -            | -            |
-| iOS 27.2 beta 2 | `24B5089g` | run       | -            | -            |
-| iOS 27.2 beta 3 | `24B5099f` | run       | -            | -            |
-| iOS 27.2 beta 4 | `24B5110a` | run       | -            | -            |
-| iOS 27.2        | `24B119`   | run       | experimental | experimental |
-| iOS 27.2.1      | `24B156`   | run       | experimental | experimental |
-| iOS 27.3 beta 1 | `24C5037i` | run       | experimental | experimental |
+| Firmware        | Build      | iPhone 11 | 11 Pro       | 11 Pro Max   | iPhone SE 2nd gen |
+| --------------- | ---------- | --------- | ------------ | ------------ | ----------------- |
+| iOS 27.0 beta 4 | `24A5390f` | run       | -            | -            | -                 |
+| iOS 27.0 RC     | `24A435`   | run       | -            | -            | -                 |
+| iOS 27.0        | `24A437`   | -         | experimental | experimental | -                 |
+| iOS 27.0.1      | `24A446`   | run       | experimental | experimental | -                 |
+| iOS 27.2 beta 1 | `24B5084k` | run       | -            | -            | -                 |
+| iOS 27.2 beta 2 | `24B5089g` | run       | -            | -            | -                 |
+| iOS 27.2 beta 3 | `24B5099f` | run       | -            | -            | -                 |
+| iOS 27.2 beta 4 | `24B5110a` | run       | -            | -            | -                 |
+| iOS 27.2        | `24B119`   | run       | experimental | experimental | -                 |
+| iOS 27.2.1      | `24B156`   | run       | experimental | experimental | experimental      |
+| iOS 27.3 beta 1 | `24C5037i` | run       | experimental | experimental | -                 |
 
 **run**: I did an erase restore, booted it normally, then rebooted and it came back up.
 
@@ -234,6 +234,7 @@ For the source layout and how execution moves through it, see [CODEBASE_GUIDE.md
 - [Baseband and cellular](docs/design/BASEBAND_AND_CELLULAR.md): how each problem was found, and what failed
 - [iOS 27 `24A435` resolver and device evidence](docs/plans/IOS_27_24A435_RC_PATCHES.md)
 - [iPhone 11 beta 4 device run](docs/runs/IOS_27_BETA4_IPHONE11.md)
+- [iPhone SE 2nd generation `24B156` port run](docs/runs/IOS_27_2_24B156_D79AP_SE2020.md)
 - [iPhone 11 `24A446` pairing and watchdog research](docs/runs/IOS_27_24A446_PAIRING_AND_WATCHDOG.md)
 - tfp0 kernel read/write on [`24A446`](docs/runs/IOS_27_24A446_TFP0.md) and [`24C5037i`](docs/runs/IOS_273_24C5037i_TFP0.md)
 
@@ -254,6 +255,7 @@ None of this starts without these people.
 - [tihmstar](https://github.com/tihmstar): `img4`, `img4tool`, APTicket signing
 - [m1stadev](https://github.com/m1stadev), [doronz88](https://github.com/doronz88): `pyimg4`, `pymobiledevice3`
 - [Lakr233](https://github.com/Lakr233): [vphone-cli](https://github.com/Lakr233/vphone-cli), `trollvnc`, USB device control
+- [sayaome](https://github.com/sayaome): the iPhone SE 2nd generation (d79ap) port, iOS 27.2.1 device run
 
 ## License
 
