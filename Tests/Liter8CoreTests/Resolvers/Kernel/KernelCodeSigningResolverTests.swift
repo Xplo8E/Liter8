@@ -3,8 +3,9 @@ import XCTest
 @testable import Liter8Core
 
 /// Synthetic-image coverage for the code-signing-invalid resolvers. These pin
-/// the transform and the fail-safe behaviour; they do not read firmware, so an
-/// exact-build fixture still has to confirm any real kernel that opts in.
+/// the transform and the fail-safe behaviour; they do not read firmware. The
+/// real 23H30 kernel is pinned by the kernel-boot-jit fixture in
+/// IPad8FixtureTests, and any other kernel that opts in needs its own.
 ///
 /// The images carry the T8020 kernel fingerprint so the opt-in gate is
 /// satisfied the same way a real kernelcache satisfies it.
@@ -436,6 +437,26 @@ final class KernelCodeSigningResolverTests: XCTestCase {
         }
         XCTAssertNil(KernelOptInResolvers.optInKey(forResolver: KernelExceptionPortResolver.name))
         XCTAssertNil(KernelOptInResolvers.optInKey(forResolver: KernelBootJITResolver.name))
+    }
+
+    /// A family the profile omits from the composite plans reads as unused in
+    /// survey, for that profile only. j171aap omits exception-port and Valeria;
+    /// every other registered profile still probes them.
+    func testSurveySkipsFamiliesTheDetectedProfileOmits() throws {
+        let ipadIDs: Set<String> = ["ios26-23H30-j171aap", "ios26-23H128-j171aap"]
+        let ipads = KernelResolverProfileRegistry.profiles.filter { ipadIDs.contains($0.id) }
+        XCTAssertEqual(Set(ipads.map(\.id)), ipadIDs)
+        for ipad in ipads {
+            XCTAssertTrue(KernelOptInResolvers.isUnused(resolver: KernelExceptionPortResolver.name, by: ipad), ipad.id)
+            XCTAssertTrue(KernelOptInResolvers.isUnused(resolver: KernelValeriaResolver.name, by: ipad), ipad.id)
+            XCTAssertFalse(KernelOptInResolvers.isUnused(resolver: KernelPPLAllowInvalidResolver.name, by: ipad), ipad.id)
+        }
+        XCTAssertFalse(KernelOptInResolvers.isUnused(resolver: KernelExceptionPortResolver.name, by: nil))
+        for profile in KernelResolverProfileRegistry.profiles where !ipadIDs.contains(profile.id) {
+            XCTAssertFalse(profile.omittedResolvers.contains(KernelExceptionPortResolver.name), profile.id)
+            XCTAssertFalse(KernelOptInResolvers.isUnused(resolver: KernelExceptionPortResolver.name, by: profile),
+                           profile.id)
+        }
     }
 
     /// survey skips an opt-in plan only for a detected profile without the

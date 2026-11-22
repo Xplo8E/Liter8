@@ -21,7 +21,7 @@ setup:
 test:
 	# Keep the normal edit/test loop responsive. Real-kernel fixture scans and
 	# the deliberately duplicated production-wiring check have separate tiers.
-	$(SWIFT) test --skip KernelFixtureTests --skip KernelEndToEndTests --skip ReleaseFixtureTests
+	$(SWIFT) test --skip KernelFixtureTests --skip KernelEndToEndTests --skip ReleaseFixtureTests --skip IPad8FixtureTests
 
 # Standard-library file safety tests; no Swift build, firmware or device.
 test-host-files:
@@ -32,6 +32,7 @@ test-fixtures:
 	# verify exact offsets, preimages, replacements and complete output hashes.
 	$(SWIFT) test -c release --filter KernelFixtureTests
 	$(SWIFT) test -c release --filter ReleaseFixtureTests
+	$(SWIFT) test -c release --filter IPad8FixtureTests
 	python3 Tests/apply-records-fixture-tests.py
 
 test-full:
