@@ -16,7 +16,7 @@ import tempfile
 import unittest
 import urllib.request
 from urllib.parse import quote_from_bytes
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -38,6 +38,7 @@ from boot_artifacts import (  # noqa: E402
 J171AAP_OPTIONAL = frozenset({"Ap,SecurePageTableMonitor", "PMP", "WCHFirmwareUpdater"})
 
 from device_boot import (  # noqa: E402
+    _warn_if_host_tool_failed,
     boot as boot_device,
     selected_firmware_sequence,
     validate_boot_set,
@@ -274,6 +275,23 @@ class WatchdogdJobPatchTests(unittest.TestCase):
         ]
         with self.assertRaisesRegex(JobShapeError, "ProgramArguments"):
             apply_mitigation(document)
+
+
+class HostStatusTests(unittest.TestCase):
+    def test_nonzero_status_warns_that_device_status_is_unverified(self):
+        for returncode in (23, -15):
+            with self.subTest(returncode=returncode):
+                errors = io.StringIO()
+                with redirect_stderr(errors):
+                    _warn_if_host_tool_failed(returncode)
+                self.assertIn("reported an error", errors.getvalue())
+                self.assertIn("Device status is unverified", errors.getvalue())
+
+    def test_zero_status_does_not_warn(self):
+        errors = io.StringIO()
+        with redirect_stderr(errors):
+            _warn_if_host_tool_failed(0)
+        self.assertEqual(errors.getvalue(), "")
 
 
 class ContextTests(unittest.TestCase):

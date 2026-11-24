@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -117,11 +118,20 @@ def validate_boot_set(context: Context, expected_mode: str) -> Path:
 
 
 def send(irecovery: str, root: Path, name: str, command: str) -> None:
-    """Upload one artifact, then require iBoot to accept its load command."""
+    """Upload one artifact, then run its load command."""
     print(f"  {name:<24} uploading", flush=True)
     run([irecovery, "-f", root / name])
     run([irecovery, "-c", command])
-    print(f"  {name:<24} accepted ({command})", flush=True)
+    print(f"  {name:<24} host commands finished", flush=True)
+
+
+def _warn_if_host_tool_failed(returncode: int) -> None:
+    if returncode:
+        print(
+            "warning: host tool reported an error. Device status is unverified.",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def boot() -> None:
@@ -148,11 +158,7 @@ def boot() -> None:
 
     print("[*] stage 1: raw iBSS through the RP2350 transport", flush=True)
     result = subprocess.run([usbliter8ctl, "boot", str(root / "iBSS.raw")])
-    if result.returncode:
-        # usbliter8ctl sends CUSTOM_BOOT and then DFU_ABORT. Once CUSTOM_BOOT
-        # succeeds, the USB handle disappears and that final abort can fail.
-        # iBEC upload below is the definitive transition check.
-        print("  usbliter8ctl returned after the expected USB transition", flush=True)
+    _warn_if_host_tool_failed(result.returncode)
     time.sleep(3)
 
     print("[*] stage 2: iBEC", flush=True)
@@ -182,9 +188,8 @@ def boot() -> None:
     # a failed boot.
     print("[*] stage 6: bootx", flush=True)
     result = subprocess.run([irecovery, "-c", "bootx"])
-    if result.returncode:
-        print("  recovery USB disconnected during bootx (expected)", flush=True)
-    print(f"[+] {mode} boot chain sent", flush=True)
+    _warn_if_host_tool_failed(result.returncode)
+    print(f"[*] {mode} host commands finished. Device status is unverified.", flush=True)
 
 
 if __name__ == "__main__":
