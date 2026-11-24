@@ -11,6 +11,8 @@ paste. It measures and reports; it never writes to the firmware tree.
 from __future__ import annotations
 
 import plistlib
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -155,34 +157,58 @@ def main(argv: list[str]) -> int:
           f"boards: {', '.join(sorted(b['deviceClass'] for b in found))}")
 
     hdiutil = executable("hdiutil", "/usr/bin/hdiutil")
-    with tempfile.TemporaryDirectory(prefix="liter8-guards-", dir=extracted.parent) as scratch:
-        image = Path(scratch) / "rootfs.dmg"
+    scratch = Path(tempfile.mkdtemp(prefix="liter8-guards-", dir=extracted.parent))
+    image = scratch / "rootfs.dmg"
+    may_be_attached = False
+    mount: Path | None = None
+    try:
         decrypt(source, image)
         print(f"[*] attaching {image.name} read-only", flush=True)
-        subprocess.run(
-            [hdiutil, "attach", "-readonly", "-nobrowse", "-plist", str(image)],
-            check=True, capture_output=True,
-        )
-        mount: Path | None = None
+        # A failed or interrupted attach can leave the image in use.
+        may_be_attached = True
         try:
-            located = mountpoint_for_image(hdiutil, image)
-            if located is None:
-                raise WorkflowError(f"could not find where {image} mounted")
-            _, mount = located
+            subprocess.run(
+                [hdiutil, "attach", "-readonly", "-nobrowse", "-plist", str(image)],
+                check=True, capture_output=True, text=True,
+            )
+        except OSError as error:
+            raise WorkflowError(f"could not attach {image}: {error}") from error
+        except subprocess.CalledProcessError as error:
+            detail = (error.stderr or "").strip() or f"exit status {error.returncode}"
+            raise WorkflowError(f"could not attach {image}: {detail}") from error
+
+        located = mountpoint_for_image(hdiutil, image)
+        if located is None:
+            raise WorkflowError(f"could not find where {image} mounted")
+        _, mount = located
+        measurement_succeeded = False
+        try:
             guards = measure(mount)
+            measurement_succeeded = True
         finally:
-            # Detach by mountpoint. `hdiutil detach` takes a mountpoint or a
-            # device node, never the image path, and a failure here matters:
-            # the temporary directory is about to delete the backing file, so
-            # a still-attached volume becomes one nothing can clean up.
-            if mount is not None:
+            try:
                 detached = subprocess.run(
                     [hdiutil, "detach", str(mount)], capture_output=True, text=True
                 )
                 if detached.returncode != 0:
-                    print(f"[!] could not detach {mount}: {detached.stderr.strip()}",
-                          file=sys.stderr)
-                    print(f"[!] recover with: hdiutil detach '{mount}'", file=sys.stderr)
+                    detail = detached.stderr.strip() or f"exit status {detached.returncode}"
+                    raise WorkflowError(detail)
+            except (OSError, WorkflowError) as error:
+                message = f"could not detach {mount}: {error}"
+                if measurement_succeeded:
+                    raise WorkflowError(message) from error
+                print(f"[!] {message}", file=sys.stderr)
+            else:
+                may_be_attached = False
+    finally:
+        if may_be_attached:
+            print(f"[!] kept {image}; confirm it is detached before deleting {scratch}",
+                  file=sys.stderr)
+            if mount is not None:
+                command = shlex.join([hdiutil, "detach", str(mount)])
+                print(f"[!] recover with: {command}", file=sys.stderr)
+        else:
+            shutil.rmtree(scratch)
     emit(manifest, extracted, guards)
     return 0
 

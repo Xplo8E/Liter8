@@ -26,6 +26,7 @@ test:
 # Standard-library file safety tests; no Swift build, firmware or device.
 test-host-files:
 	python3 Tests/host-file-safety-tests.py
+	python3 Tests/rootfs-cleanup-tests.py
 
 test-fixtures:
 	# Resolve each beta-4 and 24A435 component once per process. The tests still
@@ -45,8 +46,7 @@ test-e2e:
 	$(SWIFT) test -c release --filter KernelEndToEndTests
 
 # Exercise the real CLI handoff without requiring a multi-gigabyte IPSW.
-integration: build
-	python3 Tests/host-file-safety-tests.py
+integration: build test-host-files
 	bash Tests/fw-workflow-integration.sh
 	python3 Tests/ipsw-robustness-integration.py
 	python3 Tests/firmware-container-integration.py
