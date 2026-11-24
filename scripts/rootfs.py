@@ -93,15 +93,17 @@ def write_state(root: Path, context: Context, image: Path, mountpoint: Path,
         "mountpoint": str(mountpoint.resolve()),
         **details,
     }
-    with tempfile.NamedTemporaryFile(
-        mode="w", prefix=".rootfs-state-", dir=root, delete=False
-    ) as output:
-        temporary_state = Path(output.name)
-        output.write(json.dumps(state, indent=2, sort_keys=True) + "\n")
+    temporary_state: Path | None = None
     try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", prefix=".rootfs-state-", dir=root, delete=False
+        ) as output:
+            temporary_state = Path(output.name)
+            output.write(json.dumps(state, indent=2, sort_keys=True) + "\n")
         os.replace(temporary_state, root / STATE_NAME)
     finally:
-        temporary_state.unlink(missing_ok=True)
+        if temporary_state is not None:
+            temporary_state.unlink(missing_ok=True)
 
 
 def validate_rootfs(context: Context, mountpoint: Path) -> dict[str, str]:
@@ -285,18 +287,17 @@ def prepare(context: Context) -> None:
             raise WorkflowError("hdiutil attached the root filesystem without mounting it")
         _, mountpoint = mounted
         details = validate_rootfs(context, mountpoint)
+        write_state(root, context, image, mountpoint, details)
     except Exception:
-        # A mount that fails identity validation must not remain available for
-        # a later provisioning command to consume accidentally.
+        # Roll back this new mount if validation or state publication fails.
         try:
             mounted = mountpoint_for_image(hdiutil, image)
             if mounted is not None:
                 run([hdiutil, "detach", mounted[1]])
-        except WorkflowError as detach_error:
+        except (WorkflowError, OSError) as detach_error:
             print(f"[!] could not detach rejected rootfs mount: {detach_error}", flush=True)
         raise
 
-    write_state(root, context, image, mountpoint, details)
     print(f"[+] root filesystem mounted and verified: {mountpoint}", flush=True)
 
 
